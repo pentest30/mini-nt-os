@@ -16,13 +16,22 @@
 //! co_IntSetForegroundWindow) : elle devient sa fenêtre active et celle qui
 //! a le clavier ; l'ancienne fenêtre active du thread reçoit WM_NCACTIVATE
 //! et WM_ACTIVATE inactifs, la nouvelle WM_NCACTIVATE, WM_ACTIVATE, puis
-//! WM_SETFOCUS. Quand le premier plan change de thread, les fenêtres de
-//! premier niveau des deux threads reçoivent WM_ACTIVATEAPP
-//! ([`send_activate_app`]) : celles du thread qui le perd d'abord, celles du
-//! thread qui le gagne avant les messages de sa fenêtre activée. Une
-//! fenêtre d'un autre thread ne reçoit pas encore WM_NCACTIVATE ni
-//! WM_ACTIVATE : le noyau change et peint son cadre lui-même ; de même pour
-//! la fenêtre active du thread qui perd le premier plan.
+//! WM_SETFOCUS. Une fenêtre réduite s'active aussi (SetForegroundWindow, un
+//! clic sur sa barre) ; personne n'a alors le clavier, et ses touches vont
+//! à elle en touches système (Alt+Espace ouvre son menu, Entrée la
+//! rétablit).
+//!
+//! Ces messages vont aux fenêtres dans leur thread : activer la fenêtre
+//! d'un autre thread lui poste l'événement POSTEVENT_SAW
+//! (WM_ASYNC_SETACTIVEWINDOW, [`activate_event`]), et le thread qui perd le
+//! premier plan se désactive ([`deactivate_thread`], IntDeactivateWindow :
+//! tout de suite si c'est le thread courant, sinon par l'événement
+//! POSTEVENT_DAW) : sa fenêtre active reçoit WM_NCACTIVATE et WM_ACTIVATE
+//! inactifs, il n'a plus ni fenêtre active ni clavier. Quand le premier plan
+//! change de thread, les fenêtres de premier niveau des deux threads
+//! reçoivent WM_ACTIVATEAPP ([`send_activate_app`]), chacune dans son
+//! thread : celles du thread qui gagne le premier plan avant les messages de
+//! sa fenêtre activée.
 //!
 //! SetFocus ([`set_focus`], co_UserSetFocus) donne le clavier à une autre
 //! fenêtre du thread, après avoir activé sa fenêtre de premier niveau s'il
@@ -38,12 +47,11 @@
 //!
 //! Pas encore : la souris, les crochets (WH_KEYBOARD_LL), Alt + pavé
 //! numérique, Alt + Tab, le changement de disposition par Alt + Maj, les
-//! voyants, Impr. écran, SendInput, le
-//! premier plan perdu (WM_NCACTIVATE, WM_ACTIVATE inactif et WM_KILLFOCUS
-//! à un autre thread), plusieurs bureaux d'entrée.
+//! voyants, Impr. écran, SendInput, la règle du premier plan (CanForceFG,
+//! LockSetForegroundWindow), une application qui refuse WM_NCACTIVATE pour
+//! rester active, plusieurs bureaux d'entrée.
 
 use alloc::sync::Arc;
-use core::sync::atomic::{AtomicBool, Ordering};
 
 use abi::kbd::{KeyboardInputData, KBDEXT, KBDNUMPAD, KEY_BREAK, KEY_E0, KEY_E1, KLLF_ALTGR};
 use abi::user::vk::{
@@ -57,11 +65,13 @@ use abi::user::{
     WM_SYSKEYDOWN, WM_SYSKEYUP, WNDS_ACTIVEFRAME, WS_CHILD, WS_DISABLED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
     WS_EX_TOPMOST, WS_MINIMIZE, WS_POPUP, WS_VISIBLE,
 };
+use abi::user::{HWND_TOP, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE};
 use hal::sync::KSpinLock;
 
 use crate::gui::ThreadInfo;
 use crate::kbdtables::{is_down, is_locked, to_unicode, KeyState, Tables, DOWN, LOCKED};
 use crate::keyboard::KeyboardLayout;
+use crate::queue::QueueEvent;
 use crate::window::{LParam, Window};
 
 /// L'état du clavier (gafAsyncKeyState, gafAsyncKeyStateRecentDown).
@@ -273,18 +283,42 @@ pub fn foreground_window() -> u32 {
 }
 
 /// co_IntSetForegroundWindow (SetForegroundWindow) : la fenêtre de premier
-/// niveau de `window` est activée et passe au premier plan ([`activate`]) ;
-/// rend si elle a pu l'être (visible, ni réduite ni fille, pas détruite).
+/// niveau de `window` est activée et passe au premier plan ([`activate`]),
+/// réduite aussi (elle n'a pas alors le clavier) ; rend si elle a pu l'être
+/// ([`can_set_foreground`]).
 ///
 /// # IRQL
 /// PASSIVE_LEVEL, dans un service système, sans rien tenir.
 pub fn set_foreground_window(window: &Arc<Window>) -> bool {
     let root = root_of(window.clone());
-    if !can_activate(&root) {
+    if !root.is_alive() || !can_set_foreground(root.state().style) {
         return false;
     }
     activate(&root);
     true
+}
+
+/// La règle de SetForegroundWindow : une fenêtre visible qui n'est pas une
+/// fille, réduite ou non ; co_IntSetForegroundWindow active une fenêtre
+/// réduite. Écart avec ReactOS : une fenêtre cachée est refusée (ReactOS
+/// l'active aussi).
+pub(crate) fn can_set_foreground(style: u32) -> bool {
+    style & WS_VISIBLE != 0 && style & (WS_POPUP | WS_CHILD) != WS_CHILD
+}
+
+/// MAKEWPARAM(`state`, réduite) : le wParam de WM_ACTIVATE pour une fenêtre
+/// de style `style` (co_IntSendActivateMessages,
+/// co_IntSendDeactivateMessages) ; le mot haut dit si elle est réduite.
+pub(crate) fn activate_wparam(state: u32, style: u32) -> u32 {
+    state | u32::from(style & WS_MINIMIZE != 0) << 16
+}
+
+/// co_IntSetActiveWindow : une fenêtre de style `style` qui devient active
+/// sans que le clavier soit à elle ni à l'une de ses filles le prend, sauf
+/// réduite : personne ne l'a alors, et ses touches vont à elle en touches
+/// système ([`send_key`]).
+pub(crate) fn activation_takes_focus(style: u32) -> bool {
+    style & WS_MINIMIZE == 0
 }
 
 /// `thread`, qui se termine, n'est plus au premier plan
@@ -304,8 +338,8 @@ pub fn forget_foreground(thread: &ThreadInfo) -> bool {
     left.is_some()
 }
 
-/// can_activate_window : une fenêtre qui n'est pas détruite, visible, ni
-/// réduite ni fille.
+/// can_activate_window (co_WinPosActivateOtherWindow) : une fenêtre qui
+/// n'est pas détruite, visible, ni réduite ni fille.
 fn can_activate(window: &Window) -> bool {
     let style = window.state().style;
     window.is_alive()
@@ -383,8 +417,9 @@ pub fn activate_other(window: &Arc<Window>, excluded: Option<u32>, notify: bool)
         .0;
     let ours = crate::convert_current_thread().is_ok_and(|current| current.server == window.pti);
     if was_active && notify && ours {
+        let wparam = activate_wparam(WA_INACTIVE, window.state().style);
         let _ = crate::window::send_message(window, WM_NCACTIVATE, 0, LParam::Value(0));
-        let _ = crate::window::send_message(window, WM_ACTIVATE, WA_INACTIVE, LParam::Value(0));
+        let _ = crate::window::send_message(window, WM_ACTIVATE, wparam, LParam::Value(0));
     }
 }
 
@@ -582,88 +617,187 @@ pub fn translate_message(thread: &ThreadInfo, message: &Msg32) -> bool {
     true
 }
 
-/// co_IntSetForegroundWindow puis co_IntSetActiveWindow : la fenêtre de
-/// premier niveau `window` devient la fenêtre active de sa file, qui passe
-/// au premier plan. Si le premier plan change de thread, les fenêtres de
-/// premier niveau du thread qui le perd, puis celles du thread de `window`,
-/// reçoivent WM_ACTIVATEAPP ([`send_activate_app`]). Au thread courant,
-/// `window` reçoit ensuite WM_ACTIVATE (dont DefWindowProc lui donne le
-/// clavier : SetFocus), puis le clavier s'il n'est ni à elle ni à l'une de
-/// ses filles. D'un autre thread, elle prend le clavier sans WM_ACTIVATE.
-/// Déjà active, elle ne reçoit rien et le clavier ne bouge pas (une boîte
-/// de dialogue redimensionnée par SetWindowPos garde le focus sur son
-/// contrôle).
+/// co_IntSetForegroundWindow (co_IntSetForegroundMessageQueue) : la
+/// fenêtre de premier niveau `window` devient la fenêtre active de sa file,
+/// qui passe au premier plan. Ce qui envoie des messages à des fenêtres se
+/// fait dans leur thread :
+/// - le thread qui perd le premier plan se désactive
+///   ([`deactivate_thread`]) : tout de suite si c'est le thread courant,
+///   sinon par l'événement POSTEVENT_DAW de sa file ;
+/// - le thread de `window` l'active ([`set_active_window`]) : tout de suite
+///   si c'est le thread courant, sinon par l'événement POSTEVENT_SAW
+///   (WM_ASYNC_SETACTIVEWINDOW, [`activate_event`]) de sa file, dont les
+///   désactivations encore attendues partent ; déjà au premier plan avec
+///   `window` active, il n'a rien à faire.
+///
+/// Le premier plan change tout de suite ; la fenêtre active d'un autre
+/// thread, quand il a traité son événement.
 ///
 /// # IRQL
 /// PASSIVE_LEVEL, dans un service système, sans rien tenir.
 pub fn activate(window: &Arc<Window>) {
     let Some(thread) = crate::gui::thread_info_of(window.pti) else { return };
-    let hwnd = window.handle;
-    let previous_active = thread.queue.with(|queue| core::mem::replace(&mut queue.active, hwnd)).0;
     let previous_foreground = FOREGROUND.lock().replace(thread.clone());
     let same_thread = previous_foreground.as_ref().is_some_and(|left| Arc::ptr_eq(left, &thread));
     let left = previous_foreground.filter(|_| !same_thread);
+    // WM_ACTIVATEAPP for the thread that gains the foreground, with the TID
+    // of the one that loses it (0: none).
+    let foreground_from = (!same_thread).then(|| left.as_ref().map_or(0, |left| thread_id(left)));
     let current = crate::convert_current_thread().ok();
-    // The foreground leaves another thread: the frame of its active window
-    // goes inactive (no WM_NCACTIVATE between threads yet), and its
-    // top-level windows get WM_ACTIVATEAPP (FALSE).
-    if let Some(left) = &left {
-        let left_active = left.queue.with(|queue| queue.active).0;
-        if let Some(old) = crate::window::get(left_active) {
-            crate::paint::set_frame_active(&old, false, true);
-        }
-        if let Some(current) = &current {
-            send_activate_app(current, left, false, thread_id(&thread));
+    let is_current = |other: &ThreadInfo| current.as_ref().is_some_and(|current| current.server == other.server);
+    let tid = thread_id(&thread);
+    if let Some(left) = left.as_ref().filter(|left| !is_current(left)) {
+        crate::queue::post_event(left, QueueEvent::Deactivate { tid });
+    }
+    if is_current(&thread) {
+        set_active_window(&thread, window, foreground_from);
+    } else if !same_thread || thread.queue.with(|queue| queue.active).0 != window.handle {
+        let event = QueueEvent::Activate { hwnd: window.handle, foreground_from };
+        thread.queue.with(|queue| {
+            if !same_thread {
+                queue.remove_deactivations();
+            }
+            queue.post_event(event);
+        });
+        thread.queue.wake();
+    }
+    if let Some(left) = left.as_ref().filter(|left| is_current(left)) {
+        deactivate_thread(left, tid);
+    }
+}
+
+/// IntActivateWindow (POSTEVENT_SAW, WM_ASYNC_SETACTIVEWINDOW), dans le
+/// thread courant `thread` : sa fenêtre `hwnd`, si elle vit encore, devient
+/// active ([`set_active_window`]) ; sans premier plan, le thread le prend.
+/// Déjà active, elle ne reçoit que WM_NCACTIVATE (TRUE si le thread est au
+/// premier plan, et elle passe alors devant ses sœurs), et WM_ACTIVATEAPP
+/// si le premier plan vient d'un autre thread (`foreground_from`).
+///
+/// # IRQL
+/// PASSIVE_LEVEL, dans le thread, sans rien tenir.
+pub fn activate_event(thread: &ThreadInfo, hwnd: u32, foreground_from: Option<u32>) {
+    let Some(window) = crate::window::get(hwnd).filter(|window| window.is_alive() && window.pti == thread.server)
+    else {
+        return;
+    };
+    let Some(info) = crate::gui::thread_info_of(thread.server) else { return };
+    {
+        let mut foreground = FOREGROUND.lock();
+        if foreground.is_none() {
+            *foreground = Some(info.clone());
         }
     }
-    // The top-level windows of the thread that gains the foreground get
-    // WM_ACTIVATEAPP (TRUE), before the messages of the activated window.
+    if thread.queue.with(|queue| queue.active).0 != hwnd {
+        set_active_window(&info, &window, foreground_from);
+        return;
+    }
+    let foreground = is_foreground(thread);
+    if let Some(other) = foreground_from.filter(|_| foreground) {
+        send_activate_app(thread, thread, true, other);
+    }
+    let _ = crate::window::send_message(&window, WM_NCACTIVATE, u32::from(foreground), LParam::Value(0));
+    if foreground {
+        let flags = SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE;
+        crate::winpos::set_window_pos(&window, HWND_TOP, 0, 0, 0, 0, flags);
+    }
+}
+
+/// `thread` est le thread du premier plan.
+fn is_foreground(thread: &ThreadInfo) -> bool {
+    FOREGROUND.lock().as_ref().is_some_and(|foreground| foreground.server == thread.server)
+}
+
+/// co_IntSetActiveWindow, dans le thread courant `thread` : sa fenêtre de
+/// premier niveau `window` devient sa fenêtre active ; les activations
+/// encore attendues dans sa file partent (dépassées). Si le premier plan
+/// vient d'un autre thread (`foreground_from`, son TID ou 0), les fenêtres
+/// de premier niveau du thread reçoivent WM_ACTIVATEAPP (TRUE)
+/// ([`send_activate_app`]) avant les messages de `window`. L'ancienne
+/// fenêtre active reçoit WM_NCACTIVATE et WM_ACTIVATE inactifs, `window`
+/// WM_NCACTIVATE (TRUE si le thread est au premier plan) et WM_ACTIVATE
+/// (dont DefWindowProc lui donne le clavier : SetFocus ; le mot haut dit si
+/// elle est réduite, [`activate_wparam`]), puis le clavier s'il n'est ni à
+/// elle ni à l'une de ses filles ; réduite, personne ne l'a
+/// ([`activation_takes_focus`]). Déjà active, elle ne reçoit rien (que
+/// WM_NCACTIVATE si son cadre était inactif) et le clavier ne bouge pas
+/// (une boîte de dialogue redimensionnée par SetWindowPos garde le focus sur
+/// son contrôle).
+fn set_active_window(thread: &Arc<ThreadInfo>, window: &Arc<Window>, foreground_from: Option<u32>) {
+    let hwnd = window.handle;
+    let previous_active = thread
+        .queue
+        .with(|queue| {
+            queue.remove_activations();
+            core::mem::replace(&mut queue.active, hwnd)
+        })
+        .0;
+    let foreground = is_foreground(thread);
     let announce = || {
-        if let (false, Some(current)) = (same_thread, &current) {
-            send_activate_app(current, &thread, true, left.as_ref().map_or(0, |left| thread_id(left)));
+        if let Some(other) = foreground_from.filter(|_| foreground) {
+            send_activate_app(thread, thread, true, other);
         }
     };
-    let ours = current.as_ref().is_some_and(|current| current.server == window.pti);
-    let old = crate::window::get(previous_active).filter(|_| previous_active != hwnd);
     if previous_active == hwnd {
-        // Already active (co_IntSetActiveWindow): the focus stays where it
-        // is, on one of its children if it has it. WM_ACTIVATEAPP if the
-        // foreground comes back to its thread, and its frame, if it went
-        // inactive with the foreground.
         announce();
-        if window.state().state & WNDS_ACTIVEFRAME == 0 {
-            if ours {
-                let _ = crate::window::send_message(window, WM_NCACTIVATE, 1, LParam::Value(0));
-            } else {
-                crate::paint::set_frame_active(window, true, true);
-            }
+        if window.state().state & WNDS_ACTIVEFRAME == 0 && foreground {
+            let _ = crate::window::send_message(window, WM_NCACTIVATE, 1, LParam::Value(0));
         }
         return;
     }
-    if !ours {
-        static REPORTED: AtomicBool = AtomicBool::new(false);
-        if !REPORTED.swap(true, Ordering::Relaxed) {
-            log::warn!("win32k: WM_ACTIVATE and WM_SETFOCUS to a window of another thread: not yet");
-        }
-        thread.queue.with(|queue| queue.focus = hwnd);
-        announce();
-        if let Some(old) = &old {
-            crate::paint::set_frame_active(old, false, true);
-        }
-        crate::paint::set_frame_active(window, true, true);
-        return;
-    }
-    if let Some(old) = &old {
-        let _ = crate::window::send_message(old, WM_NCACTIVATE, 0, LParam::Value(0));
-        let _ = crate::window::send_message(old, WM_ACTIVATE, WA_INACTIVE, LParam::Value(hwnd));
+    if let Some(old) = crate::window::get(previous_active) {
+        let wparam = activate_wparam(WA_INACTIVE, old.state().style);
+        let _ = crate::window::send_message(&old, WM_NCACTIVATE, 0, LParam::Value(0));
+        let _ = crate::window::send_message(&old, WM_ACTIVATE, wparam, LParam::Value(hwnd));
     }
     announce();
-    let _ = crate::window::send_message(window, WM_NCACTIVATE, 1, LParam::Value(0));
-    let _ = crate::window::send_message(window, WM_ACTIVATE, WA_ACTIVE, LParam::Value(previous_active));
+    let _ = crate::window::send_message(window, WM_NCACTIVATE, u32::from(foreground), LParam::Value(0));
+    let wparam = activate_wparam(WA_ACTIVE, window.state().style);
+    let _ = crate::window::send_message(window, WM_ACTIVATE, wparam, LParam::Value(previous_active));
     // The focus goes to the window unless WM_ACTIVATE gave it to one of its
-    // children (DefDlgProc: the control that had it).
+    // children (DefDlgProc: the control that had it); to nobody if it is
+    // minimized.
     if !focus_is_in(thread.queue.with(|queue| queue.focus).0, hwnd) {
-        send_focus_messages(&thread, Some(window));
+        send_focus_messages(thread, activation_takes_focus(window.state().style).then_some(window));
+    }
+}
+
+/// IntDeactivateWindow (POSTEVENT_DAW, ou tout de suite au thread courant),
+/// dans le thread courant `thread`, qui a perdu le premier plan au profit du
+/// thread `tid` : rien sans fenêtre active ; sinon la fenêtre qui a la
+/// capture reçoit WM_CANCELMODE, la fenêtre active WM_NCACTIVATE et
+/// WM_ACTIVATE inactifs (wParam : [`activate_wparam`], lParam : 0) et le
+/// thread n'en a plus, ses fenêtres de premier niveau reçoivent
+/// WM_ACTIVATEAPP (FALSE, `tid`), personne n'a plus le clavier (WM_KILLFOCUS
+/// de 0 à celle qui l'avait), et Ctrl, Alt et Maj ne sont plus enfoncées
+/// pour lui (MsqReleaseModifierKeys).
+///
+/// # IRQL
+/// PASSIVE_LEVEL, dans le thread, sans rien tenir.
+pub fn deactivate_thread(thread: &ThreadInfo, tid: u32) {
+    let (active, capture) = thread.queue.with(|queue| (queue.active, queue.capture)).0;
+    let Some(previous) = crate::window::get(active) else { return };
+    if let Some(capture) = crate::window::get(capture) {
+        let _ = crate::window::send_message(&capture, abi::menu::wm::CANCELMODE, 0, LParam::Value(0));
+    }
+    let wparam = activate_wparam(WA_INACTIVE, previous.state().style);
+    let _ = crate::window::send_message(&previous, WM_NCACTIVATE, 0, LParam::Value(0));
+    let _ = crate::window::send_message(&previous, WM_ACTIVATE, wparam, LParam::Value(0));
+    thread.queue.with(|queue| {
+        if queue.active == active {
+            queue.active = 0;
+        }
+    });
+    send_activate_app(thread, thread, false, tid);
+    send_focus_messages(thread, None);
+    thread.queue.with(|queue| release_modifier_keys(&mut queue.keys));
+}
+
+/// MsqReleaseModifierKeys : Ctrl, Alt et Maj (communes, gauches et droites)
+/// ne sont plus enfoncées dans l'état du clavier `keys` d'un thread.
+pub(crate) fn release_modifier_keys(keys: &mut KeyState) {
+    let modifiers = [VK_LCONTROL, VK_RCONTROL, VK_CONTROL, VK_LMENU, VK_RMENU, VK_MENU, VK_LSHIFT, VK_RSHIFT, VK_SHIFT];
+    for vk in modifiers {
+        keys[usize::from(vk)] &= !DOWN;
     }
 }
 
@@ -776,6 +910,41 @@ mod tests {
 
     fn key(vk: u8, scan: u16, extended: bool, up: bool) -> KeyInput {
         KeyInput { vk, scan, extended, up }
+    }
+
+    #[test]
+    fn set_foreground_window_activates_a_minimized_window_without_the_keyboard() {
+        use abi::user::WS_OVERLAPPEDWINDOW;
+        let minimized = WS_OVERLAPPEDWINDOW | WS_VISIBLE | WS_MINIMIZE;
+        // SetForegroundWindow takes it; co_WinPosActivateOtherWindow skips it.
+        assert!(can_set_foreground(minimized));
+        assert!(can_set_foreground(WS_OVERLAPPEDWINDOW | WS_VISIBLE));
+        assert!(can_set_foreground(WS_POPUP | WS_CHILD | WS_VISIBLE), "a popup is not a child");
+        assert!(!can_set_foreground(WS_CHILD | WS_VISIBLE));
+        assert!(!can_set_foreground(WS_OVERLAPPEDWINDOW), "hidden: not yet (ReactOS takes it)");
+        // WM_ACTIVATE says so in its high word, active or not.
+        assert_eq!(activate_wparam(WA_ACTIVE, minimized), 0x0001_0001);
+        assert_eq!(activate_wparam(WA_INACTIVE, minimized), 0x0001_0000);
+        assert_eq!(activate_wparam(WA_ACTIVE, WS_OVERLAPPEDWINDOW | WS_VISIBLE), WA_ACTIVE);
+        // Nobody gets the keyboard: its keys become system keys.
+        assert!(!activation_takes_focus(minimized));
+        assert!(activation_takes_focus(WS_OVERLAPPEDWINDOW | WS_VISIBLE));
+        let mut keys = AsyncKeys::default();
+        let down = key_message(&mut keys, &key(b'A', 0x1E, false, false), 0x10, true, 0);
+        assert_eq!((down.hwnd, down.message), (0x10, WM_SYSKEYDOWN));
+    }
+
+    #[test]
+    fn a_thread_that_loses_the_foreground_releases_its_modifiers() {
+        let mut keys: KeyState = [0; 256];
+        for vk in [VK_LSHIFT, VK_SHIFT, VK_RMENU, VK_MENU, VK_LCONTROL, VK_CONTROL, b'A'] {
+            keys[usize::from(vk)] = DOWN | LOCKED;
+        }
+        release_modifier_keys(&mut keys);
+        for vk in [VK_LSHIFT, VK_SHIFT, VK_RMENU, VK_MENU, VK_LCONTROL, VK_CONTROL] {
+            assert_eq!(keys[usize::from(vk)], LOCKED, "{vk:#x} up, still toggled");
+        }
+        assert_eq!(keys[usize::from(b'A')], DOWN | LOCKED, "not a modifier");
     }
 
     #[test]

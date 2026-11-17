@@ -1783,10 +1783,10 @@ l'icône finit le suivi et poste SC_CLOSE lui-même : ReactOS laisse le message 
 (WM_NCLBUTTONDBLCLK), qu'ici la capture du menu a fait message de la zone cliente.
 
 Pas encore : le clic droit sur le titre (fait à l'étape 38), SC_MOVE et
-SC_SIZE au clavier (Move et Size choisis ne font rien), ←/→ entre le menu système et la barre (MENU_DoNextMenu),
-le bouton de fermeture grisé quand Close l'est, WM_POPUPSYSTEMMENU (la barre des tâches), le menu système d'un
-bureau (MNF_SYSDESKMN). Vu, pas fait : SetForegroundWindow refuse une fenêtre réduite (`input::can_activate`,
-la règle de co_WinPosActivateOtherWindow), ReactOS l'active.
+SC_SIZE au clavier (faits à l'étape 39), ←/→ entre le menu système et la barre (fait à l'étape 40),
+le bouton de fermeture grisé quand Close l'est (fait à l'étape 41), WM_POPUPSYSTEMMENU (la barre des tâches), le menu système d'un
+bureau (MNF_SYSDESKMN). Vu alors, fait à l'étape 42 : SetForegroundWindow refusait une fenêtre réduite
+(`input::can_activate`, la règle de co_WinPosActivateOtherWindow), ReactOS l'active.
 
 Le banc d'essai : `tests/native/sysmenu1.c` (`SYSMENU1.EXE`, MinGW), scénario `window-menu`, à la place de
 `winlogon.exe`. W (100, 100, 400 × 300) et B. SW_HIDE de W active : B active, au premier plan, avec le clavier ;
@@ -1844,7 +1844,237 @@ chacune : WM_NCRBUTTONDOWN ignoré, le relâchement sur le titre qui ne demande 
 zone cliente, le menu sous l'icône au lieu du point, le bouton droit refusé depuis le titre, TrackPopupMenu qui ne
 met pas le menu système à l'état de la fenêtre (Restore par défaut au lieu de Close).
 
-## Étape 39 : le changement de résolution (le pilote `bochs-dispi`, ChangeDisplaySettings, le panneau Affichage)
+## Étape 39 : déplacer et redimensionner au clavier (SC_MOVE, SC_SIZE)
+
+Demandé après l'étape 38 : Move et Size du menu de la fenêtre ne faisaient rien. WM_SYSCOMMAND SC_MOVE ou SC_SIZE
+sans endroit (les quatre bits bas à 0) arrivait à DefWindowProc, qui journalisait « moving or sizing with the
+keyboard: not yet ».
+
+`nonclient.c` de win32k (DefWndStartSizeMove, DefWndDoSizeMove), `cursoricon.c` (UserSetCursorPos), ReactOS comme
+spécification ; `win32k::sizemove`, `win32k::mouse`.
+
+| Partie | Ce que fait Mino |
+|---|---|
+| Quand (`sizemove::can_size_move`) | une fenêtre visible et pas agrandie ; Size demande en plus un cadre épais (UserHasThickFrameStyle : pas un cadre de dialogue seul) et une fenêtre pas réduite ; sinon WM_SYSCOMMAND revient tout de suite, sans WM_ENTERSIZEMOVE |
+| Déplacer (`sizemove::keyboard_start`, `move_start_point`) | le curseur va au milieu du titre, sans l'icône (SM_CXSIZE + 1 avec WS_SYSMENU) ni les boutons Réduire et Agrandir (autant chacun), à SM_CYSIZE / 2 sous le haut de la fenêtre ; puis WM_SETCURSOR (HTCAPTION, WM_MOUSEMOVE) |
+| Redimensionner (`sizemove::keyboard_start`, `size_start_edge`) | la fenêtre prend la souris et une boucle attend un bord : une flèche le choisit (le curseur va au milieu de ce bord, à mi-épaisseur du cadre), ou la souris, ramenée dans la fenêtre, en atteint un ; Entrée, Échap ou un clic relâché renoncent, sans WM_ENTERSIZEMOVE ; les autres messages sont distribués |
+| La boucle (`sizemove::size_move`) | celle de la souris : WM_ENTERSIZEMOVE, la fenêtre suit le curseur, son contenu avec elle ; une flèche déplace le curseur de 8 pixels (`sizemove::arrow_step`), et le WM_MOUSEMOVE qui en vient fait le reste ; la souris aussi déplace ou redimensionne ; Entrée ou un clic relâché finit, Échap rend la place de départ ; les autres touches enfoncées sont mangées, comme chez ReactOS (aussi pendant un déplacement à la souris, où les flèches déplacent elles aussi le curseur) |
+| Placer le curseur (`mouse::set_cursor_pos`, UserSetCursorPos sans les crochets) | le curseur va au point, borné à l'écran, et un WM_MOUSEMOVE brut part comme d'un mouvement de la souris (à la fenêtre qui a la capture, sinon à celle sous le curseur). La boucle tient sa propre idée de la place du curseur : deux flèches lues avant le mouvement de la première comptent toutes les deux |
+
+Écart voulu avec ReactOS : sa boucle finit aussi sur un WM_MOUSEMOVE sans le bouton gauche (les deux branches de
+`g_bWindowSnapEnabled`) ; au clavier, le mouvement que produit UserSetCursorPos la finirait aussitôt. Mino ne la
+finit qu'au relâchement du bouton gauche, à Entrée ou à Échap.
+
+Pas encore : le cadre en pointillés (sans le contenu), WM_MOVING et WM_SIZING, WH_MSGFILTER (MSGF_SIZE) dans les
+boucles, le curseur borné à la zone de travail (ReactOS borne le point à SPI_GETWORKAREA), un coin choisi au clavier
+(ReactOS ne prend qu'un bord), le déplacement d'une fenêtre agrandie (ReactOS le permet pour la détacher de son bord ;
+Move y est grisé), SetCursorPos des applications (TWOPARAM_ROUTINE_SETCURSORPOS, que `mouse::set_cursor_pos`
+servira).
+
+Le banc d'essai : `tests/native/kbdmove1.c` (`KBDMOVE1.EXE`, MinGW), scénario `keyboard-move`, à la place de
+`winlogon.exe`. W (100, 100, 400 × 300), un dialogue D sans cadre épais, une fenêtre cachée H. SC_SIZE à D et SC_MOVE
+à H reviennent sans WM_ENTERSIZEMOVE (étape 1). Puis QEMU : Alt+Espace et m, le curseur au milieu du titre (290, 109),
+→ → ↓ et Entrée : W en (116, 108) (étape 2) ; Alt+Espace, m, ← ← ← et Échap : W reste en (116, 108) (étape 3) ;
+Alt+Espace, m, la souris de (30, 20) et Entrée : W en (146, 128) (étape 4) ; Alt+Espace, s et Échap : rien, pas de
+WM_ENTERSIZEMOVE (étape 5) ; Alt+Espace, s, → (le bord droit, le curseur en (544, 278)), → → et Entrée : 16 pixels de
+plus en largeur (étape 6) ; Alt+Espace, s, ↓ (le bord du bas, le curseur en (354, 426)), ↑ ↑ ↑ et Entrée : 24 pixels de
+moins en hauteur (étape 7).
+
+Tests : hôte (`sizemove` : quand déplacer ou redimensionner, le point du titre, le bord de chaque flèche, le pas des
+flèches, le point ramené dans la fenêtre, même vide : `i32::clamp` y paniquait avant le commit) ; `keyboard-move` sur AMD et Intel. Sept mutations le font échouer chacune : le curseur ailleurs qu'au
+milieu du titre ; les flèches ignorées ; Échap qui ne rend pas la place ; Size sans cadre épais ou une fenêtre cachée
+qui entrent dans la boucle ; aucune flèche ne choisit de bord ; Échap qui ne renonce pas au choix du bord ;
+`mouse::set_cursor_pos` sans son WM_MOUSEMOVE.
+
+Corrigé après la revue de la PR 140 (deux remarques, vérifiées) :
+- une flèche ne faisait que déplacer le curseur, dont le mouvement de la souris arrive derrière les touches déjà dans
+  la file : flèches et Entrée tapées pendant que le thread était occupé finissaient la boucle sans déplacer la
+  fenêtre. Chaque flèche place maintenant la fenêtre tout de suite (`sizemove::size_move`) ; le mouvement de la
+  souris qui suit ne change plus rien. ReactOS a le même défaut (DefWndDoSizeMove : `UserSetCursorPos` seul) ;
+- la boucle ne lisait que WM_KEYDOWN : depuis l'étape 42, une fenêtre réduite active n'a pas le clavier et ses
+  touches sont WM_SYSKEYDOWN ; déplacée (sa barre tirée à la souris, ou SC_MOVE d'une application), ni les flèches
+  ni Échap n'agissaient, et Entrée, traduite, demandait SC_RESTORE. `sizemove::loop_key` lit les deux, dans la boucle
+  et dans le choix du bord. **Écart voulu** : la boucle de ReactOS ne lit que WM_KEYDOWN.
+
+Le banc a deux étapes de plus : Alt+Espace, m, puis WM_ENTERSIZEMOVE de W dort pendant que QEMU tape → → et Entrée,
+qui attendent ensemble dans la file : W se déplace quand même de 16 pixels (étape 8) ; W réduite, rendue active par
+SetForegroundWindow (personne n'a le clavier), SC_MOVE posté : → → et Entrée déplacent sa barre de 16 pixels, elle
+reste réduite, sans SC_RESTORE (étape 9). Test hôte `sizemove::tests::the_loop_reads_system_keys_too`. Trois
+mutations le font échouer chacune : la flèche qui attend le mouvement de la souris (l'étape 8, le défaut de la
+revue) ; WM_KEYDOWN seul (le test hôte et l'étape 9) ; Échap qui ne rend pas la place.
+
+## Étape 40 : ← et → entre le menu de la fenêtre et la barre (WM_NEXTMENU)
+
+Demandé après l'étape 39 : aux bouts de la barre suivie, ← et → faisaient le tour de ses items (du premier au
+dernier et retour), et le menu de la fenêtre ouvert par Alt+Espace n'en sortait pas.
+
+`menu.c` de win32k (MENU_DoNextMenu, MENU_KeyLeft, MENU_KeyRight), ReactOS comme spécification ;
+`win32k::menutrack`.
+
+| Partie | Ce que fait Mino |
+|---|---|
+| Le bout (`menutrack::at_menu_end`) | ← sur le premier item ; → sur le dernier item du menu de la fenêtre, ou sur une barre quand il n'y a plus après la sélection que des items de MDI (les identifiants de SC_SIZE à SC_RESTORE : l'icône et les boutons d'une fille agrandie dans la barre du cadre) ; sans sélection, → ne sort pas ; ailleurs, la flèche change d'item comme avant |
+| WM_NEXTMENU (`menutrack::do_next_menu`) | envoyé à la propriétaire avec la flèche et un MDINEXTMENU (`abi::menu::MdiNextMenu32`, que sa procédure peut remplir) : le menu quitté, le menu de GetSystemMenu pour le menu de la fenêtre ; DefWindowProc n'y répond pas |
+| Sans réponse | du menu de la fenêtre à la barre (← : son dernier item avant ceux de MDI, `menutrack::last_bar_item` ; → : son premier), rien pour une fenêtre fille ou sans barre ; de la barre au menu de la fenêtre (WS_SYSMENU, créé s'il le faut), rien sans lui |
+| Une réponse | le menu et la fenêtre donnés : la barre d'une fenêtre qui n'est pas fille, ou son menu de la fenêtre ; un autre menu, rien. Le suivi passe à cette fenêtre, qui devient la propriétaire (ses notifications, la souris, `queue.menu_owner`) ; WM_EXITMENULOOP va toujours à la fenêtre du début |
+| Le passage | l'ancien menu perd sa sélection, ses sous-menus se ferment ; le menu suivi (`Top`) change ; le nouveau menu sélectionne son item (WM_MENUSELECT) ; si un menu était ouvert, celui du nouvel item s'ouvre (le menu de la fenêtre sous l'icône du titre) |
+
+Écart voulu avec ReactOS : quand l'application répond par un menu de la fenêtre, ReactOS compare sa réponse au
+menu d'un seul item de cette fenêtre (`get_win_sys_menu`) puis la remplace par ce même menu (« get the real system
+menu ») ; la comparaison n'a de sens qu'avec le sous-menu, ce que rend GetSystemMenu, le seul handle qu'une
+application connaisse. Mino accepte l'un et l'autre.
+
+Pas encore : MENU_SuspendPopup (le menu s'ouvre à chaque flèche, même répétée), les colonnes
+(MENU_GetStartOfPrevColumn, MENU_GetStartOfNextColumn). Sans banc : DefFrameProc et DefMDIChildProc (MDI, dans
+`user32`, qui répondent à WM_NEXTMENU) ; une réponse par une fenêtre d'un autre thread, que ReactOS ne refuse pas
+(Mino non plus) : elle devient la propriétaire, mais la souris reste à la fenêtre du thread (`mouse::set_capture`
+refuse une fenêtre d'un autre thread).
+
+Le scénario `menu` (étape 23) attendait que ←, depuis File, fasse le tour de la barre jusqu'à Help : sa fenêtre W
+a WS_SYSMENU, et ← y va maintenant au menu de la fenêtre, comme chez ReactOS. Ses touches 10 sont devenues
+`alt left left ret` (le second ← va à Help).
+
+Le banc d'essai : `tests/native/nextmenu1.c` (`NEXTMENU1.EXE`, MinGW), scénario `next-menu`, à la place de
+`winlogon.exe`. W et sa barre File, Edit, Help ; W2 et sa barre Other. QEMU : F10, ← (du premier item au menu de la
+fenêtre, WM_NEXTMENU VK_LEFT depuis la barre), ↓ l'ouvre (étape 1) ; Alt+Espace, → (File s'ouvre ; WM_NEXTMENU
+depuis le menu de GetSystemMenu), ← (le menu de la fenêtre), ← (Help, le dernier), → (le menu de la fenêtre)
+(étape 2) ; F10, → : Edit, sans WM_NEXTMENU (étape 3) ; F10, ← : W répond par W2 et sa barre, ↓ ouvre Other
+(WM_INITMENUPOPUP à W2), k envoie WM_COMMAND à W2 (étape 4) ; F10, ← : W répond par W2 et GetSystemMenu(W2), ↓ ouvre
+le menu de la fenêtre de W2 (étape 5). Une capture de l'étape 2 montre le menu de la fenêtre sous l'icône, aucun
+item de la barre surligné, puis Help enfoncé et ouvert.
+
+Tests : hôte (`menutrack` : les bouts d'une barre, d'une barre de MDI, du menu de la fenêtre, sans sélection ;
+l'item d'arrivée sur la barre) ; `next-menu` sur AMD et Intel. Sept mutations le font échouer chacune : ← qui ne
+sort pas du premier item ; → qui ne sort pas du menu de la fenêtre ; WM_NEXTMENU pas envoyé ; la réponse par
+GetSystemMenu refusée (la règle de ReactOS) ; la réponse par une barre refusée ; ← qui arrive sur le premier item de
+la barre ; la propriétaire gardée après une réponse. Une huitième a montré une ligne inutile, retirée avant le
+commit : poser la fenêtre de la barre au passage, que SetMenu lui donne déjà (`menu::attach`).
+
+## Étape 41 : le bouton de fermeture grisé quand Close l'est
+
+Demandé après l'étape 40 : le bouton de fermeture du titre se peignait toujours actif et fermait la fenêtre, même
+quand l'application grisait Close dans le menu de la fenêtre (EnableMenuItem(GetSystemMenu(…), SC_CLOSE,
+MF_GRAYED)) ou que sa classe avait CS_NOCLOSE.
+
+`nonclient.c` de win32k (UserDrawCaptionButton, NC_DoButton, NC_HandleNCLButtonDblClk), `menu.c` (IntEnableMenuItem),
+ReactOS comme spécification ; `win32k::sysmenu`, `win32k::nonclient`, `win32k::sizemove`, `win32k::menu`,
+`win32k::paint`.
+
+| Partie | Ce que fait Mino |
+|---|---|
+| L'état de Close (`sysmenu::close_enabled`, `sysmenu::close_rule`) | actif pour une fenêtre WS_SYSMENU sans CS_NOCLOSE dont l'item Close du menu système n'est ni grisé ni désactivé ; absent (DeleteMenu), il compte comme grisé (ReactOS lit alors -1) ; tant que le menu système n'existe pas, celui du gabarit SYSMENU, actif. Le menu n'est pas créé pour le lire : le cadre se peint aussi hors du processus de la fenêtre, où le rappel LoadMenu est impossible (ReactOS le crée au premier dessin, voir l'étape 37) |
+| Le dessin (`nonclient::caption_button_places`, `frame_ops`, `caption_button_ops`) | le symbole Marlett du bouton grisé en relief (COLOR_BTNHIGHLIGHT décalé d'un pixel, puis COLOR_BTNSHADOW), comme Réduire et Agrandir sans leur style |
+| Le clic (`sizemove::button_command`, NC_DoButton) | sur un bouton de fermeture grisé, rien : ni suivi ni WM_SYSCOMMAND ; le double-clic sur l'icône du titre ne ferme pas non plus (`close_enabled`, comme avant, sans plus créer le menu) |
+| La mise à jour (`menu::enable`, `menu::changes_caption_buttons`, `Menus::system_owner`, `paint::draw_caption_buttons`) | quand EnableMenuItem change l'état grisé ou désactivé d'une commande du système (SC_CLOSE, SC_MAXIMIZE, SC_MINIMIZE, SC_MOVE, SC_RESTORE, SC_SIZE) dans le menu de GetSystemMenu (MNF_SYSSUBMENU), les boutons du titre de sa fenêtre sont repeints aussitôt (UserPaintCaption `DC_BUTTONS`) ; sa fenêtre (`spwndNotify` chez ReactOS) est celle du menu d'un item qui ouvre ce menu |
+
+Comme ReactOS, Alt+F4 ne regarde que CS_NOCLOSE (`defwnd::key_menu`) : une fenêtre dont Close est grisé reçoit
+encore SC_CLOSE au clavier.
+
+Pas encore : RemoveMenu et DeleteMenu de Close ne repeignent pas le bouton (IntEnableMenuItem seul le fait chez
+ReactOS) ; le prochain dessin du cadre le grise.
+
+Le banc d'essai : `tests/native/closebtn1.c` (`CLOSEBTN1.EXE`, MinGW, avec `gdi32`), scénario `close-button`, à la
+place de `winlogon.exe`. W1, W2 d'une classe CS_NOCLOSE, W3. Le programme lit le symbole de chaque bouton de fermeture
+à l'écran (GetPixel : ses pixels noirs, actif, et ceux de COLOR_BTNSHADOW, grisé). EnableMenuItem grise Close de W1 :
+il rend MF_ENABLED et le bouton est grisé aussitôt, sans message traité entre les deux (étape 1) ; celui de W2 est
+grisé (étape 2) ; celui de W3, grisé puis réactivé, est noir (étape 3). Puis la souris de QEMU clique le bouton de W1,
+double-clique son icône (son menu s'ouvre, le double-clic ne ferme pas), clique le bouton de W2 : ni SC_CLOSE ni
+WM_CLOSE ; puis celui de W3 : WM_CLOSE (étape 4). Une capture montre les X de W1 et W2 grisés en relief, celui de W3
+noir.
+
+Tests : hôte (`sysmenu` : la règle de Close ; `nonclient` : le bouton grisé ; `sizemove` : le clic sur un bouton
+grisé ; `menu` : ce qui repeint les boutons) ; `close-button` sur AMD et Intel. Huit mutations le font échouer
+chacune : le bouton jamais grisé au dessin ; EnableMenuItem qui ne repeint pas ; la fenêtre du menu système pas
+trouvée ; SC_CLOSE hors des commandes qui repeignent ; le clic sur un bouton grisé qui ferme ; CS_NOCLOSE ignoré ;
+MF_GRAYED ignoré (MF_DISABLED seul) ; le double-clic sur l'icône qui ferme.
+
+## Étape 42 : SetForegroundWindow d'une fenêtre réduite ; Entrée la rétablit
+
+Demandé après l'étape 41 (vu à l'étape 37) : SetForegroundWindow refusait une fenêtre réduite, parce qu'il suivait la
+règle de co_WinPosActivateOtherWindow (`input::can_activate` : visible, ni réduite ni fille). ReactOS l'active : rien
+dans co_IntSetForegroundWindow ni co_IntSetActiveWindow ne regarde WS_MINIMIZE, hormis le clavier.
+
+`focus.c` de win32k (co_IntSetForegroundAndFocusWindow, co_IntSetForegroundMessageQueue, co_IntSetActiveWindow,
+co_IntSendActivateMessages, co_IntSendDeactivateMessages), `keyboard.c` (ProcessKeyEvent), `defwnd.c`
+(IntDefWindowProc de WM_SYSCHAR) et `winpos.c` (co_WinPosShowWindow), ReactOS comme spécification ; `win32k::input`,
+`win32k::defwnd`.
+
+| Partie | Ce que fait Mino |
+|---|---|
+| SetForegroundWindow (`input::set_foreground_window`, `input::can_set_foreground`) | la fenêtre de premier niveau, visible, réduite ou non, devient active et passe au premier plan (TRUE) ; `can_activate` reste la règle de co_WinPosActivateOtherWindow et d'ActivateOtherWindowMin, qui sautent les fenêtres réduites |
+| WM_ACTIVATE (`input::activate_wparam`) | le mot haut de wParam dit si la fenêtre est réduite : 0x10001 pour une fenêtre réduite activée, 0x10000 pour une fenêtre réduite désactivée (aussi par co_WinPosActivateOtherWindow sans autre fenêtre) |
+| Le clavier (`input::activation_takes_focus`, `input::activate`) | une fenêtre réduite activée ne le prend pas : personne ne l'a (l'ancienne fenêtre qui l'avait reçoit WM_KILLFOCUS de 0), comme co_IntSetActiveWindow ; `user32` ne le lui donne pas non plus (DefWindowProc de WM_ACTIVATE saute une fenêtre réduite). Vrai aussi d'un clic sur la barre d'une fenêtre réduite et d'une fenêtre d'un autre thread |
+| Ses touches (`input::send_key`, déjà fait) | sans fenêtre qui a le clavier, elles vont à la fenêtre active en touches système (WM_SYSKEYDOWN, WM_SYSCHAR) : Alt+Espace ouvre son menu (`menutrack::track_kbd_menu_bar`), et ses lettres choisissent dans la boucle du menu |
+| Entrée (`defwnd::key_menu`, `KeyMenu::Restore`) | le WM_SYSCHAR d'Entrée d'une fenêtre réduite, Alt ou non, poste SC_RESTORE à elle-même (IntDefWindowProc), qu'elle reçoit par sa file ; rétablie, elle prend le clavier et reçoit WM_ACTIVATE (`winpos::show_window`, déjà fait) |
+
+Écart avec ReactOS : SetForegroundWindow refuse encore une fenêtre cachée (ReactOS l'active aussi) ; ni la règle du
+premier plan (CanForceFG, LockSetForegroundWindow, le processus de la dernière entrée), ni WM_ASYNC_SETACTIVEWINDOW
+vers un autre thread : une fenêtre d'un autre thread est activée sans messages, comme avant (son clavier suit
+la même règle).
+
+Le banc d'essai : `tests/native/fgmin1.c` (`FGMIN1.EXE`, MinGW), scénario `foreground-minimized`, à la place de
+`winlogon.exe`. W (100, 100, 400 × 300) et sa fille C, B (550, 300). C a le clavier, W est réduite : B active, avec
+le clavier (étape 1). SetForegroundWindow(W) rend TRUE : W active et au premier plan, toujours réduite, personne n'a
+le clavier ; son WM_ACTIVATE porte 0x10001, B reçoit WM_ACTIVATE (0) et WM_KILLFOCUS de 0 (étape 2). QEMU tape a :
+W le reçoit en WM_SYSKEYDOWN (étape 3) ; Alt+Espace puis r : WM_INITMENUPOPUP du menu de la fenêtre, Restore, W
+rétablie avec le clavier ; réduite de nouveau puis SetForegroundWindow(W) (étape 4) ; Entrée : SC_RESTORE, W
+rétablie avec le clavier (étape 5).
+
+Tests : hôte (`input` : la règle de SetForegroundWindow, le mot haut de WM_ACTIVATE, le clavier ; `defwnd` : Entrée
+sur une fenêtre réduite) ; `foreground-minimized` sur AMD et Intel. Six mutations le font échouer chacune : SetForegroundWindow qui suit
+encore `can_activate` ; la règle qui refuse une fenêtre réduite ; le clavier donné à la fenêtre réduite ; WM_ACTIVATE
+sans son mot haut ; Entrée qui ne demande rien ; SC_RESTORE pas posté (la première et la dernière par le scénario
+seul, les autres aussi par les tests hôte).
+
+## Étape 43 : activer la fenêtre d'un autre thread (WM_ASYNC_SETACTIVEWINDOW)
+
+Demandé après l'étape 42 : activer la fenêtre d'un autre thread (SetForegroundWindow, SetWindowPos, ShowWindow) ne lui
+envoyait ni WM_NCACTIVATE, ni WM_ACTIVATE, ni WM_SETFOCUS : le noyau changeait sa fenêtre active et son clavier et
+peignait son cadre lui-même. De même pour le thread qui perdait le premier plan, dont la fenêtre active restait la
+sienne, sans WM_ACTIVATE inactif ni WM_KILLFOCUS ; seul WM_ACTIVATEAPP lui arrivait.
+
+`focus.c` de win32k (co_IntSetForegroundMessageQueue, IntActivateWindow, IntDeactivateWindow, co_IntSetActiveWindow,
+FindRemoveEventMsg), `message.c` (handle_internal_events, co_IntPeekMessage), `msgqueue.c` (MsqPostMessage avec
+QS_EVENT, MsqReleaseModifierKeys), ReactOS comme spécification ; `win32k::queue`, `win32k::input`.
+
+| Partie | Ce que fait Mino |
+|---|---|
+| Les événements de la file (`queue::QueueEvent`, `QueueState::post_event`, `queue::post_event`) | à part des messages postés, dans l'ordre, sans bit de réveil visible de `user32` : `Activate` (POSTEVENT_SAW, WM_ASYNC_SETACTIVEWINDOW : une fenêtre du thread à activer, et le TID du thread qui perd le premier plan s'il change de thread) et `Deactivate` (POSTEVENT_DAW : le thread a perdu le premier plan, et le TID de celui qui le prend) ; le thread est réveillé |
+| Leur traitement (`queue::process_events`) | dans le thread, par PeekMessage, GetMessage (les boucles du noyau aussi : menus, déplacement) et WaitMessage, quand aucun message posté ni aucune entrée ne sort, avant WM_PAINT et WM_TIMER ; tout est ensuite regardé de nouveau ; ils ne sortent jamais |
+| L'activation (`input::activate`, co_IntSetForegroundMessageQueue) | le premier plan change tout de suite ; le thread qui le perd se désactive tout de suite si c'est le thread courant, sinon par `Deactivate` ; le thread de la fenêtre l'active tout de suite si c'est le thread courant, sinon par `Activate`, dont ses désactivations encore attendues partent (FindRemoveEventMsg DAW) ; déjà au premier plan avec cette fenêtre active, rien |
+| `Activate` (`input::activate_event`, IntActivateWindow) | la fenêtre, si elle vit, devient active (`input::set_active_window`, co_IntSetActiveWindow : les activations attendues avant la première désactivation partent, FindRemoveEventMsg SAW ; WM_ACTIVATEAPP si le premier plan vient d'un autre thread ; WM_NCACTIVATE et WM_ACTIVATE inactifs à l'ancienne fenêtre active, WM_NCACTIVATE, WM_ACTIVATE et le clavier à la nouvelle) ; sans premier plan, le thread le prend ; déjà active, WM_NCACTIVATE seul (et WM_ACTIVATEAPP), puis devant ses sœurs |
+| `Deactivate` (`input::deactivate_thread`, IntDeactivateWindow) | rien sans fenêtre active ; sinon WM_CANCELMODE à la fenêtre qui a la capture, WM_NCACTIVATE et WM_ACTIVATE inactifs (lParam 0) à la fenêtre active, qui ne l'est plus, WM_ACTIVATEAPP (FALSE, le TID qui prend le premier plan) aux fenêtres de premier niveau du thread, plus de clavier (WM_KILLFOCUS de 0), Ctrl, Alt et Maj relâchées dans l'état du clavier du thread (`input::release_modifier_keys`) |
+
+Conséquences : WM_ACTIVATEAPP va aux fenêtres de chaque thread dans ce thread (plus par SendNotifyMessage depuis le
+thread qui active) ; GetForegroundWindow rend la fenêtre active du thread du premier plan, que ce thread change en
+traitant son événement (juste après SetForegroundWindow vers un autre thread, l'ancienne, ou aucune).
+
+Écarts avec ReactOS : WM_ACTIVATEAPP (TRUE) porte le TID du thread qui perd le premier plan aussi quand l'événement est
+traité plus tard (ReactOS y met celui de l'ancienne fenêtre active du thread, souvent aucun) ; il est envoyé aussi
+quand la fenêtre était déjà active. Pas encore : la règle du premier plan (CanForceFG, LockSetForegroundWindow),
+une application qui garde l'activation en refusant WM_NCACTIVATE, le mouvement de la souris refait après
+WM_CANCELMODE, AttachThreadInput (des files partagées), WM_ASYNC_SHOWWINDOW et WM_ASYNC_SETWINDOWPOS.
+
+Le banc d'essai : `tests/native/asyncact1.c` (`ASYNCACT1.EXE`, MinGW), scénario `async-activate`, à la place de
+`winlogon.exe`. Le thread A montre A1 ; le thread B montre B1 (et sa fille BC) et B2 sans les activer. Étape 1 : A
+appelle SetForegroundWindow(B1) ; A se désactive pendant l'appel (A1 : WM_NCACTIVATE, WM_ACTIVATE, WM_ACTIVATEAPP de
+B, WM_KILLFOCUS ; ni fenêtre active ni clavier ensuite), B active B1 dans son thread (WM_ACTIVATEAPP de A à B1 et B2,
+puis WM_NCACTIVATE, WM_ACTIVATE, WM_SETFOCUS). Étape 2 : B donne le clavier à BC ; SetForegroundWindow(B2) par A : B
+passe de B1 à B2 dans son thread, sans WM_ACTIVATEAPP. Étape 3 : pendant que B dort dans un traitement,
+SetForegroundWindow(A1) puis SetForegroundWindow(B2) : la désactivation de B part, B2 n'a que WM_ACTIVATEAPP et
+WM_NCACTIVATE. Étape 4 : pendant que B dort, SetForegroundWindow(B1) ; réveillé, B active B2 lui-même : l'activation
+de B1 qui attendait part. Étape 5 : SetForegroundWindow(A1) : B se désactive dans son thread (B2 : WM_NCACTIVATE,
+WM_ACTIVATE, WM_ACTIVATEAPP à B1 et B2, WM_KILLFOCUS ; ni fenêtre active ni clavier ensuite).
+
+Tests : hôte (`queue` : les événements à part, ceux qui partent ; `input` : Ctrl, Alt et Maj relâchées) ;
+`async-activate` sur AMD et Intel. Onze mutations le font échouer chacune : aucune désactivation postée au thread qui
+perd le premier plan ; le thread courant qui ne se désactive pas ; aucune activation postée ; les événements jamais
+traités par PeekMessage et GetMessage ; le thread désactivé qui garde sa fenêtre active ; pas de WM_ACTIVATEAPP à
+l'activation ; la désactivation dépassée gardée ; l'activation dépassée gardée ; pas de WM_NCACTIVATE à une fenêtre
+déjà active ; pas de WM_KILLFOCUS au thread désactivé (le scénario) ; Ctrl, Alt et Maj pas relâchées (le test hôte
+seul).
+
+## Étape 44 : le changement de résolution (le pilote `bochs-dispi`, ChangeDisplaySettings, le panneau Affichage)
 
 Le troisième critère du M6 : « La résolution se change depuis le panneau Affichage (QEMU) ». `gopfb` affichait sur
 le framebuffer UEFI, fixe ; un auto-test du noyau (`test-resolution`) changeait déjà le mode par Bochs DISPI, sans

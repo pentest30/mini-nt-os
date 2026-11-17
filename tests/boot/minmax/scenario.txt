@@ -56,9 +56,9 @@ expect = [minmax] SW_MINIMIZE again: was 1, iconic 1
 # WM_QUERYOPEN answered FALSE: it stays minimized.
 expect = [minmax] SW_RESTORE refused: was 1, WM_QUERYOPEN 1, iconic 1
 # SW_RESTORE: WM_QUERYOPEN first, its normal rectangle, SIZE_RESTORED, the
-# keyboard, WM_ACTIVATE (already active: the refused SW_RESTORE activated it,
-# as ReactOS).
-expect = [minmax] SW_RESTORE received 10: 0013 0046 0024 0083 0085 0014 0047 0003 0005 0006
+# keyboard (WM_SETFOCUS: activated while minimized, nobody had it), WM_ACTIVATE
+# (already active: the refused SW_RESTORE activated it, as ReactOS).
+expect = [minmax] SW_RESTORE received 11: 0013 0046 0024 0083 0085 0014 0047 0003 0005 0007 0006
 expect = [minmax] SW_RESTORE: was 1, WM_QUERYOPEN 2, WM_SIZE 0 392 272, active W 1, focus W 1
 expect = [minmax] restored: iconic 0, zoomed 0, 100 100 500 400
 # SW_SHOWMAXIMIZED: WM_GETMINMAXINFO first, no WM_SHOWWINDOW, SIZE_MAXIMIZED;
