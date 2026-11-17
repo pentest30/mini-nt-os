@@ -1783,7 +1783,7 @@ l'icône finit le suivi et poste SC_CLOSE lui-même : ReactOS laisse le message 
 (WM_NCLBUTTONDBLCLK), qu'ici la capture du menu a fait message de la zone cliente.
 
 Pas encore : le clic droit sur le titre (fait à l'étape 38), SC_MOVE et
-SC_SIZE au clavier (faits à l'étape 39), ←/→ entre le menu système et la barre (MENU_DoNextMenu),
+SC_SIZE au clavier (faits à l'étape 39), ←/→ entre le menu système et la barre (fait à l'étape 40),
 le bouton de fermeture grisé quand Close l'est, WM_POPUPSYSTEMMENU (la barre des tâches), le menu système d'un
 bureau (MNF_SYSDESKMN). Vu, pas fait : SetForegroundWindow refuse une fenêtre réduite (`input::can_activate`,
 la règle de co_WinPosActivateOtherWindow), ReactOS l'active.
@@ -1885,3 +1885,50 @@ flèches, le point ramené dans la fenêtre, même vide : `i32::clamp` y paniqua
 milieu du titre ; les flèches ignorées ; Échap qui ne rend pas la place ; Size sans cadre épais ou une fenêtre cachée
 qui entrent dans la boucle ; aucune flèche ne choisit de bord ; Échap qui ne renonce pas au choix du bord ;
 `mouse::set_cursor_pos` sans son WM_MOUSEMOVE.
+
+## Étape 40 : ← et → entre le menu de la fenêtre et la barre (WM_NEXTMENU)
+
+Demandé après l'étape 39 : aux bouts de la barre suivie, ← et → faisaient le tour de ses items (du premier au
+dernier et retour), et le menu de la fenêtre ouvert par Alt+Espace n'en sortait pas.
+
+`menu.c` de win32k (MENU_DoNextMenu, MENU_KeyLeft, MENU_KeyRight), ReactOS comme spécification ;
+`win32k::menutrack`.
+
+| Partie | Ce que fait Mino |
+|---|---|
+| Le bout (`menutrack::at_menu_end`) | ← sur le premier item ; → sur le dernier item du menu de la fenêtre, ou sur une barre quand il n'y a plus après la sélection que des items de MDI (les identifiants de SC_SIZE à SC_RESTORE : l'icône et les boutons d'une fille agrandie dans la barre du cadre) ; sans sélection, → ne sort pas ; ailleurs, la flèche change d'item comme avant |
+| WM_NEXTMENU (`menutrack::do_next_menu`) | envoyé à la propriétaire avec la flèche et un MDINEXTMENU (`abi::menu::MdiNextMenu32`, que sa procédure peut remplir) : le menu quitté, le menu de GetSystemMenu pour le menu de la fenêtre ; DefWindowProc n'y répond pas |
+| Sans réponse | du menu de la fenêtre à la barre (← : son dernier item avant ceux de MDI, `menutrack::last_bar_item` ; → : son premier), rien pour une fenêtre fille ou sans barre ; de la barre au menu de la fenêtre (WS_SYSMENU, créé s'il le faut), rien sans lui |
+| Une réponse | le menu et la fenêtre donnés : la barre d'une fenêtre qui n'est pas fille, ou son menu de la fenêtre ; un autre menu, rien. Le suivi passe à cette fenêtre, qui devient la propriétaire (ses notifications, la souris, `queue.menu_owner`) ; WM_EXITMENULOOP va toujours à la fenêtre du début |
+| Le passage | l'ancien menu perd sa sélection, ses sous-menus se ferment ; le menu suivi (`Top`) change ; le nouveau menu sélectionne son item (WM_MENUSELECT) ; si un menu était ouvert, celui du nouvel item s'ouvre (le menu de la fenêtre sous l'icône du titre) |
+
+Écart voulu avec ReactOS : quand l'application répond par un menu de la fenêtre, ReactOS compare sa réponse au
+menu d'un seul item de cette fenêtre (`get_win_sys_menu`) puis la remplace par ce même menu (« get the real system
+menu ») ; la comparaison n'a de sens qu'avec le sous-menu, ce que rend GetSystemMenu, le seul handle qu'une
+application connaisse. Mino accepte l'un et l'autre.
+
+Pas encore : MENU_SuspendPopup (le menu s'ouvre à chaque flèche, même répétée), les colonnes
+(MENU_GetStartOfPrevColumn, MENU_GetStartOfNextColumn). Sans banc : DefFrameProc et DefMDIChildProc (MDI, dans
+`user32`, qui répondent à WM_NEXTMENU) ; une réponse par une fenêtre d'un autre thread, que ReactOS ne refuse pas
+(Mino non plus) : elle devient la propriétaire, mais la souris reste à la fenêtre du thread (`mouse::set_capture`
+refuse une fenêtre d'un autre thread).
+
+Le scénario `menu` (étape 23) attendait que ←, depuis File, fasse le tour de la barre jusqu'à Help : sa fenêtre W
+a WS_SYSMENU, et ← y va maintenant au menu de la fenêtre, comme chez ReactOS. Ses touches 10 sont devenues
+`alt left left ret` (le second ← va à Help).
+
+Le banc d'essai : `tests/native/nextmenu1.c` (`NEXTMENU1.EXE`, MinGW), scénario `next-menu`, à la place de
+`winlogon.exe`. W et sa barre File, Edit, Help ; W2 et sa barre Other. QEMU : F10, ← (du premier item au menu de la
+fenêtre, WM_NEXTMENU VK_LEFT depuis la barre), ↓ l'ouvre (étape 1) ; Alt+Espace, → (File s'ouvre ; WM_NEXTMENU
+depuis le menu de GetSystemMenu), ← (le menu de la fenêtre), ← (Help, le dernier), → (le menu de la fenêtre)
+(étape 2) ; F10, → : Edit, sans WM_NEXTMENU (étape 3) ; F10, ← : W répond par W2 et sa barre, ↓ ouvre Other
+(WM_INITMENUPOPUP à W2), k envoie WM_COMMAND à W2 (étape 4) ; F10, ← : W répond par W2 et GetSystemMenu(W2), ↓ ouvre
+le menu de la fenêtre de W2 (étape 5). Une capture de l'étape 2 montre le menu de la fenêtre sous l'icône, aucun
+item de la barre surligné, puis Help enfoncé et ouvert.
+
+Tests : hôte (`menutrack` : les bouts d'une barre, d'une barre de MDI, du menu de la fenêtre, sans sélection ;
+l'item d'arrivée sur la barre) ; `next-menu` sur AMD et Intel. Sept mutations le font échouer chacune : ← qui ne
+sort pas du premier item ; → qui ne sort pas du menu de la fenêtre ; WM_NEXTMENU pas envoyé ; la réponse par
+GetSystemMenu refusée (la règle de ReactOS) ; la réponse par une barre refusée ; ← qui arrive sur le premier item de
+la barre ; la propriétaire gardée après une réponse. Une huitième a montré une ligne inutile, retirée avant le
+commit : poser la fenêtre de la barre au passage, que SetMenu lui donne déjà (`menu::attach`).

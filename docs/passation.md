@@ -1,5 +1,23 @@
 # Notes de passation
 
+- **← et → entre le menu de la fenêtre et la barre** (`claude/new-session-696xfc`, M6,
+  [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 40 ; demandé après l'étape 39). `menutrack::do_next_menu`
+  (MENU_DoNextMenu) : aux bouts du menu suivi (`menutrack::at_menu_end` : ← sur le premier item, → sur le dernier,
+  les items de MDI sautés), WM_NEXTMENU à la propriétaire (`abi::menu::MdiNextMenu32`, `wm::NEXTMENU`) ; sans
+  réponse, de la barre au menu de la fenêtre et retour (← arrive sur le dernier item de la barre) ; une réponse (la
+  barre ou le menu de la fenêtre d'une autre fenêtre) y fait passer le suivi, cette fenêtre devenant la
+  propriétaire. Branché dans `key_left` et `key_right` (MENU_KeyLeft, MENU_KeyRight). **Écart voulu** : une réponse
+  par GetSystemMenu est acceptée (ReactOS la compare au menu d'un item). Scénario `next-menu`
+  (`tests/native/nextmenu1.c`, AMD et Intel) ; tests hôte (`menutrack`). Sept mutations détectées ; une huitième a
+  montré une ligne inutile, retirée (la barre a déjà sa fenêtre par SetMenu, `menu::attach`). Le scénario `menu`
+  attendait encore que ← fasse le tour de la barre depuis File (étape 23, avant le menu de la fenêtre) : ses touches
+  10 sont devenues `alt left left ret`. Lint propre ; toute la suite : 1169 tests hôte, 138 runs sur 140, les deux
+  `menu` à l'ancienne attente, puis `menu` refait sur AMD et Intel avec la nouvelle ; rostests 44/84 et 16/29.
+  **Suite** : le bouton de fermeture grisé quand Close l'est ; SetForegroundWindow d'une fenêtre réduite
+  (`input::can_activate` la refuse, ReactOS l'active) ; DefWindowProc de WM_xBUTTONDOWN qui oublie Alt
+  (QF_FMENUSTATUS) ; Maj+F10 (WM_CONTEXTMENU du clavier) ; MENU_SuspendPopup ; WM_MOVING, WM_SIZING, le cadre en
+  pointillés, SetCursorPos (TWOPARAM_ROUTINE_SETCURSORPOS) ; vérifier sous VirtualBox avec le Bloc-notes.
+
 - **Déplacer et redimensionner au clavier** (`claude/new-session-696xfc`, M6,
   [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 39 ; demandé après l'étape 38). Move et Size du menu de la
   fenêtre (WM_SYSCOMMAND SC_MOVE, SC_SIZE sans endroit) : `sizemove::keyboard_start` (DefWndStartSizeMove : le
@@ -17,10 +35,7 @@
   (`sizemove::point_into`, comme ReactOS `min(max(..))` ; test hôte). Lint propre ; toute la suite : 1166 tests
   hôte, 137 runs de démarrage sur 138 : `rostests-kernel32` à 15/29 (l'apitest Pipes, ERROR_PIPE_LISTENING, la
   course notée par la PR 138), 16/29 relancé seul ; `keyboard-move` refait sur AMD et Intel après la correction.
-  **Suite** : ←/→ entre le menu système et la barre, le bouton de fermeture grisé quand Close l'est ;
-  SetForegroundWindow d'une fenêtre réduite (`input::can_activate` la refuse, ReactOS l'active) ; DefWindowProc de
-  WM_xBUTTONDOWN qui oublie Alt (QF_FMENUSTATUS) ; Maj+F10 (WM_CONTEXTMENU du clavier) ; WM_MOVING, WM_SIZING, le
-  cadre en pointillés, SetCursorPos (TWOPARAM_ROUTINE_SETCURSORPOS) ; vérifier sous VirtualBox avec le Bloc-notes.
+  La suite : l'entrée de ← et →, au-dessus.
 
 - **Le clic droit sur le titre** (`claude/new-session-696xfc`, M6, [`compat/m6-fenetres.md`](compat/m6-fenetres.md),
   étape 38 ; demandé après l'étape 37). Un clic droit sur le titre ou l'icône d'une fenêtre ouvre son menu système au

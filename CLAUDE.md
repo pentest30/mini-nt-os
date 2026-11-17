@@ -443,6 +443,9 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   DefWndStartSizeMove ; le curseur au milieu du titre, ou un bord choisi par une flèche ; dans la boucle, chaque flèche
   déplace le curseur de 8 pixels, Entrée finit, Échap rend la place) ; `mouse::set_cursor_pos` (UserSetCursorPos : le
   curseur placé et son WM_MOUSEMOVE) ; scénario `keyboard-move` (`tests/native/kbdmove1.c`).
+  M6, étape 40 : ← et → aux bouts de la barre passent au menu de la fenêtre, et de lui à la barre
+  (`menutrack::do_next_menu`, MENU_DoNextMenu : WM_NEXTMENU à la propriétaire, qui peut donner la barre ou le menu
+  d'une autre fenêtre, le suivi y passant) ; scénario `next-menu` (`tests/native/nextmenu1.c`).
   M5, la console ([`docs/compat/m5-console.md`](docs/compat/m5-console.md), scénario `console`) : `CONSOLE1.EXE`
   lance par CreateProcessW `THREADS1.EXE` (sous-système CONSOLE, construit par `xtask`) ; NtCreateProcess(Ex) rend le
   PEB dans le TEB du créateur (`NtTib.ArbitraryUserPointer`, comme ReactOS) ; emprunt d'identité
