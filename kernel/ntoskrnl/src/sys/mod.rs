@@ -40,6 +40,7 @@ mod completion;
 mod console;
 mod cursor;
 mod desktop;
+pub(crate) mod display;
 mod event;
 pub mod exceptions;
 mod file;
@@ -192,6 +193,7 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtGdiLineTo, Handler::Status(gdi::nt_gdi_line_to)),
     (services::NtGdiMoveTo, Handler::Status(gdi::nt_gdi_move_to)),
     (services::NtGdiOpenDCW, Handler::Status(gdi::nt_gdi_open_dc_w)),
+    (services::NtGdiTransparentBlt, Handler::Status(gdi::nt_gdi_transparent_blt)),
     (services::NtGdiPatBlt, Handler::Status(gdi::nt_gdi_pat_blt)),
     (services::NtGdiRectVisible, Handler::Status(gdi::nt_gdi_rect_visible)),
     (services::NtGdiGetDIBitsInternal, Handler::Status(gdi::nt_gdi_get_dibits_internal)),
@@ -354,7 +356,9 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtUserShowScrollBar, Handler::Status(scroll::nt_user_show_scroll_bar)),
     (services::NtUserDispatchMessage, Handler::Status(message::nt_user_dispatch_message)),
     (services::NtUserEndPaint, Handler::Status(window::nt_user_end_paint)),
-    (services::NtUserEnumDisplaySettings, Handler::Status(user::nt_user_enum_display_settings)),
+    (services::NtUserEnumDisplaySettings, Handler::Status(display::nt_user_enum_display_settings)),
+    (services::NtUserEnumDisplayDevices, Handler::Status(display::nt_user_enum_display_devices)),
+    (services::NtUserChangeDisplaySettings, Handler::Status(display::nt_user_change_display_settings)),
     (services::NtUserEnableMenuItem, Handler::Status(menu::nt_user_enable_menu_item)),
     (services::NtUserFindExistingCursorIcon, Handler::Status(cursor::nt_user_find_existing_cursor_icon)),
     (services::NtUserGetAsyncKeyState, Handler::Status(input::nt_user_get_async_key_state)),

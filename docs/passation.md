@@ -34,6 +34,55 @@
   attendent par MsgWaitForMultipleObjects tournaient à vide avant le correctif de `QS_SENDMESSAGE` (sous
   VirtualBox, la charge du processeur).
 
+- **Le changement de résolution : le troisième critère du M6 est coché** (`claude/display-resolution`, partie de
+  `main` 93197f3 puis fusionnée avec `main` c16673b (PR 138 et 139), puis 5ca4cab (PR 140 et 141), puis ec13720 (PR 142) ; M6, [`compat/m6-fenetres.md`](compat/m6-fenetres.md),
+  étape 44). Le pilote `drivers/video/bochs-dispi` (le VGA standard de QEMU, le VBoxVGA de VirtualBox : Bochs DISPI
+  par `hal::bochs`, le framebuffer sur la barre 0 PCI par `hal::pci::memory_bar`, GETCAPS et la mémoire vidéo ; 19
+  modes à 32 bits de 640×480 à 2560×1600 sous QEMU, plus celui du micrologiciel), préféré à `gopfb`, redevenu fixe
+  (le `set_mode` qu'on lui avait ajouté pour `test-resolution` est passé à `bochs-dispi`) ; la console de démarrage
+  suit le mode pour l'écran STOP. `abi::display` (`DEVMODEW` de 220 octets, `DISPLAY_DEVICEW`, CDS_*, DISP_CHANGE_*,
+  DM_*). `win32k::display_settings` : `\\.\DISPLAY1` et son moniteur, les modes du pilote en `DEVMODEW`, `find_mode`
+  (LDEVOBJ_bProbeAndCaptureDevmode), `switch` et `apply` (métriques par `metrics::write_screen`, moniteur, capacités
+  de l'écran, pointeur, fenêtre de chaque bureau de la station interactive, DC du cache et DC ouverts sur l'écran ;
+  WM_DISPLAYCHANGE aux fenêtres de premier niveau, 100 ms chacune ; tout repeint). `sys::display` :
+  NtUserEnumDisplayDevices, NtUserEnumDisplaySettings (l'ancien rendait 1/0, deux succès pour `NT_SUCCESS`, et
+  écrivait la largeur à l'octet 164), NtUserChangeDisplaySettings ; le registre (`Control\Video\{4D494E4F-…}\0000`,
+  réécrit dans son fichier ; `HARDWARE\DEVICEMAP\VIDEO`) repris au démarrage. Pour le panneau : EnableWindow
+  (NtUserCallTwoParam 0x60, `window::enable_window`) et NtGdiTransparentBlt (`gdi::bitblt::transparent_blt`,
+  l'aperçu du moniteur) ; `desk.cpl` et `rundll32.exe` sur le disque des scénarios. `xtask` : `screen-size = L H`.
+  Scénarios `display-mode` (`tests/native/display1.c` : énumération, refus, 800×600 par ChangeDisplaySettings avec
+  métriques, WM_DISPLAYCHANGE à deux threads, moniteur, bureau, devcaps, pointeur, registre, capture 800×600) et
+  `display-panel` (`tests/native/display2.c` : le vrai panneau Affichage, Alt+S, Origine, Entrée, puis Alt+Y dans
+  « Display Settings » : 640×480, registre compris, capture 640×480), et le critère lui-même, `display-desktop`
+  (depuis le bureau d'`explorer` après le logon : Win+R, « control desk.cpl,,3 » ; `control.exe` sur le disque ;
+  la barre des tâches se replace d'elle-même au bas de l'écran de 640×480), AMD et Intel. Corrigé en chemin : le fond
+  du bureau (`window::paint_desktop`) se peignait par-dessus les fenêtres et recouvrait parfois la barre des tâches
+  qu'`explorer` venait de replacer (deux runs sur dix de `display-desktop`) : il est coupé aux fenêtres filles
+  (WS_CLIPCHILDREN) ; WM_DISPLAYCHANGE resté sans réponse 100 ms est livré plus tard (comme Windows, pas ReactOS) ;
+  Win+R attend 15 s après le bureau (une fois sur quatre, il arrivait trop tôt). Vingt mutations détectées (quatorze par
+  `display-mode`, quatre par `display-panel`, deux par `display-desktop` : la liste dans l'étape 44).
+  EnableWindow change les attentes de `desktop-launch` : End Task et Switch To du Gestionnaire des tâches sont
+  maintenant activés pour la tâche sélectionnée (comme XP), l'icône sélectionnée mêlée au surlignage (8491B4, le
+  blanc mêlé à moitié à 0A246A) ; le texte désactivé reste vérifié par `dialog`.
+  Case cochée dans `05-feuille-de-route.md` : **les trois critères du M6 sont cochés**. Lint propre ;
+  toute la suite : 1186 tests hôte, 149 runs de démarrage sur 150 (`rostests` à 43/84 sous son plancher de 44, l'écart
+  connu de cet hôte, NtProtectVirtualMemory ; `rostests-kernel32` 16/29 ; `ntfs-readonly` sauté, sans `mkntfs`).
+  **Tâche de diagnostic** (règle 9) : MsgWaitForMultipleObjects d'un thread qui a reçu un message envoyé rend
+  aussitôt « entrée », sans fin (3,8 millions de tours en 180 s, même avec le seul QS_SENDMESSAGE) : l'événement de
+  la file reste signalé. Piste, à vérifier : les bits « changés » de `win32k::queue`, que co_IntPeekMessage efface à
+  chaque PeekMessage et co_MsqDispatchOneSentMessage pour QS_SENDMESSAGE quand la liste des envoyés se vide (et
+  `queue::input_event` qui signale l'événement d'après eux). La sonde du
+  panneau tournait ainsi et affamait `rundll32` (plus d'une minute avant le panneau) ; contournée dans
+  `display2.c` (WaitForSingleObject, sa fenêtre dans un second thread). À corriger avec un test qui l'aurait vu
+  (`msgwait`). Le correctif de `QS_SENDMESSAGE` de l'entrée du presse-papiers (`queue::QueueState::refresh`, test
+  `queue::the_last_sent_message_out_clears_its_change_bit`) vise ce symptôme : vérifier que `display2.c` peut se
+  passer de son contournement.
+  **Dettes** : NtGdiPolyPolyDraw, NtGdiSetLayout, NtUserSetParent, SPI_GETKEYBOARDCUES (0x100A),
+  NtUserSetThreadState, NtUserSetActiveWindow, NtUserUnregisterClass (vus dans le panneau, sans effet sur le
+  parcours) ; CDS_FULLSCREEN et le retour au mode du registre à la fin du processus ; ClipCursor ; le
+  `VisRectRegion` chez le client d'un DC ouvert sur l'écran ; « Advanced… » du panneau ; essayer sous VirtualBox (VBoxVGA : la mémoire vidéo n'est pas lue,
+  seuls les modes qui tiennent où celui du micrologiciel tient).
+
 - **La liste des dix applications du M7** (`claude/m7-applications`, M7,
   [`compat/applications.md`](compat/applications.md#la-liste-du-m7-premier-critère) ; demandé le 2026-11-17).
   Le premier critère du M7 a sa liste : 7-Zip 9.20 (MSI), Notepad++ 7.9.2 (NSIS), KeePass 1.18, WinMerge 2.12.4,

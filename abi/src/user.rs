@@ -1166,6 +1166,13 @@ pub const NOPARAM_ROUTINE_MSQCLEARWAKEMASK: u32 = 0x03;
 pub const ONEPARAM_ROUTINE_SETCARETBLINKTIME: u32 = 0x3B;
 /// TWOPARAM_ROUTINE_SETCARETPOS: SetCaretPos.
 pub const TWOPARAM_ROUTINE_SETCARETPOS: u32 = 0x6E;
+/// TWOPARAM_ROUTINE_ENABLEWINDOW: EnableWindow (XP's order of the enum).
+pub const TWOPARAM_ROUTINE_ENABLEWINDOW: u32 = 0x60;
+/// WM_ENABLE: a window was enabled (`wParam` TRUE) or disabled.
+pub const WM_ENABLE: u32 = 0x000A;
+/// WM_CANCELMODE: a window gives up its modes (capture, menus) before it is
+/// disabled.
+pub const WM_CANCELMODE: u32 = 0x001F;
 /// IDCARETTIMER: the system timer that makes the caret blink.
 pub const IDCARETTIMER: u32 = 0xFFFF;
 /// ONEPARAM_ROUTINE_GETCURSORPOS: GetCursorPos, by NtUserCallOneParam with

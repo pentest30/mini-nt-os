@@ -55,7 +55,11 @@ fn tree() -> KeyNode {
     }
     cpu.set_value("FeatureSet", REG_DWORD, info.processor_feature_bits.to_le_bytes().to_vec());
     root.key_mut("DESCRIPTION\\System\\FloatingPointProcessor\\0").set_value("Identifier", REG_SZ, sz(&identifier));
-    root.key_mut("DEVICEMAP");
+    // What VIDEOPRT gives win32k: the registry key of each display device
+    // (InitVideo, UserEnumDisplayDevices's `DeviceKey`).
+    let video = root.key_mut("DEVICEMAP\\VIDEO");
+    video.set_value("\\Device\\Video0", REG_SZ, sz(crate::sys::display::DEVICE_KEY));
+    video.set_value("MaxObjectNumber", REG_DWORD, 0u32.to_le_bytes().to_vec());
     root.key_mut("RESOURCEMAP");
     root
 }

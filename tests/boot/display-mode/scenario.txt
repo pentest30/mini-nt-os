@@ -1,0 +1,62 @@
+# The display settings (M6), by a program: DISPLAY1.EXE (tests/native/
+# display1.c, MinGW, linked to ReactOS's kernel32, user32 and gdi32) takes
+# the place of winlogon.exe and takes WinSta0\Default. The display driver is
+# bochs-dispi (QEMU's standard VGA, 16 MiB), from the firmware's 1280x800.
+# 1. EnumDisplayDevices (NtUserEnumDisplayDevices): the adapter \\.\DISPLAY1,
+#    attached to the desktop, primary and VGA-compatible (0x15), its
+#    registry key; its monitor, active and attached (3); nothing after them;
+# 2. EnumDisplaySettings (NtUserEnumDisplaySettings): the mode in use, the
+#    driver's 19 modes from 640x480 to 2560x1600, sorted, all 32 bits at
+#    60 Hz; another device refused; no mode in the registry yet;
+# 3. ChangeDisplaySettings (NtUserChangeDisplaySettings) that change
+#    nothing: CDS_TEST (0), 1000x700 and 16 bits (-2, BADMODE), CDS_NORESET
+#    alone (-4, BADFLAGS), another device (-5, BADPARAM);
+# 4. QEMU moves the mouse to the bottom-right corner (1279, 799);
+# 5. ChangeDisplaySettings to 800x600 with CDS_UPDATEREGISTRY:
+#    WM_DISPLAYCHANGE (32, MAKELONG(800, 600)) once to each top-level window,
+#    the program's and its second thread's, during the call; the system
+#    metrics (SM_CYFULLSCREEN 600 - 20 - SM_CYMIN 28, SM_CXMAXIMIZED 800 +
+#    2 x 4), the mode in use, the monitor, the desktop window, the screen's
+#    device caps; the pointer kept on the screen; the registry's mode, which
+#    ChangeDisplaySettings(NULL) takes back without a change;
+# 6. the program's window in the bottom-right corner of the new screen,
+#    green; the desktop repainted around it (the change cleared the video
+#    memory: black otherwise). The pointer's tip covers (799, 599).
+features = test-smss
+requires = userland, native
+initial-command = DISPLAY1.EXE
+cpus     = default, intel
+timeout  = 120
+
+keys = [display] waiting for the mouse => move:500,300 move:500,300 move:500,300
+
+expect = [display] on WinSta0\Default
+expect = [display] adapter 1: \\.\DISPLAY1 "QEMU standard VGA (Bochs DISPI)", flags 15, key \Registry\Machine\System\CurrentControlSet\Control\Video\{4D494E4F-0000-0000-0000-000000000001}\0000
+expect = [display] monitor 1: \\.\DISPLAY1\Monitor0, flags 3; another adapter 0, another monitor 0
+expect = [display] step 1: one adapter, attached and primary, one monitor
+expect = [display] current 1: 1280x800, 32 bits, 60 Hz, fields 7c0000
+expect = [display] first mode 640x480
+expect = [display] 19 modes, sorted 1, 800x600 1, all 32 bits at 60 Hz 1, last 2560x1600; another device 0, the registry's 0
+expect = [display] step 3: CDS_TEST 0, 1000x700 -2, 16 bits -2, CDS_NORESET -4, another device -5; the screen 1280x800, WM_DISPLAYCHANGE 0 0
+expect = [display] step 4: the pointer at 1279 799
+expect = win32k: display mode changed to 800x600
+expect = [display] step 5: ChangeDisplaySettings 800x600: 0; WM_DISPLAYCHANGE to its window 1 (32, 02580320), to its other thread's 1 (32, 02580320)
+expect = [display] metrics: screen 800x600, full screen 800x552, maximized 808x580, virtual screen 800x600
+expect = [display] current 800x600; monitor 0 0 800 600, work 0 0 800 600; desktop window 0 0 800 600
+expect = [display] device caps 800x600, 32 bits; cursor 799 599
+expect = [display] the registry's 1: 800x600, 32 bits, 60 Hz; ChangeDisplaySettings(NULL) 0, WM_DISPLAYCHANGE 1 1
+expect = [display] done
+
+forbid = *** STOP:
+forbid = sys: NtUserEnumDisplayDevices (0x1172) is not implemented
+forbid = sys: NtUserChangeDisplaySettings (0x1145) is not implemented
+
+# The screen of the new mode: its size, the window in its corner, the
+# desktop's colour (COLOR_BACKGROUND) elsewhere.
+screen-size = 800 600
+screen = 798 598 20A040
+screen = 700 500 20A040
+screen = 699 499 5A7EDC
+screen = 0 0 5A7EDC
+screen = 400 300 5A7EDC
+screen = 0 599 5A7EDC

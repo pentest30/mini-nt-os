@@ -9,7 +9,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | Table | Implémentés | Services |
 |---|---:|---:|
 | ntoskrnl | 131 | 296 |
-| win32k | 212 | 737 |
+| win32k | 215 | 737 |
 
 ## ntoskrnl
 
@@ -613,7 +613,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1126` | `NtGdiStrokePath` | 1 |  |
 | `0x1127` | `NtGdiSwapBuffers` | 1 |  |
 | `0x1128` | `NtGdiTransformPoints` | 5 | ✅ |
-| `0x1129` | `NtGdiTransparentBlt` | 11 |  |
+| `0x1129` | `NtGdiTransparentBlt` | 11 | ✅ |
 | `0x112a` | `NtGdiUnloadPrinterDriver` | 2 |  |
 | `0x112b` | `NtGdiUnmapMemFont` | 1 |  |
 | `0x112c` | `NtGdiUnrealizeObject` | 1 |  |
@@ -641,7 +641,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1142` | `NtUserCallOneParam` | 2 | ✅ |
 | `0x1143` | `NtUserCallTwoParam` | 3 | ✅ |
 | `0x1144` | `NtUserChangeClipboardChain` | 2 | ✅ |
-| `0x1145` | `NtUserChangeDisplaySettings` | 4 |  |
+| `0x1145` | `NtUserChangeDisplaySettings` | 4 | ✅ |
 | `0x1146` | `NtUserCheckImeHotKey` | 2 |  |
 | `0x1147` | `NtUserCheckMenuItem` | 3 | ✅ |
 | `0x1148` | `NtUserChildWindowFromPointEx` | 4 |  |
@@ -686,7 +686,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x116f` | `NtUserEndDeferWindowPosEx` | 2 | ✅ |
 | `0x1170` | `NtUserEndMenu` | 0 | ✅ |
 | `0x1171` | `NtUserEndPaint` | 2 | ✅ |
-| `0x1172` | `NtUserEnumDisplayDevices` | 4 |  |
+| `0x1172` | `NtUserEnumDisplayDevices` | 4 | ✅ |
 | `0x1173` | `NtUserEnumDisplayMonitors` | 5 |  |
 | `0x1174` | `NtUserEnumDisplaySettings` | 4 | ✅ |
 | `0x1175` | `NtUserEvent` | 1 |  |
