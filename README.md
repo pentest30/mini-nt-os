@@ -1,5 +1,6 @@
 
 # Mino (mini-nt-os)
+<img width="1280" height="800" alt="image-1793803234557" src="https://github.com/pentest30/mini-nt-os/blob/main/mino-5ca4cab-reactos.png" />
 <img width="1280" height="800" alt="image-1793803234557" src="https://github.com/pentest30/mini-nt-os/blob/main/image-1795013743831.png" />
 **Mino is a free, open-source, Windows XP-compatible operating system with a kernel written in Rust.**
 
