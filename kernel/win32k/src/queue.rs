@@ -263,7 +263,9 @@ pub fn update_keys_from_message(keys: &mut KeyState, message: &Msg32) {
 
 impl QueueState {
     /// Les bits de ce qui est posté, et des touches, s'il y a quelque
-    /// chose.
+    /// chose. Sans message envoyé, le bit de changement de
+    /// `QS_SENDMESSAGE` tombe avec son bit de réveil, comme ClearMsgBitsMask
+    /// les efface ensemble.
     fn refresh(&mut self) {
         let posted = QS_POSTMESSAGE | QS_ALLPOSTMESSAGE;
         if self.posted.is_empty() && self.quit.is_none() {
@@ -275,6 +277,7 @@ impl QueueState {
         self.wake = (self.wake & !input) | self.input.iter().fold(0, |bits, message| bits | input_bit(message));
         if self.sent.is_empty() {
             self.wake &= !QS_SENDMESSAGE;
+            self.change &= !QS_SENDMESSAGE;
         } else {
             self.wake |= QS_SENDMESSAGE;
         }
@@ -974,6 +977,30 @@ mod tests {
         assert_eq!(queue.pop_sent().map(|sent| sent.wparam), Some(2));
         assert_eq!(queue.wake & QS_SENDMESSAGE, 0, "none left");
         assert!(queue.pop_sent().is_none());
+    }
+
+    #[test]
+    fn the_last_sent_message_taken_clears_its_change_bit() {
+        // The loader of Inno Setup waits for its setup.tmp with
+        // MsgWaitForMultipleObjects(QS_ALLINPUT), and setup.tmp sends to the
+        // loader's window: the change bit of QS_SENDMESSAGE stayed set, so
+        // user32 returned at once, before waiting, and the loader looped
+        // after setup.tmp had ended, until the bench terminated it.
+        let mut queue = QueueState::default();
+        queue.push_sent(crate::sent::SentMessage::new(0x20, 0x400, 1, 0, false));
+        queue.push_sent(crate::sent::SentMessage::new(0x20, 0x401, 2, 0, false));
+        assert_eq!(queue.change & QS_SENDMESSAGE, QS_SENDMESSAGE);
+        let all = Filter { hwnd: 0, min: 0, max: 0 };
+        assert_eq!(queue.peek(&all, true), None);
+        assert_eq!(queue.change & QS_SENDMESSAGE, QS_SENDMESSAGE, "PeekMessage leaves it: one is still there");
+        queue.pop_sent();
+        assert_eq!(queue.change & QS_SENDMESSAGE, QS_SENDMESSAGE, "one left");
+        queue.pop_sent();
+        assert_eq!((queue.wake & QS_SENDMESSAGE, queue.change & QS_SENDMESSAGE), (0, 0), "none left: both bits");
+        let withdrawn = crate::sent::SentMessage::new(0x20, 0x402, 3, 0, false);
+        queue.push_sent(withdrawn.clone());
+        assert!(queue.remove_sent(&withdrawn), "its sender gave up");
+        assert_eq!((queue.wake & QS_SENDMESSAGE, queue.change & QS_SENDMESSAGE), (0, 0), "withdrawn: both bits");
     }
 
     #[test]
