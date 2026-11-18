@@ -12,7 +12,11 @@
 //!   3. Kernel image at its link address (0xFFFF_FFFF_8000_0000, ADR-014),
 //!      4 KiB pages with each segment's rights: W^X ([`map_kernel`]).
 //!
-//! All page table frames are allocated from UEFI (LOADER_DATA).
+//!   4. The GOP framebuffer at `HHDM_OFFSET + base` when it lies beyond
+//!      the HHDM ([`map_framebuffer`]).
+//!
+//! All page table frames are allocated from UEFI (LOADER_DATA), below 4 GiB:
+//! the kernel walks them through the HHDM.
 //! After ExitBootServices we write CR3 to activate these tables.
 //!
 //! # Safety invariants
@@ -21,7 +25,8 @@
 //!   `*mut PageTable` pointers.
 //! - All allocated frames are zeroed before use.
 
-use uefi::table::boot::{AllocateType, BootServices, MemoryType};
+use abi::FramebufferInfo;
+use uefi::table::boot::{BootServices, MemoryType};
 use x86_64::{
     structures::paging::{PageTable, PageTableFlags},
     PhysAddr,
@@ -32,7 +37,7 @@ use x86_64::{
 pub const HHDM_OFFSET: u64 = 0xFFFF_8000_0000_0000;
 
 /// How much physical memory to map in the HHDM (4 GiB covers all QEMU defaults).
-const HHDM_SIZE: u64 = 4 * 1024 * 1024 * 1024; // 4 GiB
+pub const HHDM_SIZE: u64 = 4 * 1024 * 1024 * 1024; // 4 GiB
 
 /// Size of one huge page (2 MiB).
 const HUGE_2M: u64 = 2 * 1024 * 1024;
@@ -79,6 +84,38 @@ pub unsafe fn build(bt: &BootServices) -> PhysAddr {
     );
 
     l4_phys
+}
+
+/// Map the GOP framebuffer at `HHDM_OFFSET + base`, where the kernel draws,
+/// when it lies beyond the HHDM's [0, 4 GiB): a PC's graphics aperture is
+/// often there (Intel graphics at 256 GiB with 32 GiB of RAM), whereas QEMU
+/// and VirtualBox put it below 4 GiB. 2 MiB pages, like the HHDM.
+///
+/// # Safety
+/// Must be called from UEFI boot services context; `l4_phys` is the PML4
+/// returned by [`build`] and `fb` the firmware's framebuffer.
+pub unsafe fn map_framebuffer(bt: &BootServices, l4_phys: PhysAddr, fb: &FramebufferInfo) {
+    if !fb.is_valid() {
+        return;
+    }
+    // 4 bytes per pixel: the kernel only drives the RGB and BGR formats.
+    let size = fb.stride as u64 * fb.height as u64 * 4;
+    let Some((start, end)) = beyond_hhdm(fb.base, size) else {
+        return;
+    };
+    for phys in (start..end).step_by(HUGE_2M as usize) {
+        // SAFETY: forwarded from the caller; `phys` is 2 MiB aligned.
+        unsafe { map_huge_2m(bt, l4_phys, HHDM_OFFSET + phys, phys) };
+    }
+    log::info!("paging: framebuffer [{:#x}, {:#x}) mapped at {:#x}, beyond the HHDM", start, end, HHDM_OFFSET + start);
+}
+
+/// The 2 MiB-aligned part of `[base, base + size)` that lies at or above the
+/// HHDM's end, `None` when the range sits inside the HHDM.
+fn beyond_hhdm(base: u64, size: u64) -> Option<(u64, u64)> {
+    let start = (base & !(HUGE_2M - 1)).max(HHDM_SIZE);
+    let end = (base + size).next_multiple_of(HUGE_2M);
+    (start < end).then_some((start, end))
 }
 
 // ── Internals ─────────────────────────────────────────────────────────────────
@@ -225,8 +262,8 @@ unsafe fn map_4k(bt: &BootServices, l4_phys: PhysAddr, virt: u64, phys: u64, fla
 /// # Safety
 /// Must be called with UEFI boot services active.
 fn alloc_zeroed_frame(bt: &BootServices) -> PhysAddr {
-    let phys = bt
-        .allocate_pages(AllocateType::AnyPages, MemoryType::LOADER_DATA, 1)
+    // Below 4 GiB: the kernel walks these tables through the HHDM.
+    let phys = crate::memory::allocate_low(bt, MemoryType::LOADER_DATA, 1)
         .expect("paging: failed to allocate page-table frame");
 
     // Zero the frame. In UEFI context phys == virt (identity mapped).

@@ -1,0 +1,17 @@
+# A machine with RAM above 4 GiB, as a PC with 32 GiB (a Dell Inspiron 15
+# 3530 stopped at the bootloader): the firmware loads the bootloader at its
+# preferred base, 0x1_4000_0000, beyond the identity map, so a trampoline below
+# 4 GiB switches CR3; everything the kernel reaches through the HHDM is
+# allocated below 4 GiB, and Mm leaves the RAM above it unused.
+cpus    = default, intel
+timeout = 120
+memory  = 8192
+
+expect = above 4 GiB: the trampoline switches CR3
+expect = bootloader: leaving boot services
+expect = RAM above the 4 GiB HHDM left unused
+expect = [smoke] identity map removed
+expect = [smoke] Mm: PFN round trip ok
+expect = kernel: phase 1 done
+
+forbid = *** STOP:

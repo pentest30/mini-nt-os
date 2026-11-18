@@ -16,7 +16,7 @@ use uefi::{
         file::{File, FileAttribute, FileInfo, FileMode, RegularFile},
         fs::SimpleFileSystem,
     },
-    table::boot::{AllocateType, MemoryType},
+    table::boot::MemoryType,
     CStr16,
 };
 
@@ -140,8 +140,7 @@ fn place_segments(bt: &BootServices, file: &[u8]) -> KernelImage {
     assert!(entry >= virt_base && entry < virt_end, "loader: entry point outside the image");
     let size = virt_end - virt_base;
 
-    let phys_base = bt
-        .allocate_pages(AllocateType::AnyPages, MemoryType::LOADER_DATA, pages(size))
+    let phys_base = crate::memory::allocate_low(bt, MemoryType::LOADER_DATA, pages(size))
         .expect("loader: failed to allocate pages for the kernel image");
     // SAFETY: [phys_base, phys_base + size) was just allocated (identity-mapped);
     // every copy below stays inside it and inside `file` (checked above).
@@ -163,8 +162,6 @@ fn copy_symbols(bt: &BootServices, file: &[u8]) -> KernelSymbols {
     const SHT_SYMTAB: u32 = 2;
     const SHT_STRTAB: u32 = 3;
     const SYM_SIZE: u64 = 24;
-    /// Highest address of the block: the HHDM covers [0, 4 GiB).
-    const HHDM_LIMIT: u64 = 0xFFFF_FFFF;
 
     let shoff = rd64(file, 0x28) as usize;
     let shentsize = rd16(file, 0x3A) as usize;
@@ -188,8 +185,7 @@ fn copy_symbols(bt: &BootServices, file: &[u8]) -> KernelSymbols {
     let in_file = |off: u64, size: u64| off.checked_add(size).is_some_and(|end| end <= file.len() as u64);
     assert!(in_file(sym_off, sym_size) && in_file(str_off, str_size), "loader: symbol table outside the file");
 
-    let phys = bt
-        .allocate_pages(AllocateType::MaxAddress(HHDM_LIMIT), MemoryType::LOADER_DATA, pages(sym_size + str_size))
+    let phys = crate::memory::allocate_low(bt, MemoryType::LOADER_DATA, pages(sym_size + str_size))
         .expect("loader: failed to allocate pages for the kernel symbols");
     // SAFETY: [phys, phys + sym_size + str_size) was just allocated
     // (identity-mapped); both sources lie inside `file` (checked above).
@@ -267,8 +263,8 @@ fn load_file(bt: &BootServices, filename: &CStr16, max_size: usize, require_pres
 
             // ── Allocate physical pages ───────────────────────────────────────
             let page_count = file_size.div_ceil(4096);
-            let phys_base = bt
-                .allocate_pages(AllocateType::AnyPages, MemoryType::LOADER_DATA, page_count)
+            // Below 4 GiB: the kernel reads the ramdisk through the HHDM.
+            let phys_base = crate::memory::allocate_low(bt, MemoryType::LOADER_DATA, page_count)
                 .expect("loader: failed to allocate pages");
 
             // ── Read the file directly into physical memory ───────────────────
