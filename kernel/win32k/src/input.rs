@@ -904,6 +904,43 @@ pub fn set_focus(thread: &ThreadInfo, window: Option<&Arc<Window>>) -> u32 {
     previous
 }
 
+/// NtUserSetActiveWindow (UserSetActiveWindow), dans le thread courant
+/// `thread` : sa fenêtre `window`, qui n'est pas une fille, devient active
+/// et le thread prend le premier plan ([`activate`] : comme
+/// co_IntSetForegroundAndFocusWindow, sans règle qui l'en empêche) ; une
+/// fille ne change rien. Sans fenêtre, une autre que la fenêtre active
+/// le devient ([`activate_other_min`], sinon [`activate_other`]) ; ReactOS
+/// essaie d'abord la fenêtre active d'avant du premier plan précédent, que
+/// Mino ne garde pas encore. Rend la fenêtre active d'avant si elle vit
+/// encore ; 0 pour la fenêtre d'un autre thread, sans rien changer.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, dans un service système, sans rien tenir.
+pub fn set_active(thread: &ThreadInfo, window: Option<&Arc<Window>>) -> u32 {
+    if window.is_some_and(|window| window.pti != thread.server) {
+        return 0;
+    }
+    let previous = thread.queue.with(|queue| queue.active).0;
+    match window {
+        Some(window) if window.state().style & (WS_POPUP | WS_CHILD) != WS_CHILD => {
+            activate(window);
+        }
+        Some(_) => {}
+        None => {
+            if let Some(active) = crate::window::get(previous) {
+                if !activate_other_min(&active) {
+                    activate_other(&active, None, true);
+                }
+            }
+        }
+    }
+    if crate::window::get(previous).is_some() {
+        previous
+    } else {
+        0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
