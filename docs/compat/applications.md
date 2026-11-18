@@ -116,15 +116,57 @@ Ce que le bilan désigne, dans l'ordre où il débloque le plus d'applications (
 vérifiées) :
 
 1. **NtSetInformationFile, classe 0x13** (FileAllocationInformation, que `SetEndOfFile` envoie après
-   FileEndOfFileInformation) : les quatre Inno Setup.
+   FileEndOfFileInformation) : les quatre Inno Setup. Fait le 2026-11-18 (plus bas).
 2. **Le dossier de plugins de NSIS** (Notepad++, AbiWord, Dev-C++) : NtQueryInformationFile classe 0x23
-   (FileAttributeTagInformation) est le seul service sans handler de la phase qui échoue.
+   (FileAttributeTagInformation) est le seul service sans handler de la phase qui échoue. La classe est faite le
+   2026-11-18 ; `DeleteFileW` va alors jusqu'à FileDispositionInformation (classe 0xd), qui ne l'est pas (la
+   suppression, plus bas).
 3. **NtLockFile** : `msiexec` (7-Zip, puis OpenOffice, dont l'installeur NSIS lance un MSI).
 4. **SumatraPDF** : l'accès mémoire qui suit NtQueryInformationProcess(ProcessDebugPort).
 5. **Dev-C++** : l'EReadError, puis le GDI et le USER qui lui manquent (palettes, métriques des polices, moniteurs).
 6. **La lenteur des gros fichiers** : la vérification d'OpenOffice lit 143 Mo en 440 s. Deux suspects, à mesurer :
    le `kernel32` de ReactOS (variante DBG) écrit deux `DbgPrint` par ReadFile sur le port série (12 525 lignes), et
    un fichier de 143 Mo fait 280 000 clusters de 512 octets dans la FAT.
+
+### Les quatre Inno Setup, le 2026-11-18
+
+Ce qui manquait : FileAllocationInformation (`io_manager::File::set_allocation_size` : sous la fin du fichier, le
+fichier est coupé là ; au-dessus, la taille ne change pas et le volume doit avoir les clusters qui manquent, sans
+que la réservation soit gardée) et FileAttributeTagInformation (`File::attribute_tag_information` : les attributs,
+l'étiquette 0). Le chargeur d'Inno Setup extrait son `setup.tmp` dans `C:\WINDOWS\TEMP\is-XXXXX.tmp\` en lui donnant
+d'abord sa taille (SetFilePointer puis SetEndOfFile) : c'est la seconde classe de `SetEndOfFile` qui échouait
+(« Error 1: Incorrect function »).
+
+Un second défaut, de USER, gardait ensuite le chargeur jusqu'à la limite du banc (300 s, 900 s pour GIMP, à 27 s
+du délai du scénario) après la fin de `setup.tmp` : il l'attend par `MsgWaitForMultipleObjects(1, &hProcess, FALSE,
+INFINITE, QS_ALLINPUT)` et recommence tant qu'elle rend 1 ; `setup.tmp` envoie des messages à la fenêtre du chargeur
+(`/SL5="$20060,…"`), et le bit de changement de `QS_SENDMESSAGE` restait levé après le dernier, si bien que
+`user32` rendait 1 sans attendre. `win32k::queue` l'efface maintenant avec son bit de réveil quand il ne reste
+plus de message envoyé, comme ClearMsgBitsMask. Le chargeur finit alors seul, avec le code de `setup.tmp`.
+
+Sur la branche du banc, AMD, un passage par application :
+
+| Application | Inno Setup | Ce qui se passe |
+|---|---|---|
+| KeePass | 5.3.10 | `setup.tmp` démarre et écrit son journal, « User privileges: None », puis « You must be logged in as an administrator when installing this program. » (OK supposé, en silencieux) : EAbort, le chargeur rend 1 en 11 s |
+| WinMerge | 5.2.3 | la même chose, en 12 s |
+| PeaZip | 5.4.2 | la même chose, en 14 s |
+| GIMP | 5.4.3 | la même chose (« … or as a member of the Power Users group »), en 27 s |
+
+Les planchers de leurs scénarios sont relevés là : la version d'Inno Setup et l'installeur d'origine dans le
+journal, la fin du chargeur avec son code ; « Unable to create a temporary file » et un installeur arrêté par le banc
+y sont interdits.
+
+Ce qui vient ensuite, pour les quatre :
+
+1. **NtAccessCheck** (Se) : Inno Setup demande si l'utilisateur est administrateur (et, pour GIMP, de Power Users)
+   par `CheckTokenMembership` d'`advapi32`, qui fait NtAccessCheck sur un descripteur dont la DACL donne l'accès 1 au
+   SID du groupe ; sans handler, le groupe passe pour absent. Le banc tourne sous le jeton de System, où
+   Administrators est activé : NtAccessCheck suffirait à passer ce point. Notepad++ l'appelle aussi.
+2. **La suppression** (Io) : à sa sortie, le chargeur efface `setup.tmp` (`DeleteFileW` :
+   FileAttributeTagInformation, puis FileDispositionInformation, classe 0xd, sans handler) ; le fichier et son
+   répertoire restent dans `C:\WINDOWS\TEMP`. Sans effet sur l'issue aujourd'hui ; une installation qui remplace ou
+   efface des fichiers en aura besoin, et NSIS pour son dossier de plugins (point 2 du bilan).
 
 ### La suite
 

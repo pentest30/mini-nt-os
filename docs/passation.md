@@ -1,5 +1,22 @@
 # Notes de passation
 
+- **Les quatre Inno Setup du banc passent leur fichier temporaire** (`claude/inspiring-allen-8bb1b7`, sur
+  `claude/m7-test-bench`, M7, [`compat/applications.md`](compat/applications.md#les-quatre-inno-setup-le-2026-11-18) ;
+  demandé le 2026-11-18, premier point du bilan). KeePass, WinMerge, PeaZip et GIMP s'arrêtaient sur « Unable to
+  create a temporary file » : `SetEndOfFile` envoie FileAllocationInformation après FileEndOfFileInformation, sans
+  handler. Io : `File::set_allocation_size` (sous la fin, le fichier est coupé ; au-dessus, la place est vérifiée,
+  pas gardée) et `File::attribute_tag_information` (FileAttributeTagInformation, l'étiquette 0), dans
+  NtSetInformationFile et NtQueryInformationFile (`sys::file`) ; `abi::file::FileAttributeTagInformation`. Le
+  chargeur d'Inno attendait ensuite sans fin, après `setup.tmp` : `win32k::queue` gardait le bit de changement de
+  `QS_SENDMESSAGE` après le dernier message envoyé, et `MsgWaitForMultipleObjects(QS_ALLINPUT)` rendait sans
+  attendre ; il tombe maintenant avec son bit de réveil (ClearMsgBitsMask). Les quatre écrivent leur journal et
+  s'arrêtent sur les droits d'administrateur (`CheckTokenMembership` : NtAccessCheck), le chargeur rend 1 en 11 à
+  27 s ; planchers relevés (version d'Inno, installeur d'origine, fin du chargeur ; « Unable to create a temporary
+  file » et l'arrêt par le banc interdits). Tests hôte : `write_tests::set_end_of_file_sets_the_allocation_too`,
+  `queue::tests::the_last_sent_message_taken_clears_its_change_bit`, le NTFS en lecture seule. **Suite** :
+  NtAccessCheck (les quatre Inno, Notepad++), puis la suppression (FileDispositionInformation, classe 0xd : le
+  `setup.tmp` reste dans `C:\WINDOWS\TEMP` ; NSIS en a besoin pour son dossier de plugins).
+
 - **Le banc d'essai des applications du M7** (`claude/m7-test-bench`, M7,
   [`compat/applications.md`](compat/applications.md#le-banc-dessai) ; demandé le 2026-11-17, sur la PR 142).
   `cargo xtask fetch-apps` (`xtask/src/apps.rs` : les dix installeurs épinglés, vérifiés par taille et SHA-256,
