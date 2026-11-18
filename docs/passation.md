@@ -7,8 +7,9 @@
   appelle pour rendre l'activation au propriétaire d'une boîte modale. Scénario `enable-window`
   (`tests/native/enable1.c`, huit étapes, AMD et Intel), qui met aussi à l'épreuve l'EnableWindow de la PR 143.
   **Écarts** : SetActiveWindow prend toujours le premier plan (IsAllowedFGActive) ; `spwndActivePrev` pas gardé.
-  Huit mutations détectées (cinq de SetActiveWindow, trois de l'EnableWindow de la PR 143). À faire : la suite
-  complète (elle ira dans cette entrée).
+  Huit mutations détectées (cinq de SetActiveWindow, trois de l'EnableWindow de la PR 143). Suite complète sur
+  `main` après les PR 144 et 147 (14a5836) : 1202 tests hôte, 158 runs de démarrage, tous passés (`rostests` 44/84,
+  `rostests-kernel32` 16/29, à leurs planchers).
 
 - **Le presse-papiers** (`claude/practical-lumiere-ac5a26`, M6, [`compat/m6-fenetres.md`](compat/m6-fenetres.md),
   étape 45 ; demandé : il est dans la portée du M6 et c'est un préalable au M7 ; l'étape 44 est celle de la
