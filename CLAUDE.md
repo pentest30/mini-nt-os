@@ -485,6 +485,10 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   `QS_SENDMESSAGE` éteint aussi parmi les bits de changement avec le dernier message envoyé (MsgWaitForMultipleObjects
   n'attendait plus). Scénarios `clipboard` (`tests/native/clip1.c`, deux processus) et `notepad-clipboard`
   (`tests/native/npclip1.c` : Ctrl+C puis Ctrl+V dans le Bloc-notes).
+  M6, étape 46 : SetActiveWindow (`input::set_active`, NtUserSetActiveWindow : une fenêtre du thread, pas une
+  fille, active et au premier plan ; NULL : une autre ; la fenêtre d'un autre thread : rien), qu'EndDialog appelle
+  pour le propriétaire d'une boîte modale ; scénario `enable-window` (`tests/native/enable1.c` : EnableWindow et
+  SetActiveWindow comme une boîte modale les fait à son propriétaire).
   M5, la console ([`docs/compat/m5-console.md`](docs/compat/m5-console.md), scénario `console`) : `CONSOLE1.EXE`
   lance par CreateProcessW `THREADS1.EXE` (sous-système CONSOLE, construit par `xtask`) ; NtCreateProcess(Ex) rend le
   PEB dans le TEB du créateur (`NtTib.ArbitraryUserPointer`, comme ReactOS) ; emprunt d'identité

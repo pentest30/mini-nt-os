@@ -9,7 +9,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | Table | Implémentés | Services |
 |---|---:|---:|
 | ntoskrnl | 131 | 296 |
-| win32k | 215 | 737 |
+| win32k | 216 | 737 |
 
 ## ntoskrnl
 
@@ -817,7 +817,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x11f2` | `NtUserScrollWindowEx` | 8 | ✅ |
 | `0x11f3` | `NtUserSelectPalette` | 3 |  |
 | `0x11f4` | `NtUserSendInput` | 3 |  |
-| `0x11f5` | `NtUserSetActiveWindow` | 1 |  |
+| `0x11f5` | `NtUserSetActiveWindow` | 1 | ✅ |
 | `0x11f6` | `NtUserSetAppImeLevel` | 2 |  |
 | `0x11f7` | `NtUserSetCapture` | 1 | ✅ |
 | `0x11f8` | `NtUserSetClassLong` | 4 |  |

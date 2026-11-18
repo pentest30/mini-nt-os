@@ -19,6 +19,16 @@
   2026-11-18 : le Dell démarre normalement depuis la clé. **Suite** : un pilote du pavé tactile (I2C HID) ou de
   l'USB pour avoir un pointeur ; un STOP sur un autre PC se photographie (pas de port série).
 
+- **SetActiveWindow** (`claude/new-session-696xfc`, M6, [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 46 ;
+  demandé après la PR 143). Mes étapes 44 et 45 (ChangeDisplaySettings, EnableWindow, le panneau Affichage)
+  doublaient la PR 143, fusionnée pendant qu'elles étaient en cours : abandonnées. Reste ce que `main` n'avait pas :
+  NtUserSetActiveWindow (`input::set_active`, UserSetActiveWindow ; une dette de l'entrée de la résolution), qu'EndDialog
+  appelle pour rendre l'activation au propriétaire d'une boîte modale. Scénario `enable-window`
+  (`tests/native/enable1.c`, huit étapes, AMD et Intel), qui met aussi à l'épreuve l'EnableWindow de la PR 143.
+  **Écarts** : SetActiveWindow prend toujours le premier plan (IsAllowedFGActive) ; `spwndActivePrev` pas gardé.
+  Huit mutations détectées (cinq de SetActiveWindow, trois de l'EnableWindow de la PR 143). À faire : la suite
+  complète (elle ira dans cette entrée).
+
 - **Le presse-papiers** (`claude/practical-lumiere-ac5a26`, M6, [`compat/m6-fenetres.md`](compat/m6-fenetres.md),
   étape 45 ; demandé : il est dans la portée du M6 et c'est un préalable au M7 ; l'étape 44 est celle de la
   résolution, sur `claude/display-resolution`). `win32k::clipboard` (un presse-papiers par station,

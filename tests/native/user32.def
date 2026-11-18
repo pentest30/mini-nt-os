@@ -110,6 +110,7 @@ InvalidateRgn@12
 IsIconic@4
 IsMenu@4
 IsWindow@4
+IsWindowEnabled@4
 IsWindowVisible@4
 IsZoomed@4
 KillSystemTimer@8
@@ -143,6 +144,7 @@ ScrollWindowEx@32
 SendMessageTimeoutW@28
 SendMessageW@16
 SendNotifyMessageW@16
+SetActiveWindow@4
 SetCapture@4
 SetCaretBlinkTime@4
 SetCaretPos@8
