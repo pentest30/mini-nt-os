@@ -25,9 +25,10 @@
 //! faites), la suppression.
 
 use abi::file::{
-    directory_entry_layout, FILE_APPEND_DATA, FILE_CREATED, FILE_END_OF_FILE_INFORMATION,
-    FILE_ID_BOTH_DIRECTORY_INFORMATION, FILE_ID_FULL_DIRECTORY_INFORMATION, FILE_LIST_DIRECTORY, FILE_READ_DATA,
-    FILE_USE_FILE_POINTER_POSITION, FILE_WRITE_DATA, FILE_WRITE_TO_END_OF_FILE,
+    directory_entry_layout, FileAttributeTagInformation, FILE_ALLOCATION_INFORMATION, FILE_APPEND_DATA,
+    FILE_ATTRIBUTE_TAG_INFORMATION, FILE_CREATED, FILE_END_OF_FILE_INFORMATION, FILE_ID_BOTH_DIRECTORY_INFORMATION,
+    FILE_ID_FULL_DIRECTORY_INFORMATION, FILE_LIST_DIRECTORY, FILE_READ_DATA, FILE_USE_FILE_POINTER_POSITION,
+    FILE_WRITE_DATA, FILE_WRITE_TO_END_OF_FILE,
 };
 use abi::file::{
     FileBasicInformation, FileEaInformation, FileFsAttributeInformation, FileFsDeviceInformation,
@@ -223,7 +224,8 @@ pub(super) fn nt_query_full_attributes_file(arguments: &[u32]) -> NtStatus {
 /// Length, FileInformationClass) : FileBasic (`FILE_READ_ATTRIBUTES`),
 /// FileStandard, FileEa (0 : ni la FAT ni NPFS n'ont d'attributs étendus),
 /// FileName (le chemin depuis la racine du volume),
-/// FilePosition ou FileNetworkOpenInformation (`FILE_READ_ATTRIBUTES`) ;
+/// FilePosition, FileNetworkOpenInformation ou FileAttributeTagInformation
+/// (`FILE_READ_ATTRIBUTES` ; l'étiquette 0, sans point d'analyse) ;
 /// sur un tube, FileName (`\nom`), FilePipe et FilePipeLocalInformation
 /// (`FILE_READ_ATTRIBUTES`, [`super::pipe::query_information`]).
 /// `STATUS_INFO_LENGTH_MISMATCH` sous la taille de la classe ; un nom
@@ -266,6 +268,7 @@ fn query_information_file(arguments: &[u32]) -> Result<NtStatus, NtStatus> {
         FILE_NAME_INFORMATION => (size_of::<FileNameInformation>(), 0),
         FILE_POSITION_INFORMATION => (size_of::<FilePositionInformation>(), 0),
         FILE_NETWORK_OPEN_INFORMATION => (size_of::<FileNetworkOpenInformation>(), FILE_READ_ATTRIBUTES),
+        FILE_ATTRIBUTE_TAG_INFORMATION => (size_of::<FileAttributeTagInformation>(), FILE_READ_ATTRIBUTES),
         FILE_PIPE_INFORMATION => (size_of::<FilePipeInformation>(), FILE_READ_ATTRIBUTES),
         FILE_PIPE_LOCAL_INFORMATION => (size_of::<FilePipeLocalInformation>(), FILE_READ_ATTRIBUTES),
         // NT rend INVALID_INFO_CLASS pour une classe qu'il ne connaît pas
@@ -311,6 +314,7 @@ fn query_information_file(arguments: &[u32]) -> Result<NtStatus, NtStatus> {
         FILE_POSITION_INFORMATION => {
             (FilePositionInformation { current_byte_offset: file.position() }.to_bytes().into(), STATUS_SUCCESS)
         }
+        FILE_ATTRIBUTE_TAG_INFORMATION => (file.attribute_tag_information()?.to_bytes().into(), STATUS_SUCCESS),
         _ => (file.network_open_information()?.to_bytes().into(), STATUS_SUCCESS),
     };
     give_information(&information, status, iosb, buffer)
@@ -681,9 +685,10 @@ static SET_CLASSES: super::ClassReport = super::ClassReport::new("NtSetInformati
 /// NtSetInformationFile(FileHandle, IoStatusBlock, FileInformation, Length,
 /// FileInformationClass) : FileBasicInformation (les dates et les attributs,
 /// `FILE_WRITE_ATTRIBUTES` ; 0 laisse un champ comme il est),
-/// FilePositionInformation (la position) et FileEndOfFileInformation (la
-/// taille, `FILE_WRITE_DATA`) ; FilePipeInformation d'un tube (ses modes,
-/// `FILE_WRITE_ATTRIBUTES`).
+/// FilePositionInformation (la position), FileEndOfFileInformation (la
+/// taille, `FILE_WRITE_DATA`) et FileAllocationInformation (la place
+/// réservée, `FILE_WRITE_DATA` : `io_manager::File::set_allocation_size`) ;
+/// FilePipeInformation d'un tube (ses modes, `FILE_WRITE_ATTRIBUTES`).
 pub(super) fn nt_set_information_file(arguments: &[u32]) -> NtStatus {
     status(set_information_file(arguments))
 }
@@ -696,7 +701,7 @@ fn set_information_file(arguments: &[u32]) -> Result<(), NtStatus> {
     let (size, access) = match class {
         FILE_BASIC_INFORMATION => (size_of::<FileBasicInformation>(), FILE_WRITE_ATTRIBUTES),
         FILE_POSITION_INFORMATION => (size_of::<FilePositionInformation>(), 0),
-        FILE_END_OF_FILE_INFORMATION => (8, FILE_WRITE_DATA),
+        FILE_END_OF_FILE_INFORMATION | FILE_ALLOCATION_INFORMATION => (8, FILE_WRITE_DATA),
         FILE_PIPE_INFORMATION => (size_of::<FilePipeInformation>(), FILE_WRITE_ATTRIBUTES),
         _ => return Err(SET_CLASSES.report(class)),
     };
@@ -731,6 +736,7 @@ fn set_information_file(arguments: &[u32]) -> Result<(), NtStatus> {
             file.set_basic_information(&FileBasicInformation::from_bytes(&bytes))?;
         }
         FILE_POSITION_INFORMATION => file.set_position(UserPtr::<u64>::new(buffer).read()?),
+        FILE_ALLOCATION_INFORMATION => file.set_allocation_size(UserPtr::<u64>::new(buffer).read()?)?,
         _ => {
             let value = UserPtr::<u64>::new(buffer).read()?;
             if file.is_directory() {

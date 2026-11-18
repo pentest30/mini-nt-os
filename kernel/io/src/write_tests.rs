@@ -789,3 +789,54 @@ fn a_volume_creates_a_mixed_case_name_in_its_case() {
         None => std::eprintln!("fsck.vfat not found: the volume is not checked (dosfstools)"),
     }
 }
+
+#[test]
+fn set_end_of_file_sets_the_allocation_too() {
+    // SetEndOfFile of kernel32 sends FileEndOfFileInformation, then
+    // FileAllocationInformation at the same value: Inno Setup gives its
+    // extracted setup.tmp its size so, and stopped on "Unable to create a
+    // temporary file" while the second was not implemented.
+    use crate::File;
+    use abi::file::{FILE_ATTRIBUTE_ARCHIVE, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_READONLY};
+    use abi::ntstatus::{STATUS_DISK_FULL, STATUS_INVALID_PARAMETER};
+
+    let (volume, _disk) = mounted(64);
+    let root = File::open(&volume, "\\").unwrap();
+    let file = root.create_child("SETUP.TMP", false, 0).unwrap();
+    file.write(0, &[7u8; 1000]).unwrap();
+    file.set_size(3000).unwrap();
+    file.set_allocation_size(3000).unwrap();
+    let standard = file.standard_information().unwrap();
+    assert_eq!((standard.end_of_file, standard.allocation_size), (3000, 3072), "the end of file kept");
+    let free = volume.space().unwrap().free_clusters;
+
+    // Above the end of file: the size stays, the volume must hold it.
+    file.set_allocation_size(3000 + 512 * free).unwrap();
+    assert_eq!(file.node().unwrap().size, 3000, "a reservation does not move the end of file");
+    assert_eq!(file.set_allocation_size(3072 + 512 * free + 1).err(), Some(STATUS_DISK_FULL), "a cluster too many");
+    assert_eq!(file.set_allocation_size(u64::from(u32::MAX) + 1).err(), Some(STATUS_DISK_FULL), "past FAT's 4 GiB");
+    assert_eq!(file.node().unwrap().size, 3000, "a refused reservation changes nothing");
+    assert_eq!(volume.space().unwrap().free_clusters, free, "no cluster taken");
+
+    // Below it: the file is cut there, and gives its clusters back.
+    file.set_allocation_size(600).unwrap();
+    let standard = file.standard_information().unwrap();
+    assert_eq!((standard.end_of_file, standard.allocation_size), (600, 1024));
+    assert_eq!(file.read_all().unwrap(), vec![7u8; 600]);
+    assert_eq!(volume.space().unwrap().free_clusters, free + 4);
+    file.set_allocation_size(0).unwrap();
+    assert_eq!(file.node().unwrap().size, 0);
+    assert_eq!(root.set_allocation_size(0).err(), Some(STATUS_INVALID_PARAMETER), "a directory");
+
+    // FileAttributeTagInformation (DeleteFileW asks it): the attributes,
+    // without a reparse point.
+    let tag = file.attribute_tag_information().unwrap();
+    assert_eq!((tag.file_attributes, tag.reparse_tag), (FILE_ATTRIBUTE_ARCHIVE, 0));
+    let locked = root.create_child("LOCKED.TXT", false, FILE_ATTRIBUTE_READONLY).unwrap();
+    assert_eq!(
+        locked.attribute_tag_information().unwrap().file_attributes & FILE_ATTRIBUTE_READONLY,
+        FILE_ATTRIBUTE_READONLY
+    );
+    let dir = root.create_child("is-1234.tmp", true, 0).unwrap();
+    assert_eq!(dir.attribute_tag_information().unwrap().file_attributes, FILE_ATTRIBUTE_DIRECTORY);
+}

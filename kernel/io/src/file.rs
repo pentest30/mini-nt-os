@@ -35,17 +35,17 @@ use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use abi::file::DirectoryEntry;
 use abi::file::{
-    FileBasicInformation, FileNetworkOpenInformation, FileStandardInformation, FILE_ALL_ACCESS, FILE_APPEND_DATA,
-    FILE_ATTRIBUTE_READONLY, FILE_CREATE, FILE_DIRECTORY_FILE, FILE_GENERIC_EXECUTE, FILE_GENERIC_READ,
-    FILE_GENERIC_WRITE, FILE_MAXIMUM_DISPOSITION, FILE_NON_DIRECTORY_FILE, FILE_OPEN, FILE_OPENED, FILE_OPEN_IF,
-    FILE_OVERWRITE, FILE_OVERWRITE_IF, FILE_OVERWRITTEN, FILE_SUPERSEDE, FILE_SUPERSEDED, FILE_SYNCHRONOUS_IO_ALERT,
-    FILE_SYNCHRONOUS_IO_NONALERT, FILE_WRITE_DATA,
+    FileAttributeTagInformation, FileBasicInformation, FileNetworkOpenInformation, FileStandardInformation,
+    FILE_ALL_ACCESS, FILE_APPEND_DATA, FILE_ATTRIBUTE_READONLY, FILE_CREATE, FILE_DIRECTORY_FILE, FILE_GENERIC_EXECUTE,
+    FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_MAXIMUM_DISPOSITION, FILE_NON_DIRECTORY_FILE, FILE_OPEN, FILE_OPENED,
+    FILE_OPEN_IF, FILE_OVERWRITE, FILE_OVERWRITE_IF, FILE_OVERWRITTEN, FILE_SUPERSEDE, FILE_SUPERSEDED,
+    FILE_SYNCHRONOUS_IO_ALERT, FILE_SYNCHRONOUS_IO_NONALERT, FILE_WRITE_DATA,
 };
 use abi::ntstatus::{
-    NtStatus, STATUS_ACCESS_DENIED, STATUS_BUFFER_OVERFLOW, STATUS_FILE_CORRUPT_ERROR, STATUS_FILE_IS_A_DIRECTORY,
-    STATUS_INVALID_DEVICE_REQUEST, STATUS_INVALID_PARAMETER, STATUS_NOT_A_DIRECTORY, STATUS_NO_MORE_FILES,
-    STATUS_NO_SUCH_FILE, STATUS_OBJECT_NAME_COLLISION, STATUS_OBJECT_NAME_INVALID, STATUS_OBJECT_TYPE_MISMATCH,
-    STATUS_SUCCESS,
+    NtStatus, STATUS_ACCESS_DENIED, STATUS_BUFFER_OVERFLOW, STATUS_DISK_FULL, STATUS_FILE_CORRUPT_ERROR,
+    STATUS_FILE_IS_A_DIRECTORY, STATUS_INVALID_DEVICE_REQUEST, STATUS_INVALID_PARAMETER, STATUS_MEDIA_WRITE_PROTECTED,
+    STATUS_NOT_A_DIRECTORY, STATUS_NO_MORE_FILES, STATUS_NO_SUCH_FILE, STATUS_OBJECT_NAME_COLLISION,
+    STATUS_OBJECT_NAME_INVALID, STATUS_OBJECT_TYPE_MISMATCH, STATUS_SUCCESS,
 };
 use hal::sync::KSpinLock;
 use ob::{create_object, downcast, AccessMask, GenericMapping, Object, ObjectRef, ObjectType, Parsed};
@@ -286,6 +286,13 @@ impl File {
         })
     }
 
+    /// FILE_ATTRIBUTE_TAG_INFORMATION : ses attributs, et l'étiquette 0 :
+    /// ni la FAT ni le NTFS en lecture d'Io n'ont de point d'analyse
+    /// (FILE_ATTRIBUTE_REPARSE_POINT n'est jamais dans les attributs).
+    pub fn attribute_tag_information(&self) -> Result<FileAttributeTagInformation, NtStatus> {
+        Ok(FileAttributeTagInformation { file_attributes: self.node()?.attributes, reparse_tag: 0 })
+    }
+
     /// FILE_NETWORK_OPEN_INFORMATION.
     pub fn network_open_information(&self) -> Result<FileNetworkOpenInformation, NtStatus> {
         let node = self.node()?;
@@ -464,6 +471,47 @@ impl File {
     /// PASSIVE_LEVEL for filesystem I/O; may allocate and perform device reads.
     pub fn set_size(&self, size: u32) -> Result<(), NtStatus> {
         self.volume.set_size(&self.opened, size).map(|_| ())
+    }
+
+    /// Change la place réservée au fichier (NtSetInformationFile,
+    /// FileAllocationInformation ; `SetEndOfFile` la demande après la fin
+    /// du fichier, à la même valeur). Sous la fin du fichier, le fichier est
+    /// coupé là ; au-dessus, la taille ne change pas, et le volume doit
+    /// avoir les clusters qui manquent (`STATUS_DISK_FULL` sinon, et au-delà
+    /// de 4 Gio, que la FAT ne tient pas).
+    ///
+    /// Une réservation au-delà de la fin du fichier n'est pas gardée : la
+    /// place que le fichier occupe reste sa taille au cluster supérieur
+    /// (FileStandardInformation), et une écriture plus loin cherche ses
+    /// clusters à ce moment-là.
+    ///
+    /// Erreurs : `STATUS_INVALID_PARAMETER` pour un répertoire,
+    /// `STATUS_MEDIA_WRITE_PROTECTED` sur un volume en lecture seule ; celles
+    /// de `Volume::set_size`.
+    ///
+    /// # IRQL
+    /// PASSIVE_LEVEL for filesystem I/O; may allocate and perform device reads.
+    pub fn set_allocation_size(&self, allocation: u64) -> Result<(), NtStatus> {
+        if self.opened.directory {
+            return Err(STATUS_INVALID_PARAMETER);
+        }
+        if self.volume.is_read_only() {
+            return Err(STATUS_MEDIA_WRITE_PROTECTED);
+        }
+        let node = self.node()?;
+        if allocation < node.size {
+            // Below the end of file: the file is cut there.
+            return self.set_size(u32::try_from(allocation).map_err(|_| STATUS_FILE_CORRUPT_ERROR)?);
+        }
+        if allocation > u64::from(u32::MAX) {
+            return Err(STATUS_DISK_FULL);
+        }
+        let cluster = u64::from(self.volume.cluster_bytes());
+        let missing = allocation.div_ceil(cluster).saturating_sub(node.size.div_ceil(cluster));
+        if missing > 0 && missing > self.volume.space()?.free_clusters {
+            return Err(STATUS_DISK_FULL);
+        }
+        Ok(())
     }
 }
 

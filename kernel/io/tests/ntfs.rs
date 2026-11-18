@@ -110,6 +110,8 @@ fn real_ntfs_partition_uses_file_api_and_never_writes() {
     assert!(matches!(root.open_relative("missing"), Err(STATUS_OBJECT_NAME_NOT_FOUND)));
     assert_eq!(file.write(0, b"changed"), Err(STATUS_MEDIA_WRITE_PROTECTED));
     assert_eq!(file.set_size(0), Err(STATUS_MEDIA_WRITE_PROTECTED));
+    assert_eq!(file.set_allocation_size(4096), Err(STATUS_MEDIA_WRITE_PROTECTED));
+    assert_eq!(file.attribute_tag_information().unwrap().reparse_tag, 0);
     assert_eq!(file.set_basic_information(&FileBasicInformation::default()), Err(STATUS_MEDIA_WRITE_PROTECTED));
     assert!(matches!(root.create_child("new.txt", false, 0), Err(STATUS_MEDIA_WRITE_PROTECTED)));
     for access in [FILE_WRITE_DATA, FILE_APPEND_DATA, FILE_WRITE_ATTRIBUTES, FILE_WRITE_EA, AccessMask::DELETE.0] {
