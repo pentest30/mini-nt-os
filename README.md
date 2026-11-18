@@ -2,7 +2,7 @@
 # Mino (mini-nt-os)
 **Mino is an open-source operating system with an NT kernel written in Rust, using the ReactOS 0.4.16 user space.**
 
-The system boots into an ReactOs desktop (taskbar, Start menu, file explorer, Control Panel), where users can run 32-bit applications and games from the Windows XP era (2001–2008) without modifying them.
+The system boots into a ReactOs desktop (taskbar, Start menu, file explorer, Control Panel), where users can run 32-bit applications and games from the Windows XP era (2001–2008) without modifying them.
 
 - **Written in Rust**: All privileged code (NT kernel, Win32 kernel subsystem, drivers).
 - **Reused components**: ReactOS user-mode components (`ntdll`, `kernel32`, `user32`, `csrss`, `explorer`, etc.), using version-pinned binaries.
