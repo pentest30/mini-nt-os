@@ -180,6 +180,11 @@ ValidateRect@8
 ValidateRgn@8
 WaitMessage@0
 CallWindowProcW@20
+ChangeDisplaySettingsW@8
+ChangeDisplaySettingsExW@20
+EnumDisplayDevicesW@16
+EnumDisplaySettingsW@12
+EnumDisplaySettingsExW@16
 GetPropW@8
 RemovePropW@8
 SetPropW@12

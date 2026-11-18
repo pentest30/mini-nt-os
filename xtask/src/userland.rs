@@ -129,6 +129,12 @@ fn files_with(ws: &Workspace, windows_files: &[&str]) -> Option<Vec<(PathBuf, St
         // Loaded by name by kernel32 to check a DNS host name
         // (SetComputerNameExW: BaseVerifyDnsName, DnsValidateName_W).
         "dnsapi.dll",
+        // The Display panel (M6): `rundll32 shell32.dll,Control_RunDLL
+        // desk.cpl`, which `control desk.cpl` starts; shell32 loads the
+        // applet by name.
+        "control.exe",
+        "rundll32.exe",
+        "desk.cpl",
     ]
     .into_iter()
     .map(String::from)
@@ -224,7 +230,7 @@ pub fn import_closure(
     files: &[String],
     imports_of: impl Fn(&str) -> Option<Vec<String>>,
 ) -> (Vec<String>, Vec<String>) {
-    let is_image = |file: &str| file.ends_with(".exe") || file.ends_with(".dll");
+    let is_image = |file: &str| file.ends_with(".exe") || file.ends_with(".dll") || file.ends_with(".cpl");
     let mut known: std::collections::BTreeSet<String> = files.iter().map(|file| file.to_ascii_lowercase()).collect();
     let mut pending: Vec<String> = files.iter().filter(|file| is_image(file)).cloned().collect();
     let (mut added, mut missing) = (Vec::new(), Vec::new());

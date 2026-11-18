@@ -107,6 +107,17 @@ pub fn cursor_or_center() -> (i32, i32) {
     })
 }
 
+/// L'écran est passé à `width` × `height` (un changement de mode) : le
+/// pointeur, s'il a bougé, reste dessus, borné comme par un mouvement.
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn clamp_to_screen(width: u32, height: u32) {
+    if let Some(state) = STATE.lock().as_mut() {
+        (state.x, state.y) = moved((state.x, state.y), 0, 0, width, height);
+    }
+}
+
 /// La place du curseur après un mouvement de `dx`, `dy`, bornée à l'écran de
 /// `width` × `height`.
 pub fn moved((x, y): (i32, i32), dx: i32, dy: i32, width: u32, height: u32) -> (i32, i32) {

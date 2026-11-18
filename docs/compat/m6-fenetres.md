@@ -2073,3 +2073,90 @@ traités par PeekMessage et GetMessage ; le thread désactivé qui garde sa fen�
 l'activation ; la désactivation dépassée gardée ; l'activation dépassée gardée ; pas de WM_NCACTIVATE à une fenêtre
 déjà active ; pas de WM_KILLFOCUS au thread désactivé (le scénario) ; Ctrl, Alt et Maj pas relâchées (le test hôte
 seul).
+
+## Étape 44 : le changement de résolution (le pilote `bochs-dispi`, ChangeDisplaySettings, le panneau Affichage)
+
+Le troisième critère du M6 : « La résolution se change depuis le panneau Affichage (QEMU) ». `gopfb` affichait sur
+le framebuffer UEFI, fixe ; un auto-test du noyau (`test-resolution`) changeait déjà le mode par Bochs DISPI, sans
+que USER le sache. `user32` appelle NtUserEnumDisplayDevices, NtUserEnumDisplaySettings (qui rendait 1 ou 0, deux
+succès pour `NT_SUCCESS`, et écrivait la largeur à l'octet 164 du `DEVMODEW` au lieu de 172) et
+NtUserChangeDisplaySettings, absent.
+
+`win32ss/user/ntuser/display.c` (UserEnumDisplayDevices, UserEnumDisplaySettings, UserChangeDisplaySettings,
+RegWriteDisplaySettings, RegReadDisplaySettings), `win32ss/gdi/eng/ldevobj.c` (LDEVOBJ_bProbeAndCaptureDevmode),
+`pdevobj.c` (PDEVOBJ_bSwitchMode), `user32/misc/display.c`, `dll/cpl/desk/settings.c`, ReactOS comme
+spécification ; `drivers/video/bochs-dispi`, `hal::bochs`, `hal::pci`, `abi::display`, `win32k::display`,
+`win32k::display_settings`, `ntoskrnl::sys::display`.
+
+| Partie | Ce que fait Mino |
+|---|---|
+| Le pilote (`drivers/video/bochs-dispi`) | le VGA standard de QEMU (PCI 1234:1111) ou le VBoxVGA de VirtualBox (80EE:BEEF), à l'interface Bochs DISPI (`hal::bochs` : ports 0x1CE/0x1CF) ; son framebuffer, la barre 0 (`hal::pci::memory_bar`, 32 ou 64 bits) vue par la projection directe, sous 4 Gio ; sa mémoire vidéo (registre 0xA, 16 Mio sous QEMU ; VirtualBox ne la dit pas : seuls les modes qui tiennent où celui du micrologiciel tient) et ses limites (GETCAPS, lues sans changer de mode). Il part du mode du micrologiciel (1280×800 sous OVMF) ; ses modes sont 19 résolutions courantes de 640×480 à 2560×1600 (largeurs multiples de 8, que DISPI exige) qui tiennent, plus celle du départ (`mode_list`), toutes à 32 bits. Le noyau le préfère à `gopfb`, redevenu fixe ; la console de démarrage suit le nouveau mode pour l'écran STOP (`hal::fb::set_geometry`) |
+| Le trait du pilote (`win32k::display`) | `modes`, `description`, `hardware_id` ; `change_mode` retire le curseur logiciel, change le mode, le remet à sa place gardée dans l'écran |
+| Le périphérique (`display_settings::adapter`, `monitor`) | `\\.\DISPLAY1`, attaché au bureau, principal, compatible VGA (0x15), la description et l'identifiant du pilote, sa clé du registre ; son moniteur `\\.\DISPLAY1\Monitor0` (« Default Monitor », actif et attaché) ; rien après. Le nom se compare sans casse |
+| NtUserEnumDisplayDevices (`sys::display`) | BOOL ; sans nom, l'adaptateur `iDevNum` ; avec le nom de l'adaptateur, son moniteur ; le `DISPLAY_DEVICEW` reçoit au plus son `cb` (840 au plus) |
+| NtUserEnumDisplaySettings | NTSTATUS ; `dmSize` doit être 220 (`STATUS_BUFFER_TOO_SMALL`) ; le mode `iModeNum` du pilote (`STATUS_INVALID_PARAMETER_2` au-delà), ENUM_CURRENT_SETTINGS, ENUM_REGISTRY_SETTINGS ; un autre périphérique : `STATUS_INVALID_PARAMETER_1`. Un mode : 32 bits, 60 Hz, `DM_BITSPERPEL`, `DM_PELSWIDTH`, `DM_PELSHEIGHT`, `DM_DISPLAYFLAGS`, `DM_DISPLAYFREQUENCY` |
+| NtUserChangeDisplaySettings | LONG ; les drapeaux d'abord (`lParam` sans CDS_VIDEOPARAMETERS : BADPARAM ; CDS_GLOBAL ou CDS_NORESET sans CDS_UPDATEREGISTRY, CDS_RESET avec CDS_NORESET : BADFLAGS) ; un autre périphérique : BADPARAM ; sans `DEVMODE`, celui du registre ; un `DEVMODE` plus court que `dmFields` : BADMODE ; le mode cherché parmi ceux du pilote (`find_mode` : largeur et hauteur exigées, une profondeur ou une fréquence donnée doit être 32 bits ou 60 Hz) ; CDS_TEST s'arrête là ; CDS_UPDATEREGISTRY écrit le registre (NOTUPDATED s'il ne s'écrit pas) ; le mode en vigueur n'est pas repris sans CDS_RESET ; CDS_NORESET ne change rien d'autre |
+| Après le changement (`display_settings::switch`, `apply`) | même quand le pilote échoue après avoir changé quelque chose : les métriques du système réécrites dans le `SERVERINFO` (`metrics::write_screen`, InitMetrics), le moniteur et sa zone de travail (`monitor::attach`, UserUpdateMonitorSize), les capacités de l'écran que lit `gdi32` (`devcaps::publish`), le pointeur gardé sur l'écran (`mouse::clamp_to_screen`), la fenêtre de chaque bureau de la station interactive à la taille de l'écran (`window::resize_desktop_window`), les DC du cache et ceux que des clients ont ouverts sur tout l'écran ; puis WM_DISPLAYCHANGE (32, MAKELONG(largeur, hauteur)) aux fenêtres de premier niveau du bureau de l'appelant, 100 ms au plus chacune (SendMessageTimeout, SMTO_NORMAL), et tout se repeint (UserRedrawDesktop : la fenêtre du bureau et ses filles invalidées, le fond du bureau peint aussitôt). Échec : DISP_CHANGE_RESTART si le registre a été écrit, DISP_CHANGE_FAILED sinon |
+| Le registre (`sys::display`) | RegWriteDisplaySettings : onze DWORD (`DefaultSettings.BitsPerPel`, `XResolution`, `YResolution`, `VRefresh`, le reste à zéro) dans `\Registry\Machine\System\CurrentControlSet\Control\Video\{4D494E4F-0000-0000-0000-000000000001}\0000`, la ruche réécrite dans son fichier ; `HARDWARE\DEVICEMAP\VIDEO` y renvoie (`\Device\Video0`, comme VIDEOPRT). Au démarrage, avant que win32k ne dessine, l'écran prend le mode que garde le registre s'il est un mode du pilote (EngpCreatePDEV) |
+| Le panneau (`desk.cpl` et `rundll32.exe` sur le disque des scénarios, `.cpl` suivi par la fermeture des imports) | `rundll32 shell32.dll,Control_RunDLL desk.cpl,,3` ouvre « Properties for Display » sur Settings ; il manquait EnableWindow (NtUserCallTwoParam 0x60, co_IntEnableWindow : WM_CANCELMODE et le clavier perdu avant la désactivation, WM_ENABLE si l'état change, rend s'il était désactivé) et NtGdiTransparentBlt (l'aperçu du moniteur, le magenta transparent : `gdi::bitblt::transparent_blt`) |
+
+Écarts voulus avec ReactOS : la fenêtre de chaque bureau de la station interactive est remise à la taille de l'écran
+directement, pas par le WM_DISPLAYCHANGE de la seule fenêtre du bureau de l'appelant (les bureaux partagent
+l'écran) ; une fenêtre dont le thread ne répond pas à WM_DISPLAYCHANGE en 100 ms le reçoit plus tard, sans attente
+(SendNotifyMessage), comme Windows livre le message d'un SendMessageTimeout dépassé, là où ReactOS le retire ; une profondeur autre que 32 bits est refusée (le moteur DIB écrit l'écran en 32 bits) ; le registre est
+réécrit dans son fichier aussitôt.
+
+`explorer` suit le changement de lui-même : à WM_DISPLAYCHANGE, sa barre des tâches se replace au bas du nouvel écran
+et son bureau se repeint. Vu en chemin, corrigé : le fond du bureau (DesktopWindowProc, `window::paint_desktop`) se
+peignait sur tout le rectangle à peindre, par-dessus les fenêtres ; si le thread d'`explorer` avait déjà repeint sa
+barre replacée, elle disparaissait (son horloge revenait seule, à la minute suivante) : `display-desktop` l'a vu deux
+fois sur dix runs. Il se peint maintenant dans sa région visible sans ses filles (WS_CLIPCHILDREN, comme le DC de
+BeginPaint chez ReactOS) ; six runs de suite passent depuis, trois sur AMD, trois sur Intel.
+
+EnableWindow change aussi le Gestionnaire des tâches (scénario `desktop-launch`) : End Task et Switch To, créés
+désactivés, sont activés quand une tâche est sélectionnée, comme chez XP et ReactOS ; la liste, qui a le clavier,
+dessine l'icône sélectionnée mêlée à moitié à COLOR_HIGHLIGHT. Le texte désactivé (DrawState) reste vérifié par le
+scénario `dialog`.
+
+Pas encore : plusieurs écrans, le panoramique (`dmPanningWidth`), CDS_FULLSCREEN et le retour au mode du registre à
+la fin du processus (UserDisplayNotifyShutdown), ClipCursor ; les attributs chez le client d'un DC de tout l'écran
+gardent l'ancien `VisRectRegion` jusqu'à ce qu'il soit repris. Vu dans le panneau, pas fait : NtGdiPolyPolyDraw, NtGdiSetLayout,
+NtUserSetParent, SPI_GETKEYBOARDCUES (0x100A), NtUserSetThreadState, NtUserSetActiveWindow,
+NtUserUnregisterClass ; « Advanced… » (les pages de propriétés du pilote) n'est pas essayé.
+
+Vu en chemin : MsgWaitForMultipleObjects d'un thread qui a reçu un message envoyé rend aussitôt « entrée », sans
+fin (3,8 millions de tours en 180 s, même avec le seul QS_SENDMESSAGE) : l'événement de la file reste signalé
+(piste, à vérifier : les bits « changés », que co_IntPeekMessage efface à chaque PeekMessage, et
+co_MsqDispatchOneSentMessage pour QS_SENDMESSAGE). La sonde du panneau tournait ainsi et affamait `rundll32`
+(le panneau mettait plus d'une minute à paraître) ; elle attend maintenant par WaitForSingleObject, sa fenêtre dans
+un second thread. Une tâche de diagnostic est dans la passation.
+
+Les bancs d'essai : `tests/native/display1.c` (`DISPLAY1.EXE`, scénario `display-mode`, à la place de
+`winlogon.exe`) : l'adaptateur et son moniteur ; le mode en vigueur, les 19 modes triés, rien dans le registre ;
+CDS_TEST (0), 1000×700 et 16 bits (−2), CDS_NORESET seul (−4), un autre périphérique (−5) sans rien changer ni
+WM_DISPLAYCHANGE ; QEMU pousse la souris au coin (1279, 799) ; ChangeDisplaySettings 800×600 avec
+CDS_UPDATEREGISTRY : WM_DISPLAYCHANGE une fois à la fenêtre du programme et une fois à celle de son second thread,
+pendant l'appel ; les métriques, le mode, le moniteur, la fenêtre du bureau, GetDeviceCaps, le pointeur (799, 599) ;
+le mode du registre, que ChangeDisplaySettings(NULL) reprend sans rien changer ; la capture : 800×600
+(`screen-size`, nouveau dans `xtask`), la fenêtre verte au coin, le fond du bureau repeint (la mémoire vidéo est
+effacée au changement). `tests/native/display2.c` (`DISPLAY2.EXE`, scénario `display-panel`) : le panneau ouvert sur
+Settings et peint, QEMU tape Alt+S (le curseur « Screen area »), Origine (640×480) et Entrée (OK : la page applique
+par ChangeDisplaySettingsEx(CDS_UPDATEREGISTRY)), puis Alt+Y dans « Display Settings » (garder) ; le panneau finit ;
+le mode, les métriques et le registre sont à 640×480, la fenêtre de la sonde a entendu WM_DISPLAYCHANGE de
+640×480 ; la capture : 640×480, la fenêtre verte au coin. Le critère lui-même, depuis le bureau de ReactOS
+(scénario `display-desktop`, `shell = explorer`, deux démarrages comme `logon`) : la session ouverte, Win+R et
+« control desk.cpl,,3 » (`control.exe` sur le disque, qui passe l'applet à `rundll32`) ; les mêmes touches dans le
+panneau ; le panneau fini, l'écran reste à 640×480 (revenir à 1280×800 est interdit) ; la capture : 640×480, la
+barre des tâches d'`explorer` au nouveau bas (son bord blanc en y = 453), le bureau repeint au-dessus.
+
+Tests : hôte (`abi::display` : le `DEVMODEW` relu de ses octets, les textes bornés ; `bochs-dispi` : les modes dans
+les limites et la mémoire, celui du départ à sa place ; `hal::pci` : les barres de mémoire ; `display_settings` : le
+nom du périphérique, le mode cherché, un mode en `DEVMODEW` ; `sys::display` : les valeurs du registre ;
+`bitblt` : la couleur transparente ; `xtask` : `screen-size`) ; `display-mode` et `display-panel` sur AMD et Intel.
+Quatorze mutations font échouer `display-mode` chacune : les métriques, le moniteur, les capacités de l'écran non
+mis à jour, le pointeur non borné, les fenêtres des bureaux non redimensionnées, aucun WM_DISPLAYCHANGE,
+WM_DISPLAYCHANGE au seul thread appelant, le bureau non repeint (l'écran noir à la capture), toute profondeur
+acceptée, CDS_NORESET seul accepté, CDS_TEST qui change le mode, le registre non écrit, aucun moniteur énuméré, le
+pilote qui garde son mode. Quatre font échouer `display-panel` : sans EnableWindow, sans TransparentBlt, le
+registre non écrit, le pilote qui garde son mode. Deux font échouer `display-desktop` : sans WM_DISPLAYCHANGE (la
+barre des tâches reste en bas de l'ancien écran, hors du nouveau), le pilote qui garde son mode.

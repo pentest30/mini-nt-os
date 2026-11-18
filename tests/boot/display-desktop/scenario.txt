@@ -1,0 +1,48 @@
+# The display settings (M6), from ReactOS's desktop: winlogon opens the
+# session, userinit starts explorer (see the `logon` scenario); on its
+# desktop, Win+R opens Run, and "control desk.cpl,,3" starts the Display
+# panel on its Settings page (control.exe hands it to rundll32 shell32.dll,
+# Control_RunDLL). QEMU then types Alt+S (the "Screen area" slider), Home (its
+# smallest resolution, 640x480) and Enter (OK: ChangeDisplaySettingsEx with
+# CDS_UPDATEREGISTRY), then Alt+Y in "Display Settings" (keep them). The
+# panel ends; the screen stays 640x480 (a missed Alt+Y would go back to
+# 1280x800 after 15 s, which is forbidden).
+#
+# The screen then, 640x480: explorer moved its taskbar to the bottom of the
+# new screen on WM_DISPLAYCHANGE (its white top edge at y = 453, its face
+# below, the Start button's light edge), and the desktop repainted above it
+# (the change cleared the video memory: black otherwise).
+#
+# The panel's process is rundll32.exe, named in lower case after the path
+# ShellExecute gave. `interactive`: the probe waits for smss for good (the
+# reboot ends the first boot).
+features = test-smss, interactive
+requires = userland, native
+shell = explorer
+disk = system
+boots = 2
+cpus = default, intel
+timeout = 480
+
+expect = of explorer.exe
+expect = Documents and Settings\Administrator\Desktop\*.*
+keys = Documents and Settings\Administrator\Desktop\*.* => pause:15000 meta_l-r pause:6000 "control desk.cpl,,3" ret
+expect = of control.exe
+expect = of rundll32.exe
+keys = of rundll32.exe => pause:25000 alt-s home ret
+expect = win32k: display mode changed to 640x480
+keys = win32k: display mode changed to 640x480 => pause:4000 alt-y
+expect = (rundll32.exe) ended
+screen-size = 640 480
+screen = 320 451 5A7EDC
+screen = 320 453 FFFFFF
+screen = 320 470 D4D0C8
+screen = 2 456 FFFFFF
+screen = 600 300 5A7EDC
+screen = 0 0 5A7EDC
+screen-wait = 30
+
+forbid = *** STOP:
+forbid = win32k: display mode changed to 1280x800
+forbid = of explorer.exe (NtStatus
+forbid = sys: NtUserChangeDisplaySettings (0x1145) is not implemented
