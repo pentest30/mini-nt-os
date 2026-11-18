@@ -15,8 +15,9 @@
   firmware (registres en MSR, `x2apic_msr`) et un PIT arrêté par le chipset (les fréquences du cristal de CPUID
   0x15, `crystal_rates`, avec un avertissement) ; LINT0 en ExtINT et LINT1 en NMI sont programmés (le 8259 du clavier
   passe par LINT0). Sur ce Dell : clavier interne en PS/2 (il doit marcher), pavé tactile Goodix en I2C et souris
-  USB sans pilote (pas de pointeur), NVMe sans pilote (Mino tourne en mémoire, depuis la clé). **Suite** : l'essai
-  sur le Dell ; un STOP ou un arrêt plus loin se photographie (pas de port série).
+  USB sans pilote (pas de pointeur), NVMe sans pilote (Mino tourne en mémoire, depuis la clé). Essayé le
+  2026-11-18 : le Dell démarre normalement depuis la clé. **Suite** : un pilote du pavé tactile (I2C HID) ou de
+  l'USB pour avoir un pointeur ; un STOP sur un autre PC se photographie (pas de port série).
 
 - **La liste des dix applications du M7** (`claude/m7-applications`, M7,
   [`compat/applications.md`](compat/applications.md#la-liste-du-m7-premier-critère) ; demandé le 2026-11-17).
