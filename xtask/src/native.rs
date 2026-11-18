@@ -80,6 +80,8 @@ const PROGRAMS: &[(&[&str], &str, Toolchain)] = &[
     (&["defer1.c"], "DEFER1.EXE", Toolchain::MinGwWin32),
     (&["sbctl1.c"], "SBCTL1.EXE", Toolchain::MinGwWin32),
     (&["hotkey1.c"], "HOTKEY1.EXE", Toolchain::MinGwWin32),
+    (&["display1.c"], "DISPLAY1.EXE", Toolchain::MinGwWin32),
+    (&["display2.c"], "DISPLAY2.EXE", Toolchain::MinGwWin32),
     (&["destroy1.c"], "DESTROY1.EXE", Toolchain::MinGwWin32),
     (&["activate1.c"], "ACTIVATE1.EXE", Toolchain::MinGwWin32),
     (&["mouse2.c"], "MOUSE2.EXE", Toolchain::MinGwWin32),
@@ -98,6 +100,8 @@ const PROGRAMS: &[(&[&str], &str, Toolchain)] = &[
     (&["mine1.c"], "MINE1.EXE", Toolchain::MinGwWin32),
     (&["notepad3.c"], "NOTEPAD3.EXE", Toolchain::MinGwWin32),
     (&["pipe1.c"], "PIPE1.EXE", Toolchain::MinGwWin32),
+    (&["clip1.c"], "CLIP1.EXE", Toolchain::MinGwWin32),
+    (&["npclip1.c"], "NPCLIP1.EXE", Toolchain::MinGwWin32),
     (&["minoinit.c"], "MINOINIT.EXE", Toolchain::MinGwWin32),
 ];
 

@@ -344,13 +344,27 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     win32k::init().expect("the USER shared section");
     // What win32k gives back at the end of a GUI thread, then of its process.
     ps::set_win32_callouts(win32k::destroy::thread_exit, win32k::destroy::process_exit);
-    // The display driver: the UEFI framebuffer, if the loader found one.
-    // SAFETY: the HHDM maps the framebuffer for good (inside [0, 4 GiB), or
-    // added by the bootloader above it); only gopfb and the boot console
-    // write to it.
-    match unsafe { gopfb::GopFramebuffer::new(&boot_info.framebuffer, boot_info.hhdm_offset) } {
-        Some(driver) => win32k::display::install(alloc::boxed::Box::new(driver)),
-        None => log::info!("[boot] no display: no GOP framebuffer of a known format"),
+    // The display driver: Bochs DISPI (QEMU's and VirtualBox's VGA), which
+    // changes modes; else the UEFI framebuffer, if the loader found one.
+    // SAFETY: the HHDM maps [0, 4 GiB) for good, and `bochs_dispi` checks
+    // that its framebuffer lies below 4 GiB; only the driver and the boot
+    // console write to it.
+    if let Some(driver) = unsafe { bochs_dispi::BochsDispi::probe(boot_info.hhdm_offset) } {
+        log::info!(
+            "[boot] display: {}, {} MiB, {} modes",
+            win32k::display::DisplayDriver::description(&driver),
+            driver.memory() >> 20,
+            win32k::display::DisplayDriver::modes(&driver).len()
+        );
+        win32k::display::install(alloc::boxed::Box::new(driver));
+    } else {
+        // SAFETY: the HHDM maps the GOP framebuffer for good (inside
+        // [0, 4 GiB), or added by the bootloader above it: a PC's graphics
+        // aperture); only gopfb and the boot console write to it.
+        match unsafe { gopfb::GopFramebuffer::new(&boot_info.framebuffer, boot_info.hhdm_offset) } {
+            Some(driver) => win32k::display::install(alloc::boxed::Box::new(driver)),
+            None => log::info!("[boot] no display: no GOP framebuffer of a known format"),
+        }
     }
     hal::idt::set_user_fault_hook(Some(user_fault));
 
@@ -459,6 +473,8 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     userland::install_nls_tables();
     userland::mount_system_hive();
     userland::mount_machine_hives();
+    // The display mode the registry keeps, before win32k draws.
+    sys::display::apply_registry_mode();
     userland::install_fonts();
     if cfg!(feature = "test-persistence") {
         persistence_test();
@@ -9051,6 +9067,7 @@ fn process_round() -> ([u32; 2], [u32; 2]) {
         assert_eq!(field(0x18), t.teb(), "NtTib.Self");
         assert_eq!((field(offset_of!(Teb32, client_id)), field(offset_of!(Teb32, client_id) + 4)), (a.pid(), t.tid()));
         assert_eq!(field(offset_of!(Teb32, process_environment_block)), peb);
+        assert_eq!(field(offset_of!(Teb32, current_locale)), ex::locale::user_locale(), "CurrentLocale (MmCreateTeb)");
     }
 
     // Both run at once.

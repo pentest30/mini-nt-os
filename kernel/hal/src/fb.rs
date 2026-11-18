@@ -509,6 +509,23 @@ fn blit_bgra_locked(c: &Console, src: &[u32], src_w: u32, src_h: u32, dst_x: u32
     }
 }
 
+/// Le pilote d'affichage a changé le mode de l'écran (`bochs-dispi`, sur le
+/// même framebuffer : la base ne bouge pas) : la console prend ces
+/// dimensions et ce pas, en pixels, pour l'écran d'arrêt (STOP), et repart
+/// du coin.
+///
+/// # IRQL
+/// Tout niveau (la console se tient interruptions masquées).
+pub fn set_geometry(width: u32, height: u32, stride: u32) {
+    CONSOLE.with(|console| {
+        if let Some(c) = console {
+            (c.width, c.height, c.stride) = (width, height, stride);
+            (c.cols, c.rows) = (width / GW, height / GH);
+            (c.col, c.row) = (0, 0);
+        }
+    });
+}
+
 /// Return the current framebuffer dimensions (width, height) or (0, 0) if uninitialised.
 pub fn dimensions() -> (u32, u32) {
     CONSOLE.with(|console| console.as_ref().map_or((0, 0), |c| (c.width, c.height)))

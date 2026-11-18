@@ -263,7 +263,10 @@ pub fn update_keys_from_message(keys: &mut KeyState, message: &Msg32) {
 
 impl QueueState {
     /// Les bits de ce qui est posté, et des touches, s'il y a quelque
-    /// chose.
+    /// chose. Le dernier message envoyé sorti, `QS_SENDMESSAGE` s'éteint
+    /// aussi parmi les bits de changement (ClearMsgBitsMask) : resté levé,
+    /// MsgWaitForMultipleObjects de `user32` rendait aussitôt, sans jamais
+    /// attendre, chez tout thread qui avait reçu un message d'un autre.
     fn refresh(&mut self) {
         let posted = QS_POSTMESSAGE | QS_ALLPOSTMESSAGE;
         if self.posted.is_empty() && self.quit.is_none() {
@@ -275,6 +278,7 @@ impl QueueState {
         self.wake = (self.wake & !input) | self.input.iter().fold(0, |bits, message| bits | input_bit(message));
         if self.sent.is_empty() {
             self.wake &= !QS_SENDMESSAGE;
+            self.change &= !QS_SENDMESSAGE;
         } else {
             self.wake |= QS_SENDMESSAGE;
         }
@@ -974,6 +978,24 @@ mod tests {
         assert_eq!(queue.pop_sent().map(|sent| sent.wparam), Some(2));
         assert_eq!(queue.wake & QS_SENDMESSAGE, 0, "none left");
         assert!(queue.pop_sent().is_none());
+    }
+
+    #[test]
+    fn the_last_sent_message_out_clears_its_change_bit() {
+        // Left set, user32's MsgWaitForMultipleObjects returned at once (the
+        // change bits it reads in the CLIENTTHREADINFO) and never waited.
+        let mut queue = QueueState::default();
+        let first = crate::sent::SentMessage::new(0x20, 0x400, 1, 0, false);
+        let second = crate::sent::SentMessage::new(0x20, 0x401, 2, 0, false);
+        queue.push_sent(first);
+        queue.push_sent(second.clone());
+        queue.pop_sent();
+        assert_eq!(queue.change & QS_SENDMESSAGE, QS_SENDMESSAGE, "one is left");
+        queue.pop_sent();
+        assert_eq!((queue.wake & QS_SENDMESSAGE, queue.change & QS_SENDMESSAGE), (0, 0), "none left");
+        queue.push_sent(second.clone());
+        assert!(queue.remove_sent(&second), "its sender gave up");
+        assert_eq!(queue.status(QS_SENDMESSAGE), 0, "withdrawn: nothing changed, nothing present");
     }
 
     #[test]

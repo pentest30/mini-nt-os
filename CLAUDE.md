@@ -46,8 +46,9 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
 - Une session traite **un jalon et un composant**, et se termine en faisant passer `cargo xtask lint` et `cargo xtask test`.
 - Commits au format `<composant>: <résumé à l'impératif>`, par exemple `mm: séparer reserve et commit dans la VAD`.
   Déplacements par `git mv`. Une PR traite un seul sujet.
-- **Jalon courant : M6 — win32k** ([05](docs/05-feuille-de-route.md#m6--win32k-avec-le-spike-s3-en-premier)) : le
-  changement de résolution reste (le bureau d'`explorer` est fait). M0 à M5 sont terminés (spikes S1, S2 et S3 réussis ;
+- **Jalon courant : M6 — win32k** ([05](docs/05-feuille-de-route.md#m6--win32k-avec-le-spike-s3-en-premier)) : ses
+  trois critères sont cochés (le bureau d'`explorer`, le Bloc-notes, la résolution par le panneau Affichage) ; la
+  suite est au M7. M0 à M5 sont terminés (spikes S1, S2 et S3 réussis ;
   l'ADR-002 qui les attendait est à confirmer par le mainteneur). Acquis de M1 (Ke) : dispatcher (ADR-005) sur l'ordonnanceur à 32 priorités de
   `kernel/ke/src/sched.rs` (préemption différée sous `DISPATCH_LEVEL`, quantum en tiers de tick, boosts, balance set
   manager `ke::balance`), DPC et APC noyau sans allocation (`ke::dpc`, `ke::apc`), roue de timers, état FPU/SSE par
@@ -461,6 +462,29 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   `input::deactivate_thread` (IntDeactivateWindow : WM_NCACTIVATE et WM_ACTIVATE inactifs, WM_ACTIVATEAPP,
   WM_KILLFOCUS, Ctrl, Alt et Maj relâchées) dans le thread des fenêtres, tout de suite au thread courant ; les
   événements dépassés partent (FindRemoveEventMsg) ; scénario `async-activate` (`tests/native/asyncact1.c`).
+  M6, étape 44 (le changement de résolution) : le pilote `drivers/video/bochs-dispi` (le VGA de QEMU et le VBoxVGA
+  de VirtualBox : `hal::bochs`, la barre 0 par `hal::pci::memory_bar`, GETCAPS, la mémoire vidéo ; 19 modes à 32
+  bits, de 640×480 à 2560×1600 sous QEMU), préféré à `gopfb` (fixe) ; `abi::display` (`DEVMODEW`,
+  `DISPLAY_DEVICEW`) ; `win32k::display_settings` (`\\.\DISPLAY1` et son moniteur, les modes en `DEVMODEW`,
+  `find_mode`, `switch` : métriques, moniteur, capacités de l'écran, bureaux, DC, pointeur, WM_DISPLAYCHANGE aux
+  fenêtres de premier niveau, tout repeint) ; `sys::display` (NtUserEnumDisplayDevices, NtUserEnumDisplaySettings,
+  NtUserChangeDisplaySettings ; le registre `Control\Video\{4D494E4F-…}\0000`, repris au démarrage ;
+  `HARDWARE\DEVICEMAP\VIDEO`) ; EnableWindow (NtUserCallTwoParam 0x60, `window::enable_window`), NtGdiTransparentBlt ;
+  `desk.cpl` et `rundll32.exe` sur le disque ; `screen-size = L H` dans un scénario ; scénarios `display-mode`
+  (`tests/native/display1.c`), `display-panel` (`tests/native/display2.c` : le panneau Affichage au clavier passe
+  l'écran à 640×480) et `display-desktop` (le même panneau ouvert depuis le bureau d'`explorer` par Win+R et
+  « control desk.cpl,,3 » ; la barre des tâches suit) : **le troisième critère du M6 est coché**.
+  M6, étape 45 : le presse-papiers (`win32k::clipboard`, `sys::clipboard`) : un par station
+  (`WindowStation::with_clipboard`, `winsta::stations`), ses données dans des objets `TYPE_CLIPDATA`
+  (NtUserConvertMemHandle, NtUserCreateLocalMemHandle) ; OpenClipboard par fenêtre, EmptyClipboard
+  (WM_DESTROYCLIPBOARD avant le vidage), SetClipboardData (rendu différé : WM_RENDERFORMAT, d'un processus à
+  l'autre), GetClipboardData (CF_TEXT, CF_OEMTEXT, CF_UNICODETEXT synthétisés par `user32`, CF_LOCALE par le noyau),
+  le numéro de séquence d'XP, EnumClipboardFormats (ONEPARAM 0x25), la chaîne des visionneuses (WM_DRAWCLIPBOARD,
+  WM_CHANGECBCHAIN) ; WM_RENDERALLFORMATS au propriétaire détruit, la fin d'un thread ferme ce qu'il a ouvert, les
+  données posées survivent à leur processus. `TEB.CurrentLocale` rempli (Ps : GetThreadLocale rendait 0) ;
+  `QS_SENDMESSAGE` éteint aussi parmi les bits de changement avec le dernier message envoyé (MsgWaitForMultipleObjects
+  n'attendait plus). Scénarios `clipboard` (`tests/native/clip1.c`, deux processus) et `notepad-clipboard`
+  (`tests/native/npclip1.c` : Ctrl+C puis Ctrl+V dans le Bloc-notes).
   M5, la console ([`docs/compat/m5-console.md`](docs/compat/m5-console.md), scénario `console`) : `CONSOLE1.EXE`
   lance par CreateProcessW `THREADS1.EXE` (sous-système CONSOLE, construit par `xtask`) ; NtCreateProcess(Ex) rend le
   PEB dans le TEB du créateur (`NtTib.ArbitraryUserPointer`, comme ReactOS) ; emprunt d'identité
@@ -578,6 +602,8 @@ cargo build -p mino-loader --target x86_64-unknown-uefi --profile kernel
   (`screen.ppm` dans le répertoire du run) où le pixel (X, Y) doit avoir cette couleur.
 - `screen-wait = SECONDES` : l'écran peut mettre ce temps à montrer les pixels de `screen` après les marqueurs
   (ce qu'ont lancé des `keys`) ; la capture est refaite chaque seconde jusque-là.
+- `screen-size = LARGEUR HAUTEUR` (avec `screen`) : la capture doit aussi avoir cette taille (un scénario qui change
+  de mode d'affichage).
 - `keys = MARQUEUR => TOUCHES` : quand le marqueur paraît dans le journal série, le moniteur de QEMU tape ces
   touches (`sendkey` : `a`, `shift-a`, `ret`…), une ligne après l'autre ; `"dir C:\"` entre guillemets donne les
   touches de chaque caractère (clavier américain).

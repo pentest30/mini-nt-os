@@ -432,6 +432,24 @@ pub fn reset_active_dcs(moved: &Window) {
     }
 }
 
+/// L'écran a changé de taille : chaque DC du cache pris pour tout l'écran
+/// (GetDC(NULL)) refait sa région visible, celle du nouvel écran.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, sans rien tenir.
+pub fn reset_screen_dcs() {
+    let taken: Vec<(Arc<Dc>, u32, Option<Region>)> = CACHE
+        .lock()
+        .iter()
+        .filter(|entry| entry.busy && entry.window == 0)
+        .map(|entry| (entry.dc.clone(), entry.flags, entry.cut.clone()))
+        .collect();
+    for (dc, flags, cut) in taken {
+        let (vis, origin) = visible(None, flags, cut.as_ref());
+        dc.change(|state| (state.vis, state.origin) = (vis, origin));
+    }
+}
+
 /// Le DC `hdc` du cache est de nouveau au repos ; rend la région d'un
 /// client qui le coupait, à supprimer (DceDeleteClipRgn).
 fn set_free(hdc: u32) -> Option<u32> {
