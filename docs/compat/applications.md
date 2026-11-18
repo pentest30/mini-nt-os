@@ -72,15 +72,65 @@ publiée lue).
 - **GIMP et OpenOffice** sont les plus lourdes : beaucoup de DLL, et les runtimes de Visual C++ par WinSxS pour
   OpenOffice. Elles viennent en dernier.
 
+### Le banc d'essai
+
+`cargo xtask fetch-apps [--app ID]` télécharge les installeurs épinglés (`xtask/src/apps.rs` : source, taille,
+SHA-256) dans `third_party/apps/<id>/`, ou vérifie une copie déjà là, et les estampille (`<fichier>.sha256`). Un
+scénario `app = ID` (`tests/boot/app-<id>/`) fait un disque système `C:` plus grand (`mkfat --free-mib`,
+`fatfs::build_with_free`) : les fichiers du scénario, le reste de l'arbre de ReactOS (`userland::whole_tree` : tout
+sauf `Fonts` et `system32/config`, que le disque de démarrage fournit), l'installeur et `C:\APPS\PROBE.TXT`. Le disque
+RAM reste celui des autres scénarios, que le chargeur limite à 64 Mio. Sans l'installeur, le scénario est sauté.
+
+`APPBENCH.EXE` (`tests/native/appbench.c`) prend la place de `winlogon` et lit `PROBE.TXT`. Il lance l'installeur en
+silencieux (`msiexec /qn` avec son journal, NSIS `/S`, Inno Setup `/VERYSILENT` avec son journal, SumatraPDF `/s`).
+Il répond par le bouton par défaut à une boîte de dialogue restée 10 s sans changer (8 fois au plus), et relance
+visible un NSIS silencieux qui échoue tout seul (il ne dit rien). Il imprime les fenêtres à l'écran, le journal de
+l'installeur et ce qu'il a mis sous `Program Files`, puis lance le programme installé, attend sa fenêtre et le ferme.
+Il ne juge rien : le noyau journalise chaque service sans handler à son premier appel, et chaque exception qui termine
+un processus. Les marqueurs d'un scénario sont un plancher, ce qui marche aujourd'hui : l'installeur démarre ; pour
+Dev-C++, ses fichiers sont copiés et son programme démarre.
+
+### Bilan du 2026-11-17
+
+Sur `main` `5ca4cab`, AMD (`int 2Eh`), un passage par application (`cargo xtask test --boot --scenario app-<id>`).
+
+| Application | Ce qui se passe | Service sans handler appelé juste avant |
+|---|---|---|
+| 7-Zip (MSI) | `msiexec` sort en 3 s avec 1627 (ERROR_FUNCTION_FAILED), son journal vide | NtLockFile |
+| Notepad++ (NSIS) | silencieux : code 2 en 14 s ; visible : « Error! Can't initialize plug-ins directory » | NtQueryInformationFile (classe 0x23) ; aussi NtAccessCheck |
+| KeePass (Inno) | « Unable to create a temporary file. Setup aborted. » | NtSetInformationFile (classe 0x13), NtQueryInformationFile (0x23) |
+| WinMerge (Inno) | le même message | les mêmes |
+| SumatraPDF | l'installeur plante en 3 s (0xC0000005) | NtQueryInformationProcess (classe 7, ProcessDebugPort) |
+| AbiWord (NSIS) | comme Notepad++ | NtQueryInformationFile (0x23) |
+| PeaZip (Inno) | comme KeePass | les mêmes |
+| Dev-C++ (NSIS) | la boîte de bienvenue (répondue), le même message de plugins, mais ses fichiers sont copiés dans `C:\Dev-Cpp` (111 Mo) ; huit processus d'aide finissent sur un accès mémoire en `0x7C97B92E` (ntdll) ; `devcpp.exe` démarre et s'arrête sur « Exception EReadError in module devcpp.exe at 0001D967 » | pendant l'installation : NtAreMappedFilesTheSame, NtGdiCreatePaletteInternal, NtUserEnumDisplayMonitors, NtUserSetClassLong, NtGdiGetOutlineTextMetricsInternalW, NtUserUnregisterClass ; au lancement : NtGdiDoPalette, NtGdiGetTextCharsetInfo, NtGdiGetDCDword, NtGdiGetCharSet, NtUserGetObjectInformation |
+| GIMP (Inno) | comme KeePass | les mêmes |
+| Apache OpenOffice (NSIS) | la vérification de ses 143 Mo atteint 100 % en 440 s ; l'extraction écrit ~90 Mo jusqu'à la fin du délai (1500 s) | aucun bloquant vu |
+
+Au démarrage de chaque installeur (CreateProcess, puis l'interface) : NtIsProcessInJob, NtApphelpCacheControl,
+NtUserNotifyProcessCreate, NtSetInformationThread (classe 9), NtQueryDefaultUILanguage, NtUserCallOneParam (0x31),
+NtUserCallHwnd, NtUserSystemParametersInfo (0x100A), NtUserSetThreadState, NtUserCallNoParam (0xF) : aucun n'arrête
+seul un installeur.
+
+Ce que le bilan désigne, dans l'ordre où il débloque le plus d'applications (des pistes, pas encore des causes
+vérifiées) :
+
+1. **NtSetInformationFile, classe 0x13** (FileAllocationInformation, que `SetEndOfFile` envoie après
+   FileEndOfFileInformation) : les quatre Inno Setup.
+2. **Le dossier de plugins de NSIS** (Notepad++, AbiWord, Dev-C++) : NtQueryInformationFile classe 0x23
+   (FileAttributeTagInformation) est le seul service sans handler de la phase qui échoue.
+3. **NtLockFile** : `msiexec` (7-Zip, puis OpenOffice, dont l'installeur NSIS lance un MSI).
+4. **SumatraPDF** : l'accès mémoire qui suit NtQueryInformationProcess(ProcessDebugPort).
+5. **Dev-C++** : l'EReadError, puis le GDI et le USER qui lui manquent (palettes, métriques des polices, moniteurs).
+6. **La lenteur des gros fichiers** : la vérification d'OpenOffice lit 143 Mo en 440 s. Deux suspects, à mesurer :
+   le `kernel32` de ReactOS (variante DBG) écrit deux `DbgPrint` par ReadFile sur le port série (12 525 lignes), et
+   un fichier de 143 Mo fait 280 000 clusters de 512 octets dans la FAT.
+
 ### La suite
 
-Les installeurs ne sont pas dans le dépôt : ils ont été téléchargés dans `third_party/apps/<application>/` (ignoré
-par Git). Restent à faire, application par application :
-
-1. une commande `xtask` qui télécharge les installeurs épinglés et vérifie leur SHA-256, comme `fetch-userland` ;
-2. une fois chaque application installée, les DLL qu'elle importe (`userland::import_closure`), pour savoir ce que
-   ReactOS doit fournir et ce qui passe par WinSxS ;
-3. un scénario qui l'installe sur le disque système, suit son parcours et vérifie le résultat, sur AMD et Intel.
+Corriger les blocages dans cet ordre, chacun avec un test, et remonter le plancher du scénario de chaque
+application débloquée. Une fois une application installée : les DLL qu'elle importe (`userland::import_closure`), et
+son parcours (`docs/compat/applications.md`, colonne « Parcours »), sur AMD et Intel.
 
 ## Bloc-notes
 

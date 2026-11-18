@@ -386,6 +386,14 @@ impl Image {
 
 /// The image holding `files`, each a path ([`path`]) and its bytes.
 pub fn build(files: &[(Vec<String>, Vec<u8>)]) -> Result<Vec<u8>, String> {
+    build_with_free(files, FREE_CLUSTERS)
+}
+
+/// [`build`], with at least `free_clusters` free clusters (512 bytes each)
+/// after the files, [`FREE_CLUSTERS`] at least: a system disk on which
+/// programs are installed (the M7 bench).
+pub fn build_with_free(files: &[(Vec<String>, Vec<u8>)], free_clusters: usize) -> Result<Vec<u8>, String> {
+    let free_clusters = free_clusters.max(FREE_CLUSTERS);
     let mut root = Dir::default();
     for (index, (path, _)) in files.iter().enumerate() {
         root.add(path, index)?;
@@ -394,7 +402,10 @@ pub fn build(files: &[(Vec<String>, Vec<u8>)]) -> Result<Vec<u8>, String> {
     let mut next = 2;
     root.place(true, &data, &mut next);
 
-    let clusters = (next as usize - 2 + FREE_CLUSTERS).max(MIN_CLUSTERS + 64);
+    let clusters = (next as usize - 2 + free_clusters).max(MIN_CLUSTERS + 64);
+    if clusters > 0x0FFF_FFEE {
+        return Err(format!("{clusters} clusters: too many for FAT32"));
+    }
     let fat_sectors = ((clusters + 2) * 4).div_ceil(SECTOR);
     let data_start_lba = RESERVED_SECTORS + FAT_COUNT * fat_sectors;
     let total_sectors = data_start_lba + clusters;
@@ -575,6 +586,23 @@ mod tests {
             }
         }
         assert_eq!((IMAGE_DATE, IMAGE_TIME), (12548, 24576), "2004-08-04 12:00:00");
+    }
+
+    #[test]
+    fn a_system_disk_can_ask_for_more_free_room() {
+        let files = [file("A.TXT", b"a")];
+        let free = |image: &[u8]| {
+            let total = u32::from_le_bytes(image[32..36].try_into().unwrap()) as usize;
+            let fat_sectors = u32::from_le_bytes(image[36..40].try_into().unwrap()) as usize;
+            total - RESERVED_SECTORS - FAT_COUNT * fat_sectors
+        };
+        let small = build(&files).unwrap();
+        assert_eq!(build_with_free(&files, 0).unwrap(), small, "never less than FREE_CLUSTERS");
+        let large = build_with_free(&files, 300_000).unwrap();
+        assert!(free(&large) >= 300_000 + 2, "the root and A.TXT take a cluster each");
+        assert!(free(&small) < 300_000);
+        let volume = FatVolume::mount(Disk(large)).unwrap();
+        assert_eq!(volume.list_dir("/").unwrap().len(), 1);
     }
 
     #[test]

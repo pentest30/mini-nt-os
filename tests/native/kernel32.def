@@ -61,6 +61,15 @@ WriteConsoleW@20
 WriteFile@20
 GetDriveTypeW@4
 GetLogicalDrives@0
+GetDiskFreeSpaceExW@16
+GetEnvironmentVariableW@12
+GetFileAttributesW@4
+MultiByteToWideChar@24
+SetEnvironmentVariableW@8
+TerminateProcess@8
+WideCharToMultiByte@32
+GetFileSize@8
+SetFilePointer@16
 GetThreadLocale@0
 GlobalAlloc@8
 GlobalLock@4

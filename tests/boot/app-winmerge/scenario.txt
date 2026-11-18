@@ -1,0 +1,14 @@
+# M7 bench: WinMerge 2.12.4 (Inno Setup), installed silently by APPBENCH.EXE
+# (tests/native/appbench.c) from C:\APPS, then started and closed.
+# The markers say how far it goes; docs/compat/applications.md has the
+# report.
+features = test-smss, interactive
+requires = userland, native
+initial-command = APPBENCH.EXE
+app = winmerge
+cpus = default
+timeout = 600
+# What works today, a floor: the installer starts.
+expect = [appbench] installer started
+expect = [appbench] WinMerge 2.12.4: report done
+forbid = *** STOP:

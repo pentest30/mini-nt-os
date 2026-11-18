@@ -20,6 +20,7 @@
 //! (pflash pair), `--qemu FILE`, or the `OVMF_PATH`, `OVMF_CODE`, `OVMF_VARS`
 //! and `QEMU` environment variables.
 
+mod apps;
 mod fat32;
 mod inflate;
 mod install;
@@ -89,6 +90,11 @@ commands:
           unpack its system tree into third_party/reactos/<version>/
           --archive FILE      use this copy of the release archive
           --force             unpack again
+  fetch-apps
+          download the installers of the M7 bench (docs/compat/
+          applications.md) into third_party/apps/, check their size and
+          SHA-256; a copy already there is checked, not downloaded again
+          --app ID            only this application (repeatable)
   rostests-fetch
           sparse-clone the pinned ReactOS 0.4.16 tree (apitests, SDK
           headers, PSEH) into third_party/reactos-0.4.16/ with git
@@ -134,6 +140,7 @@ fn dispatch(mut args: Args) -> Result<()> {
             cargo(&ws, &["run", "--quiet", "-p", "syscall-gen"])
         }
         Some("fetch-userland") => userland::fetch(&ws, args),
+        Some("fetch-apps") => apps::fetch(&ws, args),
         Some("rostests-fetch") => {
             args.finish()?;
             rostests::fetch(&ws)
@@ -361,6 +368,20 @@ fn test(ws: &Workspace, mut args: Args) -> Result<()> {
         if let Some(program) = &sc.initial_command {
             put_initial_command(&mut extra_files, program)?;
         }
+        // An application of the M7 bench: its installer, checked by
+        // `fetch-apps`.
+        let app = sc.app.as_deref().map(|id| apps::find(id).expect("checked when the scenario was read"));
+        let installer = match app {
+            Some(app) => match apps::installer(ws, app) {
+                Some(path) => Some(path),
+                None => {
+                    println!("xtask: SKIP {}: needs {} (cargo xtask fetch-apps --app {})", sc.name, app.file, app.id);
+                    skipped.push(sc.name.clone());
+                    continue;
+                }
+            },
+            None => None,
+        };
         let cpus = match &cpu {
             Some(cpu) => vec![cpu.clone()],
             None => sc.cpus.clone(),
@@ -390,6 +411,8 @@ fn test(ws: &Workspace, mut args: Args) -> Result<()> {
                     install::create(&esp, image)?;
                 } else if sc.gpt_disk {
                     partition::create(&esp.join("fat.img"), image)?;
+                } else if let (Some(app), Some(installer)) = (app, &installer) {
+                    app_disk(ws, &run_dir, image, &extra_files, app, installer)?;
                 } else {
                     std::fs::copy(esp.join("fat.img"), image).map_err(|e| format!("{}: {e}", image.display()))?;
                 }
@@ -424,7 +447,7 @@ fn test(ws: &Workspace, mut args: Args) -> Result<()> {
                 firmware: qemu::find_firmware(&options, &run_dir)?,
                 esp,
                 cpu,
-                memory_mb: qemu::DEFAULT_MEMORY_MB,
+                memory_mb: app.map_or(qemu::DEFAULT_MEMORY_MB, |app| app.memory_mb),
                 data_dir: None,
                 boot_disk: match &boot_image {
                     Some(image) => Some(image.clone()),
@@ -576,6 +599,38 @@ fn userland_files(ws: &Workspace) -> Result<Option<Vec<String>>> {
 /// [`userland_files`], with the shell (`shell = explorer`).
 fn shell_userland_files(ws: &Workspace) -> Result<Option<Vec<String>>> {
     disk_files(userland::shell_boot_files(ws), ws)
+}
+
+/// The system disk `C:` of an application of the M7 bench (`app = ID`): the
+/// scenario's files (`extra_files`, as on the ramdisk), the rest of the
+/// ReactOS tree ([`userland::whole_tree`]), the installer and the probe's
+/// command file in `APPS`, and the free room the installation needs. The
+/// ramdisk stays as it is: the loader takes 64 MiB at most.
+fn app_disk(
+    ws: &Workspace,
+    run_dir: &Path,
+    image: &Path,
+    extra_files: &[String],
+    app: &apps::App,
+    installer: &Path,
+) -> Result<()> {
+    let have: Vec<(PathBuf, String)> = extra_files
+        .iter()
+        .filter_map(|file| file.rsplit_once(':').map(|(host, fat)| (PathBuf::from(host), fat.to_string())))
+        .collect();
+    let tree = userland::whole_tree(ws, &have).ok_or("app: needs the ReactOS userland (cargo xtask fetch-userland)")?;
+    let probe = run_dir.join("probe.txt");
+    std::fs::write(&probe, apps::probe_commands(app)).map_err(|e| format!("{}: {e}", probe.display()))?;
+    let mut lines = extra_files.to_vec();
+    lines.extend(tree.iter().map(|(path, fat)| format!("{}:{fat}", path.display())));
+    lines.push(format!("{}:{}/{}", installer.display(), apps::APPS_DIR, app.file));
+    lines.push(format!("{}:{}/{}", probe.display(), apps::APPS_DIR, apps::PROBE_FILE));
+    let list = run_dir.join("app-disk.lst");
+    std::fs::write(&list, lines.join("\n")).map_err(|e| format!("{}: {e}", list.display()))?;
+    let image = image.to_str().ok_or_else(|| format!("non UTF-8 path: {}", image.display()))?;
+    let (free, list) = (app.free_mib.to_string(), format!("@{}", list.display()));
+    println!("xtask: {}: {} files on C:, {} MiB free for {}", app.id, lines.len(), app.free_mib, app.name);
+    cargo(ws, &["run", "--quiet", "-p", "mkfat", "--", image, "--free-mib", &free, &list])
 }
 
 /// The paths of `files` for the ramdisk, the hives under the Mino layer.
