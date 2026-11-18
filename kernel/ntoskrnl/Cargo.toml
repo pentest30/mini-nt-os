@@ -90,6 +90,7 @@ lpc              = { path = "../lpc" }
 se               = { path = "../se" }
 win32k           = { path = "../win32k" }
 gopfb            = { path = "../../drivers/video/gopfb" }
+bochs-dispi      = { path = "../../drivers/video/bochs-dispi" }
 i8042            = { path = "../../drivers/input/i8042" }
 vboxmouse        = { path = "../../drivers/input/vboxmouse" }
 regf             = { path = "../../libs/regf", features = ["builder"] }

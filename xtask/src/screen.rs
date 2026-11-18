@@ -99,6 +99,17 @@ impl Image {
         Some([self.rgb[i], self.rgb[i + 1], self.rgb[i + 2]])
     }
 
+    /// The screen has the size `size`, if one is given, and each pixel of
+    /// `expected` its colour; otherwise, what differs.
+    pub fn check_all(&self, size: Option<(u32, u32)>, expected: &[Pixel]) -> std::result::Result<(), String> {
+        match size {
+            Some((width, height)) if (width, height) != (self.width, self.height) => {
+                Err(format!("screen of {}x{}, not {width}x{height}", self.width, self.height))
+            }
+            _ => self.check(expected),
+        }
+    }
+
     /// Each pixel of `expected` has its colour; otherwise, what differs.
     pub fn check(&self, expected: &[Pixel]) -> std::result::Result<(), String> {
         let wrong: Vec<String> = expected
@@ -444,6 +455,8 @@ mod tests {
             wrong.contains("(1, 0) is 000000, not 3A6EA5") && wrong.contains("(5, 0) is off the screen"),
             "{wrong}"
         );
+        assert_eq!(image.check_all(Some((2, 1)), &[blue]), Ok(()));
+        assert_eq!(image.check_all(Some((800, 600)), &[blue]), Err("screen of 2x1, not 800x600".to_string()));
         assert!(Image::parse_ppm(b"P6\n2 1\n255\n\x01").is_err(), "too few pixels");
         assert!(Image::parse_ppm(b"P5\n2 1\n255\n\0\0").is_err(), "grey");
         assert!(Image::parse_ppm(b"P6\n2").is_err(), "cut short");

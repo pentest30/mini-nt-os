@@ -258,19 +258,36 @@ pub fn get(index: usize) -> i32 {
 pub fn write() -> Result<(), NtStatus> {
     let mode = crate::display::mode();
     let (width, height) = mode.map_or((640, 480), |mode| (mode.width as i32, mode.height as i32));
-    let metrics = system_metrics(width, height, &Parameters::DEFAULT);
+    write_screen(width, height)?;
     let section = crate::shared::section().ok_or(STATUS_UNSUCCESSFUL)?;
     let at = |field: usize| u64::from(crate::shared::SERVER_INFO) + field as u64;
-    let bytes: alloc::vec::Vec<u8> = metrics.iter().flat_map(|value| value.to_le_bytes()).collect();
-    section.write_kernel(at(offset_of!(ServerInfo32, sys_met)), &bytes)?;
     let colors: alloc::vec::Vec<u8> = SYSTEM_COLORS.iter().flat_map(|color| color.to_le_bytes()).collect();
     section.write_kernel(at(offset_of!(ServerInfo32, argb_system)), &colors)?;
     const _: () = assert!(size_of::<ServerInfo32>() <= 4096, "SERVERINFO fits in its page");
-    *METRICS.lock() = Some(metrics);
     // co_IntInitializeDesktopGraphics attaches the monitor of the display.
     if mode.is_some() {
         crate::monitor::attach(width, height)?;
     }
+    Ok(())
+}
+
+/// InitMetrics d'un écran de `width` × `height` : les métriques du système
+/// écrites dans le `SERVERINFO`, où `user32` les lit (GetSystemMetrics), et
+/// gardées pour win32k ([`get`]). Au démarrage ([`write()`]), puis à chaque
+/// changement de mode (`crate::display_settings`).
+///
+/// # Errors
+/// `STATUS_UNSUCCESSFUL` avant la section partagée ; celles de son écriture.
+///
+/// # IRQL
+/// PASSIVE_LEVEL.
+pub fn write_screen(width: i32, height: i32) -> Result<(), NtStatus> {
+    let metrics = system_metrics(width, height, &Parameters::DEFAULT);
+    let section = crate::shared::section().ok_or(STATUS_UNSUCCESSFUL)?;
+    let at = u64::from(crate::shared::SERVER_INFO) + offset_of!(ServerInfo32, sys_met) as u64;
+    let bytes: alloc::vec::Vec<u8> = metrics.iter().flat_map(|value| value.to_le_bytes()).collect();
+    section.write_kernel(at, &bytes)?;
+    *METRICS.lock() = Some(metrics);
     Ok(())
 }
 

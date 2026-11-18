@@ -399,7 +399,32 @@ pub fn open_display_dc() -> Result<u32, NtStatus> {
         let _ = handles::delete(handle, OWNER_NONE, |_| true);
         return Err(status);
     }
+    let mut opened = OPENED_DISPLAY_DCS.lock();
+    opened.retain(|dc| dc.strong_count() > 0);
+    opened.push(Arc::downgrade(&dc));
     Ok(handle)
+}
+
+/// Les DC de tout l'écran que des clients ont ouverts ([`open_display_dc`]),
+/// tant qu'ils existent.
+static OPENED_DISPLAY_DCS: KSpinLock<Vec<alloc::sync::Weak<Dc>>> = KSpinLock::new(Vec::new());
+
+/// L'écran est passé à `screen` (un changement de mode) : chaque DC de tout
+/// l'écran qu'un client a ouvert, encore à lui, voit tout le nouvel écran.
+/// Les attributs chez le client (`VisRectRegion`) gardent l'ancien
+/// rectangle jusqu'à ce que le DC soit repris.
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn resize_display_dcs(screen: Rect) {
+    let opened: Vec<Arc<Dc>> = OPENED_DISPLAY_DCS.lock().iter().filter_map(alloc::sync::Weak::upgrade).collect();
+    for dc in opened {
+        dc.change(|state| {
+            if state.owner.is_some() {
+                state.vis = Region::from_rect(screen);
+            }
+        });
+    }
 }
 
 /// DC_vSetOwner(GDI_OBJ_HMGR_NONE) : le DC `handle` n'est plus à personne ;

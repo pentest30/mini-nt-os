@@ -19,13 +19,14 @@
 # after the page (siblings repaint from the top of the Z order down, as in
 # ReactOS), but gives itself WS_CLIPSIBLINGS (SetWindowLongW(GWL_STYLE) in
 # comctl32's TAB_Create): the first row of the list selected, the underlined N
-# of New Task..., the white relief under the S of Switch To and the E of End
-# Task, disabled (DrawState, a font from GetObjectW). Without the style, the
-# tab control painted over the page, gray. The selected row is checked after
-# its text: the list's image list (comctl32, 4 bits per pixel) has the
-# tasks' icons (GetIconInfo), which shift the text; the first one, cmd's,
-# shows the teal of its title bar in the 16 colours of its DIB section of 4
-# bits (black without it).
+# of New Task..., and End Task and Switch To enabled for the selected task
+# (EnableWindow: their underlined E and S black, without the white relief of
+# a disabled label; the `dialog` scenario checks that relief). Without the
+# style, the tab control painted over the page, gray. The selected row is
+# checked after its text: the list's image list (comctl32) has the tasks'
+# icons (GetIconInfo), which shift the text; the list has the keyboard, so the
+# first one, cmd's, is drawn selected, blended half and half with
+# COLOR_HIGHLIGHT (0A246A): its white inside becomes 8491B4.
 features = test-smss
 requires = userland, native
 initial-command = DESKTOP1.EXE
@@ -47,14 +48,12 @@ expect = (TASKMGR.EXE) ended
 screen = 200 300 000000
 screen = 700 785 1E5CDB
 screen = 660 288 0A246A
-screen = 472 282 008080
-# The shadow of the T of End Task, inside the letter: DrawState draws the
-# disabled text in a monochrome bitmap, smoothed, then BitBlt converts it
-# (the nearest of black and white; read as exact black, the letters went).
-screen = 612 567 808080
+screen = 472 281 8491B4
 screen = 751 572 000000
-screen = 672 573 FFFFFF
-screen = 590 573 FFFFFF
+screen = 672 572 000000
+screen = 672 573 D4D0C8
+screen = 590 572 000000
+screen = 590 573 D4D0C8
 
 forbid = [desktop] launch failed:
 forbid = *** STOP:

@@ -70,3 +70,8 @@ TerminateProcess@8
 WideCharToMultiByte@32
 GetFileSize@8
 SetFilePointer@16
+GetThreadLocale@0
+GlobalAlloc@8
+GlobalLock@4
+GlobalSize@4
+GlobalUnlock@4

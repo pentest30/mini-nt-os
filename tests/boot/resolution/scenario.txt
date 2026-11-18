@@ -1,9 +1,11 @@
-# Le changement de résolution à chaud (M6) : le VGA standard de QEMU porte
-# l'interface Bochs DISPI (ports 0x1CE/0x1CF) — le self-test du noyau
-# (feature test-resolution) passe l'écran de 1024x768 à 1280x1024 par le
-# pilote gopfb (le pas suit la largeur, la base du framebuffer linéaire ne
-# bouge pas), puis repeint le fond du bureau à la nouvelle taille.
-# L'hôte vérifie le coin de l'écran aux nouvelles dimensions.
+# Le changement de résolution à chaud (M6), sans l'espace utilisateur : le
+# VGA standard de QEMU porte l'interface Bochs DISPI (ports 0x1CE/0x1CF) —
+# le self-test du noyau (feature test-resolution) passe l'écran du mode du
+# micrologiciel (1280x800) à 1280x1024 par le pilote bochs-dispi (le pas suit
+# la largeur, la base du framebuffer linéaire, la barre 0, ne bouge pas),
+# puis repeint le fond du bureau à la nouvelle taille. L'hôte vérifie le
+# coin de l'écran aux nouvelles dimensions. Par user32 : display-mode et
+# display-panel.
 features = test-resolution
 cpus     = default, intel
 timeout  = 120

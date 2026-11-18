@@ -18,6 +18,7 @@
 //! - [`winsta`] : les stations de fenêtres ;
 //! - [`desktop`] : les bureaux et leurs tas ; le bureau d'un thread GUI
 //!   ([`gui`]) ;
+//! - [`clipboard`] : le presse-papiers de chaque station ;
 //! - [`keyboard`] : les dispositions de clavier ;
 //! - [`callback`] : les rappels vers `user32` (KeUserModeCallback).
 //!
@@ -34,6 +35,7 @@ pub mod callback;
 pub mod caret;
 pub mod class;
 pub mod client;
+pub mod clipboard;
 pub mod console;
 pub mod csrss;
 pub mod cursor;
@@ -43,6 +45,7 @@ pub mod defwnd;
 pub mod desktop;
 pub mod destroy;
 pub mod display;
+pub mod display_settings;
 pub mod font;
 pub mod gdi;
 pub mod gui;

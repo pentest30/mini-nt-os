@@ -1224,6 +1224,50 @@ pub fn show_desktop_window(desktop: &Desktop, width: u32, height: u32) {
     update_window(window);
 }
 
+/// La fenêtre du bureau `desktop` prend la taille d'un écran de `width` ×
+/// `height`, après un changement de mode (ce que fait DesktopWindowProc de
+/// WM_DISPLAYCHANGE chez ReactOS, par co_WinPosSetWindowPos) ; les DC pris
+/// de ses fenêtres refont leur région. L'appelant repeint ensuite.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, sans rien tenir.
+pub fn resize_desktop_window(desktop: &Desktop, width: i32, height: i32) {
+    let window = &desktop.window;
+    let rect = Rect::new(0, 0, width, height);
+    update(window, |state| (state.window, state.client) = (rect, rect));
+    crate::dce::reset_active_dcs(window);
+}
+
+/// co_IntEnableWindow (EnableWindow) : `window` est activée (`enable`) ou
+/// désactivée (`WS_DISABLED`). Avant d'être désactivée, elle reçoit
+/// WM_CANCELMODE et perd le clavier si elle l'a dans la file de `thread`
+/// (le thread courant) ; si son état change, elle reçoit WM_ENABLE. Rend
+/// si elle était désactivée.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, dans un service système, sans rien tenir. Rappelle le mode
+/// utilisateur.
+pub fn enable_window(thread: &crate::gui::ThreadInfo, window: &Arc<Window>, enable: bool) -> bool {
+    use abi::user::WS_DISABLED;
+    let was_disabled = window.state().style & WS_DISABLED != 0;
+    let send = |message: u32, wparam: u32| {
+        let _ = crate::sent::send_to_window(thread, window, message, wparam, 0, None);
+    };
+    if enable {
+        change(window, |state| state.style &= !WS_DISABLED);
+    } else {
+        send(abi::user::WM_CANCELMODE, 0);
+        if thread.queue.with(|queue| queue.focus).0 == window.handle {
+            crate::input::set_focus(thread, None);
+        }
+        change(window, |state| state.style |= WS_DISABLED);
+    }
+    if was_disabled == enable {
+        send(abi::user::WM_ENABLE, u32::from(enable));
+    }
+    was_disabled
+}
+
 /// IntHideDesktop : la fenêtre du bureau n'est plus visible.
 ///
 /// # IRQL
@@ -1289,9 +1333,19 @@ fn desktop_window_proc(window: &Window, message: u32, _wparam: u32, _lparam: u32
 }
 
 /// IntPaintDesktop : le fond du bureau, de la couleur système
-/// `COLOR_BACKGROUND`, dans `rect` (journalisé : c'est rare).
+/// `COLOR_BACKGROUND`, dans `rect` hors de ses fenêtres filles (journalisé :
+/// c'est rare).
 fn paint_desktop(window: &Window, rect: Rect) {
-    let painted = crate::display::draw(|screen| screen.fill_rect(rect, crate::gdi::syscolor::BACKGROUND));
+    // Where no child is (WS_CLIPCHILDREN, as the DC of BeginPaint): a window
+    // of another thread that has painted itself in the meantime stays (the
+    // taskbar of explorer, moved on WM_DISPLAYCHANGE, was painted over).
+    let mut region = crate::paint::visible_region(window, true, true, false);
+    region.intersect_rect(rect);
+    let painted = crate::display::draw(|screen| {
+        for &part in region.rects() {
+            screen.fill_rect(part, crate::gdi::syscolor::BACKGROUND);
+        }
+    });
     if painted {
         log::info!(
             "win32k: the desktop window of {} erased (WM_ERASEBKGND), {}x{}",

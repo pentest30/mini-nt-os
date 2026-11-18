@@ -1,7 +1,7 @@
 //! Le pilote d'affichage (02 §7.2) : un trait interne ([`DisplayDriver`]),
-//! qu'implémente `drivers/video/gopfb` (le framebuffer UEFI, fixe), puis
-//! d'autres (`bochs-dispi`) ; le noyau installe le sien au démarrage
-//! ([`install`]).
+//! qu'implémentent `drivers/video/gopfb` (le framebuffer UEFI, fixe) et
+//! `drivers/video/bochs-dispi` (le VGA de QEMU et de VirtualBox, qui change
+//! de mode) ; le noyau installe le sien au démarrage ([`install`]).
 //!
 //! Le pilote donne sa surface (le framebuffer) au moteur DIB, comme un
 //! pilote d'XP associe sa surface à GDI (EngAssociateSurface) : GDI y dessine
@@ -12,8 +12,12 @@
 //! attendant un mutex du noyau à PASSIVE_LEVEL ; la surface est en mémoire
 //! résidente (le framebuffer), sans faute de page.
 //!
-//! Pas encore : le changement de mode, plusieurs écrans, le curseur matériel,
-//! la synchronisation avec le balayage.
+//! Le pilote donne ses modes ([`DisplayDriver::modes`]) et en change
+//! ([`change_mode`]) ; ce qui suit un changement (métriques, moniteur,
+//! fenêtres) est dans `crate::display_settings`.
+//!
+//! Pas encore : plusieurs écrans, le curseur matériel, la synchronisation
+//! avec le balayage.
 
 use alloc::boxed::Box;
 use alloc::sync::Arc;
@@ -38,6 +42,22 @@ pub trait DisplayDriver: Send + Sync {
     /// Son mode.
     fn mode(&self) -> Mode;
 
+    /// Les modes qu'il sait prendre, du plus petit au plus grand (par
+    /// largeur, puis hauteur) ; le sien en fait partie. Par défaut, le sien
+    /// seul.
+    fn modes(&self) -> Vec<Mode> {
+        alloc::vec![self.mode()]
+    }
+
+    /// Ce qu'il est, pour l'utilisateur (`DISPLAY_DEVICE.DeviceString`).
+    fn description(&self) -> &str;
+
+    /// Son identifiant matériel (`DISPLAY_DEVICE.DeviceID`, par exemple
+    /// `PCI\VEN_1234&DEV_1111`) ; vide par défaut.
+    fn hardware_id(&self) -> &str {
+        ""
+    }
+
     /// Appelle `draw` avec sa surface, de la taille de son mode. win32k
     /// n'appelle qu'une fois à la fois ([`draw`]).
     fn with_surface(&self, draw: &mut dyn FnMut(&mut Bitmap<'_>));
@@ -46,9 +66,12 @@ pub trait DisplayDriver: Send + Sync {
     /// cesse de le faire.
     fn acquire(&self);
 
-    /// Passe la surface à `width` × `height` ; `false` quand le pilote ne
-    /// sait pas changer de mode. L'appelant redessine ensuite, une seule
-    /// main à la fois ([`change_mode`]).
+    /// Passe la surface à `width` × `height`, l'un de ses [`modes`] ;
+    /// `false` quand le pilote ne sait pas changer de mode ou que le
+    /// matériel ne suit pas. L'appelant redessine ensuite, une seule main à
+    /// la fois ([`change_mode`]).
+    ///
+    /// [`modes`]: DisplayDriver::modes
     fn set_mode(&self, width: u32, height: u32) -> bool {
         let _ = (width, height);
         false
@@ -219,6 +242,23 @@ pub fn mode() -> Option<Mode> {
     DRIVER.get().map(|driver| driver.mode())
 }
 
+/// Les modes que le pilote sait prendre ([`DisplayDriver::modes`]) ; aucun
+/// sans pilote.
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn modes() -> Vec<Mode> {
+    DRIVER.get().map(|driver| driver.modes()).unwrap_or_default()
+}
+
+/// La description et l'identifiant matériel du pilote ; `None` sans pilote.
+///
+/// # IRQL
+/// Tout niveau.
+pub fn adapter() -> Option<(&'static str, &'static str)> {
+    DRIVER.get().map(|driver| (driver.description(), driver.hardware_id()))
+}
+
 /// Le pilote a pris l'écran : win32k y a dessiné.
 ///
 /// # IRQL
@@ -250,20 +290,31 @@ pub fn draw(mut draw: impl FnMut(&mut Bitmap<'_>)) -> bool {
     true
 }
 
-/// Change le mode de l'écran pour `width` × `height` ; `false` sans pilote
-/// ou quand le matériel ne suit pas. La surface est réécrite à la nouvelle
-/// taille (son contenu est perdu) : l'appelant redessine ensuite, par
-/// [`draw`].
+/// Change le mode de l'écran pour `width` × `height` (PDEVOBJ_bSwitchMode) ;
+/// `false` sans pilote ou quand le matériel ne suit pas. Le curseur est
+/// retiré avant et remis après, à sa place, gardée dans le nouvel écran. La
+/// surface est réécrite à la nouvelle taille (son contenu est perdu) :
+/// l'appelant redessine ensuite, par [`draw`]
+/// (`crate::display_settings`).
 ///
 /// # IRQL
 /// <= DISPATCH_LEVEL.
 pub fn change_mode(width: u32, height: u32) -> bool {
     let Some(driver) = DRIVER.get() else { return false };
-    let _one = DRAWING.lock();
-    if !driver.set_mode(width, height) {
-        return false;
+    let mut cursor = DRAWING.lock();
+    if ACQUIRED.load(Ordering::Acquire) {
+        driver.with_surface(&mut |surface| cursor.hide(surface));
     }
+    let changed = driver.set_mode(width, height);
     let mode = driver.mode();
-    log::info!("win32k: display mode changed to {}x{}", mode.width, mode.height);
-    true
+    // The pointer stays on the screen (the mouse clamps it the same way).
+    cursor.x = cursor.x.clamp(0, mode.width as i32 - 1);
+    cursor.y = cursor.y.clamp(0, mode.height as i32 - 1);
+    if ACQUIRED.load(Ordering::Acquire) {
+        driver.with_surface(&mut |surface| cursor.show(surface));
+    }
+    if changed {
+        log::info!("win32k: display mode changed to {}x{}", mode.width, mode.height);
+    }
+    changed
 }

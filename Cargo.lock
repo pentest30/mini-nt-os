@@ -25,6 +25,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "843867be96c8daad0d758b57df9392b6d8d271134fce549de6ce169ff98a92af"
 
 [[package]]
+name = "bochs-dispi"
+version = "0.1.0"
+dependencies = [
+ "hal",
+ "win32k",
+]
+
+[[package]]
 name = "cm"
 version = "0.1.0"
 dependencies = [
@@ -214,6 +222,7 @@ name = "ntoskrnl"
 version = "0.1.0"
 dependencies = [
  "abi",
+ "bochs-dispi",
  "cm",
  "ex",
  "gopfb",
@@ -287,6 +296,7 @@ name = "ps"
 version = "0.1.0"
 dependencies = [
  "abi",
+ "ex",
  "hal",
  "ke",
  "log",
