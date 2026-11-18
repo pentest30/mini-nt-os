@@ -583,6 +583,8 @@ cargo build -p mino-loader --target x86_64-unknown-uefi --profile kernel
   touches de chaque caractère (clavier américain).
 - `initial-command = PROGRAMME.EXE` : ce programme Win32 de `tests/native/` prend la place de `winlogon.exe` sur le
   disque, et `smss` le lance comme commande initiale (avec `requires = userland, native`).
+- `memory = MiB` : la mémoire de QEMU (256 Mio sinon) ; `high-memory` en donne 8 Gio, comme un PC dont le firmware
+  charge le chargeur au-dessus de 4 Gio.
 - `disk = system` attache l'image du disque RAM comme disque système ATA (`C:`), `boots = N` démarre QEMU N fois sur
   elle (scénario `persistence`) ; `fsck.vfat` (paquet `dosfstools`) vérifie ensuite l'image.
 - `trace-syscalls` active la trace série des appels système, `heartbeat` le battement du timer (`[alive] tick=N`). Le CPU par défaut de QEMU annonce un fabricant AMD (chemin `int 2Eh`) ;
