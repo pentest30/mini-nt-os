@@ -12,7 +12,10 @@
   s'installe ; NtSetInformationFile classe 0x13 (les quatre Inno Setup), le dossier de plugins de NSIS
   (NtQueryInformationFile classe 0x23 ?), NtLockFile (`msiexec`), SumatraPDF (accès mémoire après
   ProcessDebugPort), Dev-C++ (EReadError, GDI et USER manquants), la lenteur des gros fichiers. Tests hôte :
-  `apps`, `mkfat`, `fatfs` (`build_with_free`), `scenario` (clé `app`). **Suite** : corriger ces blocages dans
+  `apps`, `mkfat`, `fatfs` (`build_with_free`), `scenario` (clé `app`). Suite complète (2026-11-18, en trois
+  passages, coupés par des redémarrages de l'hôte) : 154 passages ; `rostests` à 43/84 sous son plancher de 44
+  (la vitesse de cet hôte, déjà connu), `ntfs-readonly` sauté (pas de `mkntfs`) ; `folder-view` et `minmax`
+  (Intel) ne passent que lancés seuls, hors de la charge d'autres QEMU. **Suite** : corriger ces blocages dans
   l'ordre du bilan, en remontant le plancher de chaque application débloquée.
 
 - **La liste des dix applications du M7** (`claude/m7-applications`, M7,
