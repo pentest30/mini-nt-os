@@ -461,6 +461,17 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   `input::deactivate_thread` (IntDeactivateWindow : WM_NCACTIVATE et WM_ACTIVATE inactifs, WM_ACTIVATEAPP,
   WM_KILLFOCUS, Ctrl, Alt et Maj relâchées) dans le thread des fenêtres, tout de suite au thread courant ; les
   événements dépassés partent (FindRemoveEventMsg) ; scénario `async-activate` (`tests/native/asyncact1.c`).
+  M6, étape 45 : le presse-papiers (`win32k::clipboard`, `sys::clipboard`) : un par station
+  (`WindowStation::with_clipboard`, `winsta::stations`), ses données dans des objets `TYPE_CLIPDATA`
+  (NtUserConvertMemHandle, NtUserCreateLocalMemHandle) ; OpenClipboard par fenêtre, EmptyClipboard
+  (WM_DESTROYCLIPBOARD avant le vidage), SetClipboardData (rendu différé : WM_RENDERFORMAT, d'un processus à
+  l'autre), GetClipboardData (CF_TEXT, CF_OEMTEXT, CF_UNICODETEXT synthétisés par `user32`, CF_LOCALE par le noyau),
+  le numéro de séquence d'XP, EnumClipboardFormats (ONEPARAM 0x25), la chaîne des visionneuses (WM_DRAWCLIPBOARD,
+  WM_CHANGECBCHAIN) ; WM_RENDERALLFORMATS au propriétaire détruit, la fin d'un thread ferme ce qu'il a ouvert, les
+  données posées survivent à leur processus. `TEB.CurrentLocale` rempli (Ps : GetThreadLocale rendait 0) ;
+  `QS_SENDMESSAGE` éteint aussi parmi les bits de changement avec le dernier message envoyé (MsgWaitForMultipleObjects
+  n'attendait plus). Scénarios `clipboard` (`tests/native/clip1.c`, deux processus) et `notepad-clipboard`
+  (`tests/native/npclip1.c` : Ctrl+C puis Ctrl+V dans le Bloc-notes).
   M5, la console ([`docs/compat/m5-console.md`](docs/compat/m5-console.md), scénario `console`) : `CONSOLE1.EXE`
   lance par CreateProcessW `THREADS1.EXE` (sous-système CONSOLE, construit par `xtask`) ; NtCreateProcess(Ex) rend le
   PEB dans le TEB du créateur (`NtTib.ArbitraryUserPointer`, comme ReactOS) ; emprunt d'identité

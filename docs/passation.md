@@ -1,5 +1,39 @@
 # Notes de passation
 
+- **Le presse-papiers** (`claude/practical-lumiere-ac5a26`, M6, [`compat/m6-fenetres.md`](compat/m6-fenetres.md),
+  étape 45 ; demandé : il est dans la portée du M6 et c'est un préalable au M7 ; l'étape 44 est celle de la
+  résolution, sur `claude/display-resolution`). `win32k::clipboard` (un presse-papiers par station,
+  `WindowStation::with_clipboard`, les stations vivantes dans `winsta::stations` ; ses données dans des objets
+  `TYPE_CLIPDATA` de la table des handles USER) et `sys::clipboard` : NtUserOpenClipboard, NtUserCloseClipboard,
+  NtUserEmptyClipboard, NtUserSetClipboardData, NtUserGetClipboardData, NtUserIsClipboardFormatAvailable,
+  NtUserCountClipboardFormats, NtUserGetClipboardOwner, NtUserGetOpenClipboardWindow, NtUserGetClipboardViewer,
+  NtUserGetClipboardSequenceNumber, NtUserGetClipboardFormatName, NtUserGetPriorityClipboardFormat,
+  NtUserSetClipboardViewer, NtUserChangeClipboardChain, NtUserConvertMemHandle, NtUserCreateLocalMemHandle,
+  EnumClipboardFormats (ONEPARAM_ROUTINE_ENUMCLIPBOARDFORMATS, 0x25) ; CF_LOCALE fait par le noyau, CF_TEXT,
+  CF_OEMTEXT et CF_UNICODETEXT synthétisés par `user32` ; WM_DESTROYCLIPBOARD, WM_RENDERFORMAT (d'un processus à
+  l'autre), WM_RENDERALLFORMATS, WM_DRAWCLIPBOARD, WM_CHANGECBCHAIN ; les rappels de `win32k::destroy`
+  (`clipboard::release_owner`, `forget_window`, `thread_exit`, et les `TYPE_CLIPDATA` d'un processus fini). ReactOS
+  sert de spécification ; là où il s'écarte d'XP, le test `clipboard.c` de Wine (vérifié sous Windows) : ouverture
+  par fenêtre, WM_DESTROYCLIPBOARD avant le vidage, numéros de séquence, qui peut appeler SetClipboardData, la fin
+  d'un thread qui ferme ce qu'il a ouvert (les écarts sont dans l'étape 45). **Choix** : les données posées
+  survivent à la fin de leur processus (XP : on colle ce qu'a copié un programme fermé) ; seuls les formats encore
+  différés partent avec leur propriétaire. Vu en chemin, corrigé : `QS_SENDMESSAGE` restait levé parmi les bits de
+  changement après le dernier message envoyé (`queue::QueueState::refresh`) : MsgWaitForMultipleObjects de `user32`
+  rendait aussitôt chez tout thread qui avait reçu un message d'un autre thread, sans jamais attendre ; et
+  `TEB.CurrentLocale` restait à 0 (`ps::ethread::create_teb` : GetThreadLocale rendait 0 ; l'auto-test des processus
+  de Ps le vérifie). Tests : hôte (`clipboard`, 14 ; `queue::the_last_sent_message_out_clears_its_change_bit` ;
+  `abi`) ; scénarios `clipboard` (`tests/native/clip1.c`, l'écrivain et le lecteur, deux processus) et
+  `notepad-clipboard` (`tests/native/npclip1.c` : « Mino », Ctrl+A, Ctrl+C, Fin, Ctrl+V deux fois, Ctrl+A, Ctrl+C :
+  « MinoMinoMino »), AMD et Intel. Vingt mutations détectées (liste dans l'étape 45). Lint propre ; toute la
+  suite : 1192 tests hôte, 147 runs de démarrage sur 148 (`ntfs-readonly` sauté faute de `mkntfs`) : `rostests` à
+  43/84 sous son plancher de 44, comme
+  `main` sur cet hôte (l'apitest NtProtectVirtualMemory hors délai), `rostests-kernel32` à 16/29 ; `persistence`
+  (AMD), arrêté avant la première ligne du noyau pendant la suite, passe relancé seul.
+  **Suite** : CF_BITMAP, CF_DIB, CF_PALETTE et les métafichiers (objets de GDI rendus publics, synthèses de GDI),
+  les auditeurs de Vista, les données dans le pool paginé ; mesurer si `explorer` et les autres programmes qui
+  attendent par MsgWaitForMultipleObjects tournaient à vide avant le correctif de `QS_SENDMESSAGE` (sous
+  VirtualBox, la charge du processeur).
+
 - **Activer la fenêtre d'un autre thread (WM_ASYNC_SETACTIVEWINDOW)** (`claude/new-session-696xfc`, M6,
   [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 43 ; demandé après l'étape 42). Activer la fenêtre d'un
   autre thread ne lui envoyait ni WM_NCACTIVATE, ni WM_ACTIVATE, ni WM_SETFOCUS (le noyau peignait son cadre), et le
