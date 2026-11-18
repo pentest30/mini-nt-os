@@ -2,7 +2,7 @@
 # Mino (mini-nt-os)
 <img width="1280" height="800" alt="image-1793803234557" src="https://github.com/pentest30/mini-nt-os/blob/main/mino-5ca4cab-reactos.png" />
 <img width="1280" height="800" alt="image-1793803234557" src="https://github.com/pentest30/mini-nt-os/blob/main/image-1795013743831.png" />
-**Mino is a free, open-source, Windows XP-compatible operating system with a kernel written in Rust.**
+**Mino is an open-source operating system with an NT kernel written in Rust, using the ReactOS 0.4.16 user space.**
 
 The system boots into an XP-style desktop (taskbar, Start menu, file explorer, Control Panel), where users can run 32-bit applications and games from the Windows XP era (2001–2008) without modifying them.
 
