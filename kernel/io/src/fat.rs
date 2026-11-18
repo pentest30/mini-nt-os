@@ -1318,6 +1318,56 @@ impl<D: BlockDevice> FatVolume<D> {
             .map_err(|error| self.delete_entries(&written, error))
     }
 
+    /// The entry before `at` in its directory: the one before it in its
+    /// cluster, or the last one of the cluster before it in the chain (the
+    /// cluster whose FAT entry leads to `at.cluster`, found in the cached
+    /// FAT); `None` at the start of the directory.
+    fn entry_before(&self, at: EntryRef) -> Option<EntryRef> {
+        if at.index > 0 {
+            return Some(EntryRef { index: at.index - 1, ..at });
+        }
+        let previous = (2..self.clusters + 2).find(|&cluster| self.fat_entry(cluster) == Ok(at.cluster))?;
+        Some(EntryRef { cluster: previous, index: self.cluster_bytes() / 32 - 1 })
+    }
+
+    /// Deletes the entry at `at` (FatDeleteDirent): it is marked deleted
+    /// (0xE5), and so are the long-name entries of its name right before it
+    /// (their ordinals 1, 2… back to the one marked last, and the checksum of
+    /// its 8.3 name), then the chain from `first` (0: none) is freed.
+    pub fn delete_entry(&self, at: EntryRef, first: u32) -> Result<(), FatError> {
+        let mut entry = self.read_entry(at)?;
+        let mut short = [0u8; 11];
+        short.copy_from_slice(&entry[..11]);
+        let checksum = short_name_checksum(&short);
+        entry[0] = 0xE5;
+        self.write_entry(at, &entry)?;
+        let mut after = at;
+        // VFAT: a name of 255 units takes 20 entries.
+        for ordinal in 1..=20u8 {
+            let Some(before) = self.entry_before(after) else { break };
+            let mut part = self.read_entry(before)?;
+            if part[11] != ATTR_LONG_NAME || part[0] == 0xE5 || part[0] & 0x1F != ordinal || part[13] != checksum {
+                break;
+            }
+            let last = part[0] & 0x40 != 0;
+            part[0] = 0xE5;
+            self.write_entry(before, &part)?;
+            if last {
+                break;
+            }
+            after = before;
+        }
+        if first != 0 {
+            self.free_chain(first)?;
+        }
+        Ok(())
+    }
+
+    /// The directory at `cluster` holds nothing but `.` and `..`.
+    pub fn is_empty_directory(&self, cluster: u32) -> Result<bool, FatError> {
+        Ok(self.dir_entries(cluster)?.iter().all(|entry| entry.name == "." || entry.name == ".."))
+    }
+
     /// Marks the entries at `written` deleted (0xE5): the long-name entries
     /// of a name whose 8.3 entry could not follow them, which would stay
     /// orphans. Returns `error`, the failure that stopped the name.

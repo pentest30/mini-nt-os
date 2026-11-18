@@ -39,8 +39,12 @@
 //! à casse mixte (`Recent`), des entrées de nom long devant son entrée 8.3,
 //! le nom en majuscules sans `~N`.
 //!
-//! Pas encore : la suppression, le renommage ; le dernier accès à la
-//! lecture.
+//! [`FatMount::delete`] efface un fichier ou un répertoire vide (son
+//! entrée, celles de son nom long, ses clusters), quand le gestionnaire d'E/S
+//! ferme le dernier handle d'un fichier dont l'effacement est en attente
+//! (`Volume::cleanup`).
+//!
+//! Pas encore : le renommage ; le dernier accès à la lecture.
 
 use alloc::boxed::Box;
 use alloc::string::String;
@@ -52,10 +56,10 @@ use abi::file::{
     FILE_DEVICE_IS_MOUNTED,
 };
 use abi::ntstatus::{
-    NtStatus, STATUS_DISK_CORRUPT_ERROR, STATUS_DISK_FULL, STATUS_FILE_CORRUPT_ERROR, STATUS_INVALID_DEVICE_REQUEST,
-    STATUS_INVALID_PARAMETER, STATUS_IO_DEVICE_ERROR, STATUS_MEDIA_WRITE_PROTECTED, STATUS_NOT_A_DIRECTORY,
-    STATUS_OBJECT_NAME_COLLISION, STATUS_OBJECT_NAME_INVALID, STATUS_OBJECT_NAME_NOT_FOUND,
-    STATUS_OBJECT_PATH_NOT_FOUND, STATUS_UNRECOGNIZED_VOLUME,
+    NtStatus, STATUS_CANNOT_DELETE, STATUS_DIRECTORY_NOT_EMPTY, STATUS_DISK_CORRUPT_ERROR, STATUS_DISK_FULL,
+    STATUS_FILE_CORRUPT_ERROR, STATUS_INVALID_DEVICE_REQUEST, STATUS_INVALID_PARAMETER, STATUS_IO_DEVICE_ERROR,
+    STATUS_MEDIA_WRITE_PROTECTED, STATUS_NOT_A_DIRECTORY, STATUS_OBJECT_NAME_COLLISION, STATUS_OBJECT_NAME_INVALID,
+    STATUS_OBJECT_NAME_NOT_FOUND, STATUS_OBJECT_PATH_NOT_FOUND, STATUS_UNRECOGNIZED_VOLUME,
 };
 use hal::sync::KSpinLock;
 
@@ -423,6 +427,37 @@ impl FatMount {
     /// <= DISPATCH_LEVEL.
     pub fn set_size(&self, node: &Node, size: u32) -> Result<Node, NtStatus> {
         self.change(node, |fat, first, old, hint| fat.set_file_size(first, old, size, hint))
+    }
+
+    /// Efface `node` (le dernier handle d'un fichier dont l'effacement était
+    /// en attente) : son entrée et celles de son nom long, puis ses
+    /// clusters. `STATUS_CANNOT_DELETE` pour la racine, qui n'a pas
+    /// d'entrée ; `STATUS_DIRECTORY_NOT_EMPTY` pour un répertoire qui tient
+    /// quelque chose.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn delete(&self, node: &Node) -> Result<(), NtStatus> {
+        let _guard = self.lock.lock();
+        let node = self.current_locked(node)?;
+        let Some(at) = node.entry else { return Err(STATUS_CANNOT_DELETE) };
+        if node.directory && !self.fat.is_empty_directory(node.first_cluster).map_err(device_error)? {
+            return Err(STATUS_DIRECTORY_NOT_EMPTY);
+        }
+        self.fat.delete_entry(at, node.first_cluster).map_err(device_error)
+    }
+
+    /// Le répertoire `node` ne tient rien (ses entrées `.` et `..` seules).
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn is_empty_directory(&self, node: &Node) -> Result<bool, NtStatus> {
+        let _guard = self.lock.lock();
+        let node = self.current_locked(node)?;
+        if !node.directory {
+            return Ok(false);
+        }
+        self.fat.is_empty_directory(node.first_cluster).map_err(device_error)
     }
 
     /// Change la chaîne et la taille du fichier `node` par `change`, puis

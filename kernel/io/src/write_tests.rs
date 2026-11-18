@@ -840,3 +840,116 @@ fn set_end_of_file_sets_the_allocation_too() {
     let dir = root.create_child("is-1234.tmp", true, 0).unwrap();
     assert_eq!(dir.attribute_tag_information().unwrap().file_attributes, FILE_ATTRIBUTE_DIRECTORY);
 }
+
+#[test]
+fn a_deleted_entry_takes_its_long_name_across_clusters() {
+    // A directory of one cluster (16 entries of 512 bytes): `.`, `..`, 12
+    // short names, then a long name of 2 parts whose 8.3 entry is the
+    // first of the next cluster.
+    let volume = FatVolume::mount(fat32(FSCK_CLUSTERS)).unwrap();
+    let root = volume.root_cluster();
+    let (dir, _) = volume.create_directory(root, "Spill", 3).unwrap();
+    for i in 0..12 {
+        volume.add_entry_long(dir, &std::format!("F{i}.TXT"), 0x20, 3).unwrap();
+    }
+    let long = "A long name across two.txt";
+    let at = volume.add_entry_long(dir, long, 0x20, 3).unwrap();
+    assert_eq!(at.index, 0, "its 8.3 entry begins the second cluster");
+    assert_ne!(at.cluster, dir);
+    let first = volume.allocate_cluster(3).unwrap();
+    let free = volume.free_clusters().unwrap();
+    volume.delete_entry(at, first).unwrap();
+    assert_eq!(volume.free_clusters().unwrap(), free + 1, "its chain freed");
+    let names: Vec<String> = volume.dir_entries(dir).unwrap().into_iter().map(|entry| entry.name).collect();
+    assert!(!names.iter().any(|name| name == long), "gone, long name and all");
+    assert_eq!(names.len(), 14, "`.`, `..` and the 12 others stay");
+    for index in [14, 15] {
+        let part = volume.read_entry(crate::fat::EntryRef { cluster: dir, index }).unwrap();
+        assert_eq!((part[0], part[11]), (0xE5, 0x0F), "a long-name part, deleted");
+    }
+    let neighbour = volume.read_entry(crate::fat::EntryRef { cluster: dir, index: 13 }).unwrap();
+    assert_eq!(&neighbour[..8], b"F11     ", "the entry before the name stays");
+    assert!(!volume.is_empty_directory(dir).unwrap());
+    let (empty, _) = volume.create_directory(root, "Empty", 3).unwrap();
+    assert!(volume.is_empty_directory(empty).unwrap(), "`.` and `..` alone");
+}
+
+#[test]
+fn a_file_goes_with_the_last_handle_once_its_deletion_is_pending() {
+    // DeleteFileW: open with DELETE, FileDispositionInformation, close.
+    // Inno Setup's loader deletes its setup.tmp so, NSIS the temporary file
+    // whose name becomes its plug-ins directory; neither could.
+    use crate::{check_open, File};
+    use abi::file::*;
+    use abi::ntstatus::*;
+    use ob::{AccessMask, HandleAttributes, HandleTable};
+
+    let (volume, disk) = mounted(FSCK_CLUSTERS);
+    let table = HandleTable::new();
+    let open = |path: &str, options: u32| {
+        let file = File::open(&volume, path).unwrap();
+        let handle = table.insert(file.clone(), AccessMask(0x001F_01FF), HandleAttributes::default()).unwrap();
+        file.handle_opened(options);
+        (file, handle)
+    };
+    let root = File::open(&volume, "\\").unwrap();
+    let free = volume.space().unwrap().free_clusters;
+    root.create_child("A temporary file.tmp", false, 0).unwrap().write(0, &[5u8; 3000]).unwrap();
+
+    // Two opens: the file waits for the second.
+    let (first, first_handle) = open("\\A temporary file.tmp", 0);
+    let (second, second_handle) = open("\\a temporary file.tmp", 0);
+    first.set_delete_pending(true).unwrap();
+    assert_eq!(second.standard_information().unwrap().delete_pending, 1, "seen by every open");
+    let again = File::open(&volume, "\\A temporary file.tmp").unwrap();
+    assert_eq!(check_open(&again, FILE_OPEN, 0, AccessMask::NONE), Err(STATUS_DELETE_PENDING));
+    table.close(first_handle).unwrap();
+    assert!(File::open(&volume, "\\A temporary file.tmp").is_ok(), "the second open still holds it");
+    assert_eq!(second.read_all().unwrap(), vec![5u8; 3000]);
+    table.close(second_handle).unwrap();
+    assert_eq!(File::open(&volume, "\\A temporary file.tmp").err(), Some(STATUS_OBJECT_NAME_NOT_FOUND));
+    assert_eq!(volume.space().unwrap().free_clusters, free, "its clusters given back");
+    assert!(volume.list(&volume.root()).unwrap().is_empty());
+
+    // Called off, the file stays; FILE_DELETE_ON_CLOSE deletes it.
+    root.create_child("KEEP.TXT", false, 0).unwrap();
+    let (kept, kept_handle) = open("\\KEEP.TXT", 0);
+    kept.set_delete_pending(true).unwrap();
+    kept.set_delete_pending(false).unwrap();
+    table.close(kept_handle).unwrap();
+    let (_, on_close) = open("\\KEEP.TXT", FILE_DELETE_ON_CLOSE);
+    assert!(File::open(&volume, "\\KEEP.TXT").is_ok());
+    table.close(on_close).unwrap();
+    assert_eq!(File::open(&volume, "\\KEEP.TXT").err(), Some(STATUS_OBJECT_NAME_NOT_FOUND));
+
+    // What cannot be deleted: a read-only file, a directory that holds
+    // something, the root.
+    root.create_child("RO.TXT", false, FILE_ATTRIBUTE_READONLY).unwrap();
+    let (locked, locked_handle) = open("\\RO.TXT", 0);
+    assert_eq!(locked.set_delete_pending(true), Err(STATUS_CANNOT_DELETE));
+    assert_eq!(check_open(&locked, FILE_OPEN, FILE_DELETE_ON_CLOSE, AccessMask::NONE), Err(STATUS_CANNOT_DELETE));
+    table.close(locked_handle).unwrap();
+    let plugins = root.create_child("nsa1.tmp", true, 0).unwrap();
+    plugins.create_child("System.dll", false, 0).unwrap();
+    let (full, full_handle) = open("\\nsa1.tmp", 0);
+    assert_eq!(full.set_delete_pending(true), Err(STATUS_DIRECTORY_NOT_EMPTY));
+    let (dll, dll_handle) = open("\\nsa1.tmp\\System.dll", 0);
+    dll.set_delete_pending(true).unwrap();
+    table.close(dll_handle).unwrap();
+    full.set_delete_pending(true).unwrap();
+    table.close(full_handle).unwrap();
+    assert_eq!(File::open(&volume, "\\nsa1.tmp").err(), Some(STATUS_OBJECT_NAME_NOT_FOUND), "empty, then gone");
+    assert_eq!(root.set_delete_pending(true), Err(STATUS_ACCESS_DENIED));
+    let (root_open, root_handle) = open("\\", 0);
+    assert_eq!(check_open(&root_open, FILE_OPEN, FILE_DELETE_ON_CLOSE, AccessMask::NONE), Err(STATUS_CANNOT_DELETE));
+    table.close(root_handle).unwrap();
+    assert_eq!(volume.list(&volume.root()).unwrap(), ["RO.TXT"]);
+    drop((root, again, first, second, kept, locked, plugins, full, dll, root_open));
+
+    volume.flush().expect("flush the cached FAT before fsck");
+    let bytes = core::mem::take(&mut *disk.0.lock());
+    match fsck(&bytes) {
+        Some(result) => result.unwrap_or_else(|report| panic!("fsck.vfat: {report}")),
+        None => std::eprintln!("fsck.vfat not found: the volume is not checked (dosfstools)"),
+    }
+}
