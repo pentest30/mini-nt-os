@@ -9,7 +9,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | Table | Implémentés | Services |
 |---|---:|---:|
 | ntoskrnl | 131 | 296 |
-| win32k | 198 | 737 |
+| win32k | 215 | 737 |
 
 ## ntoskrnl
 
@@ -640,24 +640,24 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1141` | `NtUserCallNoParam` | 1 | ✅ |
 | `0x1142` | `NtUserCallOneParam` | 2 | ✅ |
 | `0x1143` | `NtUserCallTwoParam` | 3 | ✅ |
-| `0x1144` | `NtUserChangeClipboardChain` | 2 |  |
+| `0x1144` | `NtUserChangeClipboardChain` | 2 | ✅ |
 | `0x1145` | `NtUserChangeDisplaySettings` | 4 | ✅ |
 | `0x1146` | `NtUserCheckImeHotKey` | 2 |  |
 | `0x1147` | `NtUserCheckMenuItem` | 3 | ✅ |
 | `0x1148` | `NtUserChildWindowFromPointEx` | 4 |  |
 | `0x1149` | `NtUserClipCursor` | 1 |  |
-| `0x114a` | `NtUserCloseClipboard` | 0 |  |
+| `0x114a` | `NtUserCloseClipboard` | 0 | ✅ |
 | `0x114b` | `NtUserCloseDesktop` | 1 | ✅ |
 | `0x114c` | `NtUserCloseWindowStation` | 1 | ✅ |
 | `0x114d` | `NtUserConsoleControl` | 3 | ✅ |
-| `0x114e` | `NtUserConvertMemHandle` | 2 |  |
+| `0x114e` | `NtUserConvertMemHandle` | 2 | ✅ |
 | `0x114f` | `NtUserCopyAcceleratorTable` | 3 | ✅ |
-| `0x1150` | `NtUserCountClipboardFormats` | 0 |  |
+| `0x1150` | `NtUserCountClipboardFormats` | 0 | ✅ |
 | `0x1151` | `NtUserCreateAcceleratorTable` | 2 | ✅ |
 | `0x1152` | `NtUserCreateCaret` | 4 | ✅ |
 | `0x1153` | `NtUserCreateDesktop` | 5 | ✅ |
 | `0x1154` | `NtUserCreateInputContext` | 1 |  |
-| `0x1155` | `NtUserCreateLocalMemHandle` | 4 |  |
+| `0x1155` | `NtUserCreateLocalMemHandle` | 4 | ✅ |
 | `0x1156` | `NtUserCreateWindowEx` | 15 | ✅ |
 | `0x1157` | `NtUserCreateWindowStation` | 7 | ✅ |
 | `0x1158` | `NtUserDdeGetQualityOfService` | 3 |  |
@@ -680,7 +680,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1169` | `NtUserDrawCaptionTemp` | 7 |  |
 | `0x116a` | `NtUserDrawIconEx` | 11 | ✅ |
 | `0x116b` | `NtUserDrawMenuBarTemp` | 5 |  |
-| `0x116c` | `NtUserEmptyClipboard` | 0 |  |
+| `0x116c` | `NtUserEmptyClipboard` | 0 | ✅ |
 | `0x116d` | `NtUserEnableMenuItem` | 3 | ✅ |
 | `0x116e` | `NtUserEnableScrollBar` | 3 | ✅ |
 | `0x116f` | `NtUserEndDeferWindowPosEx` | 2 | ✅ |
@@ -704,11 +704,11 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1181` | `NtUserGetCaretPos` | 1 | ✅ |
 | `0x1182` | `NtUserGetClassInfo` | 5 | ✅ |
 | `0x1183` | `NtUserGetClassName` | 3 | ✅ |
-| `0x1184` | `NtUserGetClipboardData` | 2 |  |
-| `0x1185` | `NtUserGetClipboardFormatName` | 3 |  |
-| `0x1186` | `NtUserGetClipboardOwner` | 0 |  |
-| `0x1187` | `NtUserGetClipboardSequenceNumber` | 0 |  |
-| `0x1188` | `NtUserGetClipboardViewer` | 0 |  |
+| `0x1184` | `NtUserGetClipboardData` | 2 | ✅ |
+| `0x1185` | `NtUserGetClipboardFormatName` | 3 | ✅ |
+| `0x1186` | `NtUserGetClipboardOwner` | 0 | ✅ |
+| `0x1187` | `NtUserGetClipboardSequenceNumber` | 0 | ✅ |
+| `0x1188` | `NtUserGetClipboardViewer` | 0 | ✅ |
 | `0x1189` | `NtUserGetClipCursor` | 1 |  |
 | `0x118a` | `NtUserGetComboBoxInfo` | 2 | ✅ |
 | `0x118b` | `NtUserGetControlBrush` | 3 | ✅ |
@@ -739,8 +739,8 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x11a4` | `NtUserGetMessage` | 4 | ✅ |
 | `0x11a5` | `NtUserGetMouseMovePointsEx` | 5 |  |
 | `0x11a6` | `NtUserGetObjectInformation` | 5 |  |
-| `0x11a7` | `NtUserGetOpenClipboardWindow` | 0 |  |
-| `0x11a8` | `NtUserGetPriorityClipboardFormat` | 2 |  |
+| `0x11a7` | `NtUserGetOpenClipboardWindow` | 0 | ✅ |
+| `0x11a8` | `NtUserGetPriorityClipboardFormat` | 2 | ✅ |
 | `0x11a9` | `NtUserGetProcessWindowStation` | 0 | ✅ |
 | `0x11aa` | `NtUserGetRawInputBuffer` | 3 |  |
 | `0x11ab` | `NtUserGetRawInputData` | 5 |  |
@@ -767,7 +767,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x11c0` | `NtUserInternalGetWindowText` | 3 | ✅ |
 | `0x11c1` | `NtUserInvalidateRect` | 3 | ✅ |
 | `0x11c2` | `NtUserInvalidateRgn` | 3 | ✅ |
-| `0x11c3` | `NtUserIsClipboardFormatAvailable` | 1 |  |
+| `0x11c3` | `NtUserIsClipboardFormatAvailable` | 1 | ✅ |
 | `0x11c4` | `NtUserKillTimer` | 2 | ✅ |
 | `0x11c5` | `NtUserLoadKeyboardLayoutEx` | 7 | ✅ |
 | `0x11c6` | `NtUserLockWindowStation` | 1 |  |
@@ -784,7 +784,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x11d1` | `NtUserNotifyIMEStatus` | 3 |  |
 | `0x11d2` | `NtUserNotifyProcessCreate` | 4 |  |
 | `0x11d3` | `NtUserNotifyWinEvent` | 4 |  |
-| `0x11d4` | `NtUserOpenClipboard` | 2 |  |
+| `0x11d4` | `NtUserOpenClipboard` | 2 | ✅ |
 | `0x11d5` | `NtUserOpenDesktop` | 3 | ✅ |
 | `0x11d6` | `NtUserOpenInputDesktop` | 3 |  |
 | `0x11d7` | `NtUserOpenWindowStation` | 2 | ✅ |
@@ -822,8 +822,8 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x11f7` | `NtUserSetCapture` | 1 | ✅ |
 | `0x11f8` | `NtUserSetClassLong` | 4 |  |
 | `0x11f9` | `NtUserSetClassWord` | 3 |  |
-| `0x11fa` | `NtUserSetClipboardData` | 3 |  |
-| `0x11fb` | `NtUserSetClipboardViewer` | 1 |  |
+| `0x11fa` | `NtUserSetClipboardData` | 3 | ✅ |
+| `0x11fb` | `NtUserSetClipboardViewer` | 1 | ✅ |
 | `0x11fc` | `NtUserSetConsoleReserveKeys` | 2 |  |
 | `0x11fd` | `NtUserSetCursor` | 1 | ✅ |
 | `0x11fe` | `NtUserSetCursorContents` | 2 |  |

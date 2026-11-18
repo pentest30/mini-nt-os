@@ -303,7 +303,8 @@ ChangeDisplaySettings, le panneau Affichage). Pour le shell : ce que la fenêtre
 (SetActiveWindow, EnableWindow, SetParent, EnumDisplayMonitors, les chemins de GDI, ReadDirectoryChangesW ; étape 36
 de [`m6-fenetres.md`](m6-fenetres.md)) ; les fenêtres de crochet du shell (RegisterShellHookWindow : les boutons de la barre des tâches,
 HSHELL_TASKMAN pour Ctrl+Échap) ; EnableWindow, Tab dans les boîtes de `msgina` ; la zone de travail (SPI_SETWORKAREA), FindWindowEx, SetParent, TrackMouseEvent ; le papier peint
-(SPI_SETDESKWALLPAPER), la station des services, le presse-papiers, les notifications, `NtNotifyChangeKey`.
+(SPI_SETDESKWALLPAPER), la station des services, les notifications, `NtNotifyChangeKey` (le presse-papiers est
+fait : étape 45 de [`m6-fenetres.md`](m6-fenetres.md)).
 
 ## Tests
 

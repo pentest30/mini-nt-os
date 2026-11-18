@@ -75,6 +75,9 @@ pub const ERROR_TLW_WITH_WSCHILD: u32 = 1406;
 pub const ERROR_WINDOW_OF_OTHER_THREAD: u32 = 1408;
 /// ERROR_HOTKEY_ALREADY_REGISTERED: the key and modifiers have a hotkey.
 pub const ERROR_HOTKEY_ALREADY_REGISTERED: u32 = 1409;
+/// ERROR_CLIPBOARD_NOT_OPEN: the clipboard is not open, or not by this
+/// thread.
+pub const ERROR_CLIPBOARD_NOT_OPEN: u32 = 1418;
 /// ERROR_CANNOT_FIND_WND_CLASS.
 pub const ERROR_CANNOT_FIND_WND_CLASS: u32 = 1407;
 /// ERROR_INVALID_MONITOR_HANDLE.

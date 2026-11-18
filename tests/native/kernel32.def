@@ -61,3 +61,8 @@ WriteConsoleW@20
 WriteFile@20
 GetDriveTypeW@4
 GetLogicalDrives@0
+GetThreadLocale@0
+GlobalAlloc@8
+GlobalLock@4
+GlobalSize@4
+GlobalUnlock@4

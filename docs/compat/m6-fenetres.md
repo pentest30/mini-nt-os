@@ -2160,3 +2160,76 @@ acceptée, CDS_NORESET seul accepté, CDS_TEST qui change le mode, le registre n
 pilote qui garde son mode. Quatre font échouer `display-panel` : sans EnableWindow, sans TransparentBlt, le
 registre non écrit, le pilote qui garde son mode. Deux font échouer `display-desktop` : sans WM_DISPLAYCHANGE (la
 barre des tâches reste en bas de l'ancien écran, hors du nouveau), le pilote qui garde son mode.
+
+## Étape 45 : le presse-papiers (OpenClipboard, SetClipboardData, GetClipboardData, la chaîne des visionneuses)
+
+Demandé : le presse-papiers est dans la portée du M6 (05) et c'est un préalable au M7 (les applications au quotidien) ;
+aucun de ses services n'existait (le Bloc-notes copiait et collait dans le vide).
+
+`clipboard.c` de win32k et de `user32` (ReactOS) comme spécification ; là où ReactOS s'écarte d'XP, le test
+`clipboard.c` de Wine (`modules/rostests/winetests/user32/`, vérifié sous Windows) ; `win32k::clipboard`,
+`ntoskrnl::sys::clipboard`.
+
+| Partie | Ce que fait Mino |
+|---|---|
+| Un presse-papiers par station (`clipboard::Clipboard`, `WindowStation::with_clipboard`) | ses formats dans l'ordre où ils sont posés, chacun avec ses données : un objet `TYPE_CLIPDATA`, une valeur (objet de GDI, nombre), un rendu différé ou un format synthétisé ; la fenêtre et le thread qui l'ont ouvert, son propriétaire, la première visionneuse, son numéro de séquence ; atteint par la station du processus si son handle porte WINSTA_ACCESSCLIPBOARD (IntGetWinStaForCbAccess) ; les stations vivantes connues (`winsta::stations`) |
+| Les données (`clipboard::create_data`, `data`, `destroy_data`) | NtUserConvertMemHandle : les octets de l'appelant (au plus 64 Mio) dans un objet `TYPE_CLIPDATA` de la table des handles USER, au processus jusqu'à ce qu'un presse-papiers le prenne (`handles::set_process(h, 0)`) ; NtUserCreateLocalMemHandle les rend (taille, puis octets) ; un objet que plus aucun format ne tient est rendu ; la fin d'un processus rend ceux qu'il a gardés |
+| OpenClipboard, CloseClipboard, EmptyClipboard | ouvert avec une fenêtre ou sans ; refusé (`ERROR_ACCESS_DENIED`) s'il l'est avec une autre fenêtre, et ouvert avec la même il passe au thread qui l'ouvre (XP) ; EmptyClipboard envoie WM_DESTROYCLIPBOARD au propriétaire, qui voit encore ses formats, puis vide et donne la propriété à la fenêtre qui l'a ouvert ; CloseClipboard, si le contenu a changé, ajoute les formats synthétisés et envoie WM_DRAWCLIPBOARD à la première visionneuse |
+| SetClipboardData | par le thread qui l'a ouvert, ou par un autre quand la fenêtre qui l'a ouvert est le propriétaire, ou pendant un rendu différé (XP) ; sans données, un rendu différé ; `ERROR_CLIPBOARD_NOT_OPEN` sinon |
+| GetClipboardData (GETCLIPBDATA) | par le thread qui l'a ouvert ; un format de texte synthétisé rend les données de sa source (CF_UNICODETEXT, CF_TEXT, puis CF_OEMTEXT), que `user32` convertit par les pages de code et repose ; un format différé est demandé au propriétaire par WM_RENDERFORMAT (d'un processus à l'autre aussi) ; CF_TEXT porte les données de CF_LOCALE |
+| Les formats synthétisés (IntAddSynthesizedFormats) | à la fermeture : CF_LOCALE (les paramètres régionaux du thread, `TEB.CurrentLocale`, des données du noyau), puis CF_TEXT, CF_OEMTEXT, CF_UNICODETEXT qui manquent, dans l'ordre d'XP |
+| Le numéro de séquence | +1 à chaque EmptyClipboard, chaque SetClipboardData, chaque format synthétisé ajouté, et quand les formats différés partent avec leur propriétaire ; rien pour un rendu (différé ou synthétisé) ni pour une fermeture seule |
+| Les autres services | IsClipboardFormatAvailable, CountClipboardFormats, EnumClipboardFormats (ONEPARAM_ROUTINE_ENUMCLIPBOARDFORMATS, 0x25), GetClipboardOwner, GetOpenClipboardWindow, GetClipboardSequenceNumber, GetClipboardFormatName (les atomes de USER de RegisterClipboardFormat), GetPriorityClipboardFormat |
+| La chaîne des visionneuses | SetClipboardViewer (WM_DRAWCLIPBOARD à la nouvelle, rend la précédente), ChangeClipboardChain (WM_CHANGECBCHAIN à la tête, après le remplacement), GetClipboardViewer ; WM_DRAWCLIPBOARD est une notification, dans la file du thread de la visionneuse |
+| La destruction (`clipboard::release_owner`, `forget_window`, `thread_exit`) | le propriétaire détruit par DestroyWindow reçoit WM_RENDERALLFORMATS s'il a des formats différés, avant WM_DESTROY ; puis il ne l'est plus, ses formats encore différés partent (et les formats synthétisés qui n'ont plus de source) et la visionneuse en est prévenue ; une fenêtre libérée cesse d'être le propriétaire, la fenêtre qui l'a ouvert (il se ferme) et la visionneuse ; un thread qui finit ferme le presse-papiers qu'il a ouvert ; les données posées restent après la fin de leur processus |
+
+Écarts voulus avec ReactOS (pour faire comme XP, d'après le test de Wine) : WM_DESTROYCLIPBOARD avant que les formats
+partent ; le numéro de séquence (ReactOS ne le fait croître qu'à EmptyClipboard, son `user32` ne demandant jamais
+`fIncSerialNumber`, que Mino ignore) ; SetClipboardData refusé à un autre thread hors des deux cas d'XP (ReactOS le
+permet à tout thread dès que le presse-papiers est ouvert) ; WM_RENDERALLFORMATS au seul propriétaire qui a des formats
+différés (ReactOS l'envoie à chaque destruction de fenêtre) ; un thread qui finit ferme le presse-papiers qu'il a
+ouvert ; SetClipboardViewer ne perd pas un changement en attente ; un objet `TYPE_CLIPDATA` donné à un appel qui échoue
+est rendu à la fin du processus.
+
+Pas encore : CF_BITMAP, CF_PALETTE et les métafichiers (des objets de GDI rendus publics ; CF_DIB et CF_BITMAP,
+CF_ENHMETAFILE et CF_METAFILEPICT synthétisés l'un de l'autre), les auditeurs de Vista (AddClipboardFormatListener,
+WM_CLIPBOARDUPDATE), les données dans le pool paginé.
+
+Vu en chemin, corrigé : le bit de changement `QS_SENDMESSAGE` restait levé une fois sorti le dernier message envoyé
+(`queue::QueueState::refresh` n'éteignait que le bit de réveil ; ReactOS éteint les deux, ClearMsgBitsMask). Or
+MsgWaitForMultipleObjects de `user32` rend aussitôt, sans attendre, quand un bit de changement du masque est levé dans
+le `CLIENTTHREADINFO` : un thread qui avait reçu un message d'un autre thread n'attendait plus jamais (l'écrivain du
+scénario tournait à vide, sans voir la fin du lecteur ; tout programme qui attend ainsi tournait de même). Et
+`TEB.CurrentLocale` restait à 0 (MmCreateTeb y met PsDefaultThreadLocaleId) : GetThreadLocale rendait 0.
+
+Le banc d'essai : `tests/native/clip1.c` (`CLIP1.EXE`, MinGW), scénario `clipboard`, à la place de `winlogon.exe` ;
+il se relance comme lecteur (`C:\CLIP1.EXE reader`), un autre processus. 1. SetClipboardViewer(V) : WM_DRAWCLIPBOARD
+à V ; une fenêtre inconnue refusée. 2. Fermé : CloseClipboard et SetClipboardData refusés (1418) ; ouvert par W, un
+autre thread ne peut ni l'ouvrir avec V (5) ni le vider ni le lire (1418). 3. EmptyClipboard (W propriétaire),
+CF_UNICODETEXT « Mino clipboard: é », un format enregistré, un format différé ; ouvert, 3 formats ; fermé, 6 (CF_LOCALE,
+CF_TEXT, CF_OEMTEXT ajoutés, la séquence +7), dans l'ordre d'XP ; le nom du format enregistré (tronqué à 5
+caractères), GetPriorityClipboardFormat. 4. Le lecteur lit le texte en CF_UNICODETEXT, en CF_TEXT (é : E9, page de
+code 1252) et en CF_OEMTEXT (82, page 437), CF_LOCALE (00000409, comme GetThreadLocale), le format enregistré par son
+nom, le format différé (WM_RENDERFORMAT à W, d'un processus à l'autre ; W le pose pendant le rendu) ; la séquence n'a
+pas changé ; puis il vide (WM_DESTROYCLIPBOARD à W, qui voit encore ses 6 formats et se voit propriétaire), pose
+CF_TEXT et finit sans fermer. 5. L'écrivain : sa fin l'a fermé (V a reçu WM_DRAWCLIPBOARD 4 fois), sans propriétaire,
+le texte du lecteur après sa fin, aussi en CF_UNICODETEXT. 6. La chaîne : SetClipboardViewer(W) rend V ;
+ChangeClipboardChain(V, 0) va à W, la tête (WM_CHANGECBCHAIN) ; la tête part ; une fenêtre inconnue (1400).
+7. W2 propriétaire de deux formats différés est détruit : WM_RENDERALLFORMATS, où il pose le texte seul ; sans
+propriétaire ensuite, l'autre format différé parti, la séquence +2. Le Bloc-notes : `tests/native/npclip1.c`
+(`NPCLIP1.EXE`), scénario `notepad-clipboard` : une fenêtre visionneuse lit le presse-papiers à chaque
+WM_DRAWCLIPBOARD ; QEMU tape « Mino », Ctrl+A et Ctrl+C (les accélérateurs du Bloc-notes : EM_SETSEL, WM_COPY à son
+contrôle Edit), puis Fin, Ctrl+V deux fois (WM_PASTE), Ctrl+A et Ctrl+C : la visionneuse lit « Mino », puis
+« MinoMinoMino », en CF_TEXT synthétisé, le propriétaire étant une fenêtre du Bloc-notes.
+
+Tests : hôte (`clipboard` : 14, le modèle d'un presse-papiers ; `queue::the_last_sent_message_out_clears_its_change_bit` ;
+`abi` : GETCLIPBDATA et SETCLIPBDATA) ; `clipboard` et `notepad-clipboard` sur AMD et Intel. Vingt mutations font
+échouer chacune l'un des deux scénarios : l'ouverture par une autre fenêtre permise ; WM_DESTROYCLIPBOARD après le
+vidage ; SetClipboardData sans numéro de séquence ; un rendu qui le fait croître ; pas de CF_LOCALE ; un format
+synthétisé sans source ; pas de WM_RENDERFORMAT ; SetClipboardData refusé pendant un rendu ; la fin d'un thread qui
+laisse le presse-papiers ouvert ; pas de WM_RENDERALLFORMATS ; un propriétaire détruit qui garde ses formats
+différés ; la tête de la chaîne pas remplacée ; pas de WM_DRAWCLIPBOARD à la fermeture ; GetPriorityClipboardFormat
+qui rend 0 au lieu de -1 ; un nom de format qui n'est pas tronqué à son tampon ; le TEB sans `CurrentLocale` (l'auto-test
+des processus de Ps : STOP) ; le bit de changement de `QS_SENDMESSAGE` gardé ; les données d'un processus gardées à sa
+fin (`(CLIP1.EXE) leaves`) ; et pour `notepad-clipboard`, EmptyClipboard qui ne donne pas de propriétaire,
+NtUserCreateLocalMemHandle qui ne copie rien.
