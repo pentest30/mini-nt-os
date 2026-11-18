@@ -35,6 +35,7 @@ mod atom;
 mod callback;
 mod caret;
 mod class;
+mod clipboard;
 mod completion;
 mod console;
 mod cursor;
@@ -295,6 +296,23 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtUserCallNoParam, Handler::Status(mouse::nt_user_call_no_param)),
     (services::NtUserCallOneParam, Handler::Status(message::nt_user_call_one_param)),
     (services::NtUserCallTwoParam, Handler::Status(user::nt_user_call_two_param)),
+    (services::NtUserChangeClipboardChain, Handler::Status(clipboard::nt_user_change_clipboard_chain)),
+    (services::NtUserCloseClipboard, Handler::Status(clipboard::nt_user_close_clipboard)),
+    (services::NtUserConvertMemHandle, Handler::Status(clipboard::nt_user_convert_mem_handle)),
+    (services::NtUserCountClipboardFormats, Handler::Status(clipboard::nt_user_count_clipboard_formats)),
+    (services::NtUserCreateLocalMemHandle, Handler::Status(clipboard::nt_user_create_local_mem_handle)),
+    (services::NtUserEmptyClipboard, Handler::Status(clipboard::nt_user_empty_clipboard)),
+    (services::NtUserGetClipboardData, Handler::Status(clipboard::nt_user_get_clipboard_data)),
+    (services::NtUserGetClipboardFormatName, Handler::Status(clipboard::nt_user_get_clipboard_format_name)),
+    (services::NtUserGetClipboardOwner, Handler::Status(clipboard::nt_user_get_clipboard_owner)),
+    (services::NtUserGetClipboardSequenceNumber, Handler::Status(clipboard::nt_user_get_clipboard_sequence_number)),
+    (services::NtUserGetClipboardViewer, Handler::Status(clipboard::nt_user_get_clipboard_viewer)),
+    (services::NtUserGetOpenClipboardWindow, Handler::Status(clipboard::nt_user_get_open_clipboard_window)),
+    (services::NtUserGetPriorityClipboardFormat, Handler::Status(clipboard::nt_user_get_priority_clipboard_format)),
+    (services::NtUserIsClipboardFormatAvailable, Handler::Status(clipboard::nt_user_is_clipboard_format_available)),
+    (services::NtUserOpenClipboard, Handler::Status(clipboard::nt_user_open_clipboard)),
+    (services::NtUserSetClipboardData, Handler::Status(clipboard::nt_user_set_clipboard_data)),
+    (services::NtUserSetClipboardViewer, Handler::Status(clipboard::nt_user_set_clipboard_viewer)),
     (services::NtUserCloseDesktop, Handler::Status(desktop::nt_user_close_desktop)),
     (services::NtUserCloseWindowStation, Handler::Status(winsta::nt_user_close_window_station)),
     (services::NtUserConsoleControl, Handler::Status(console::nt_user_console_control)),

@@ -1,0 +1,62 @@
+# The clipboard (win32k::clipboard, tests/native/clip1.c, MinGW, linked to
+# ReactOS's kernel32 and user32): CLIP1.EXE takes the place of winlogon.exe
+# and takes WinSta0\Default; it writes to the clipboard, then starts itself
+# again as the reader ("C:\CLIP1.EXE reader"), another process, which reads
+# what the writer put, formats synthesized by user32 included, and takes
+# the clipboard. Update with docs/compat/m6-fenetres.md, step 45.
+# 1. SetClipboardViewer: WM_DRAWCLIPBOARD to the new viewer.
+# 2. Errors: closed (1418), a bad window (1400), opened by another window
+#    (5), another thread's (1418).
+# 3. Written: 3 formats, then 6 at the close (CF_LOCALE, CF_TEXT,
+#    CF_OEMTEXT added, the sequence +7: EmptyClipboard, 3 SetClipboardData,
+#    3 synthesized), their order, a registered format's name, priorities.
+# 4. The reader: the text in CF_UNICODETEXT, and in CF_TEXT and CF_OEMTEXT
+#    (é: E9 in code page 1252, 82 in 437), CF_LOCALE, the private format by
+#    its name, the delayed format rendered by the writer's window
+#    (WM_RENDERFORMAT across processes); EmptyClipboard (WM_DESTROYCLIPBOARD
+#    to the writer's window, which still sees its 6 formats), then it ends
+#    with the clipboard open: its end closes it.
+# 5. The writer: closed, no owner, the reader's text after its end.
+# 6. The viewer chain (WM_CHANGECBCHAIN to its head).
+# 7. A destroyed owner: WM_RENDERALLFORMATS, its unrendered delayed format
+#    gone.
+features = test-smss
+requires = userland, native
+initial-command = CLIP1.EXE
+cpus     = default, intel
+timeout  = 120
+
+expect = [clip] GetThreadLocale 00000409
+expect = [clip] step 1: SetClipboardViewer(V): no next 1, WM_DRAWCLIPBOARD 1, viewer V 1; a bad window 0, error 1400
+expect = [clip] step 2: closed: CloseClipboard 0, error 1418; SetClipboardData 0, error 1418; OpenClipboard(bad) 0, error 1400
+expect = [clip] step 2: OpenClipboard(W) 1, the open window W 1, again 1
+expect = [clip] step 2: another thread: OpenClipboard(V) 0, error 5; EmptyClipboard 0, error 1418; GetClipboardData 0, error 1418
+expect = [clip] step 3: EmptyClipboard 1, owner W 1; open: 3 formats, CF_TEXT 0
+expect = [clip] step 3: CloseClipboard 1: 6 formats, sequence +7, V's WM_DRAWCLIPBOARD 2
+expect = [clip] step 3: the formats: 000d f001 f002 0010 0001 0007 (end, error 0)
+expect = [clip] step 3: registered formats 1, the name 12, in 5 characters 4 (then 0000), CF_TEXT's 0
+expect = [clip] step 3: GetPriorityClipboardFormat: the private one 1, none -1
+expect = [clip] reader: CF_UNICODETEXT 1
+expect = [clip] reader: CF_TEXT 1, its last byte e9
+expect = [clip] reader: CF_OEMTEXT, its last byte 82
+expect = [clip] reader: CF_LOCALE 00000409 (4 bytes), GetThreadLocale 00000409
+expect = [clip] reader: the private format, by its name: 1 (4 bytes)
+expect = [clip] reader: the delayed format, rendered by its owner: 1
+expect = [clip] reader: the owner is another process's window 1, sequence unchanged 1
+expect = [clip] reader: CloseClipboard 1
+expect = [clip] reader: emptied, ends with the clipboard open
+expect = [clip] step 4: the reader ended (7008); W: WM_RENDERFORMAT 1 of the delayed format 1, set 1; WM_DESTROYCLIPBOARD 1, it saw 6 formats and itself as the owner 1
+expect = [clip] step 5: V's WM_DRAWCLIPBOARD 4; open window none 1, owner none 1, 4 formats
+expect = [clip] step 5: the reader's text as CF_UNICODETEXT 1; the formats: 0001 0010 0007 000d
+expect = [clip] step 6: SetClipboardViewer(W) gives V 1, W's WM_DRAWCLIPBOARD 1; ChangeClipboardChain(V, 0) 1: W's WM_CHANGECBCHAIN 1 (V 1, none 1), viewer W 1
+expect = [clip] step 6: the head leaves 0, WM_CHANGECBCHAIN 1, no viewer 1; a bad window 0, error 1400
+expect = [clip] step 7: DestroyWindow(W2) 1: WM_RENDERALLFORMATS 1; owner none 1, the text 1, the other delayed format 0, sequence +2
+expect = [clip] step 7: CF_TEXT from what it rendered 1
+expect = [clip] done
+forbid = *** STOP:
+forbid = (CLIP1.EXE) leaves
+forbid = sys: NtUserOpenClipboard (0x11d4) is not implemented
+forbid = sys: NtUserSetClipboardData (0x11fa) is not implemented
+forbid = sys: NtUserGetClipboardData (0x1184) is not implemented
+forbid = sys: NtUserConvertMemHandle (0x114e) is not implemented
+forbid = sys: NtUserCreateLocalMemHandle (0x1155) is not implemented

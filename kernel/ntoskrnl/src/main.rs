@@ -9064,6 +9064,7 @@ fn process_round() -> ([u32; 2], [u32; 2]) {
         assert_eq!(field(0x18), t.teb(), "NtTib.Self");
         assert_eq!((field(offset_of!(Teb32, client_id)), field(offset_of!(Teb32, client_id) + 4)), (a.pid(), t.tid()));
         assert_eq!(field(offset_of!(Teb32, process_environment_block)), peb);
+        assert_eq!(field(offset_of!(Teb32, current_locale)), ex::locale::user_locale(), "CurrentLocale (MmCreateTeb)");
     }
 
     // Both run at once.
