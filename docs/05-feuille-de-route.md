@@ -131,7 +131,8 @@ M0 Assainir ─► M1 Ke ─► M2 Mm/Ob/Ps ─► M3 Frontière NT ─► M4 Io
 - Un thème libre de style XP (aucune ressource Microsoft).
 
 **Critères de sortie**
-- [ ] Une liste de 10 applications libres de l'ère XP (à définir dans `docs/compat/applications.md`) s'installe et s'exécute.
+- [ ] Une liste de 10 applications libres de l'ère XP ([la liste](compat/applications.md#la-liste-du-m7-premier-critère),
+  arrêtée le 2026-11-17) s'installe et s'exécute.
 - [ ] Une session complète (ouverture, travail, arrêt) se déroule sans erreur fatale ni fuite de pool mesurable.
 
 ## M8 — Multimédia et jeux
