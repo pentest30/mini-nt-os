@@ -8,7 +8,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 
 | Table | Implémentés | Services |
 |---|---:|---:|
-| ntoskrnl | 131 | 296 |
+| ntoskrnl | 132 | 296 |
 | win32k | 195 | 737 |
 
 ## ntoskrnl
@@ -16,7 +16,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | Numéro | Service | Arguments | Implémenté |
 |---|---|---:|:---:|
 | `0x0000` | `NtAcceptConnectPort` | 6 | ✅ |
-| `0x0001` | `NtAccessCheck` | 8 |  |
+| `0x0001` | `NtAccessCheck` | 8 | ✅ |
 | `0x0002` | `NtAccessCheckAndAuditAlarm` | 11 |  |
 | `0x0003` | `NtAccessCheckByType` | 11 |  |
 | `0x0004` | `NtAccessCheckByTypeAndAuditAlarm` | 16 |  |

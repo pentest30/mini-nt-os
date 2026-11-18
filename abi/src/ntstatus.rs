@@ -165,6 +165,16 @@ pub const STATUS_UNKNOWN_REVISION: NtStatus = NtStatus(0xC000_0058);
 pub const STATUS_INVALID_OWNER: NtStatus = NtStatus(0xC000_005A);
 pub const STATUS_INVALID_PRIMARY_GROUP: NtStatus = NtStatus(0xC000_005B);
 pub const STATUS_PRIVILEGE_NOT_HELD: NtStatus = NtStatus(0xC000_0061);
+/// An open of a file whose deletion is pending.
+pub const STATUS_DELETE_PENDING: NtStatus = NtStatus(0xC000_0056);
+/// FileDispositionInformation, FILE_DELETE_ON_CLOSE: a read-only file, the
+/// root.
+pub const STATUS_CANNOT_DELETE: NtStatus = NtStatus(0xC000_0121);
+pub const STATUS_DIRECTORY_NOT_EMPTY: NtStatus = NtStatus(0xC000_0101);
+/// NtAccessCheck: the token is not an impersonation token.
+pub const STATUS_NO_IMPERSONATION_TOKEN: NtStatus = NtStatus(0xC000_005C);
+/// NtAccessCheck: the desired access still holds generic rights.
+pub const STATUS_GENERIC_NOT_MAPPED: NtStatus = NtStatus(0xC000_00E6);
 /// A process's exception port is set once.
 pub const STATUS_PORT_ALREADY_SET: NtStatus = NtStatus(0xC000_0048);
 pub const STATUS_INVALID_ACL: NtStatus = NtStatus(0xC000_0077);
