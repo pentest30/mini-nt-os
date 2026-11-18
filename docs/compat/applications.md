@@ -157,7 +157,7 @@ Les planchers de leurs scénarios sont relevés là : la version d'Inno Setup et
 journal, la fin du chargeur avec son code ; « Unable to create a temporary file » et un installeur arrêté par le banc
 y sont interdits.
 
-Ce qui vient ensuite, pour les quatre :
+Ce qui venait ensuite, pour les quatre (fait le même jour, section suivante) :
 
 1. **NtAccessCheck** (Se) : Inno Setup demande si l'utilisateur est administrateur (et, pour GIMP, de Power Users)
    par `CheckTokenMembership` d'`advapi32`, qui fait NtAccessCheck sur un descripteur dont la DACL donne l'accès 1 au
@@ -167,6 +167,66 @@ Ce qui vient ensuite, pour les quatre :
    FileAttributeTagInformation, puis FileDispositionInformation, classe 0xd, sans handler) ; le fichier et son
    répertoire restent dans `C:\WINDOWS\TEMP`. Sans effet sur l'issue aujourd'hui ; une installation qui remplace ou
    efface des fichiers en aura besoin, et NSIS pour son dossier de plugins (point 2 du bilan).
+
+### NtAccessCheck et l'effacement, le 2026-11-18
+
+Ce qui est fait :
+
+- **NtAccessCheck** (`se::access`, `sys::security`) : SeAccessCheck d'XP (ReactOS comme spécification) ; les
+  privilèges d'abord (`ACCESS_SYSTEM_SECURITY`, `WRITE_OWNER`), les droits du propriétaire, une DACL absente ou nulle
+  qui accorde tout, les ACE dans l'ordre (refus, autorisation, « héritage seulement » ignorées, droits génériques
+  par la correspondance de l'objet), `MAXIMUM_ALLOWED`. Le service rend le vrai résultat : le mode permissif de
+  l'ADR-011 ne concerne que les ouvertures d'Ob. `CheckTokenMembership` trouve Administrators dans le jeton de
+  System : « User privileges: Administrative ».
+- **L'effacement** (Io, FAT) : FileDispositionInformation et FILE_DELETE_ON_CLOSE le mettent en attente, sur ce
+  que le volume garde d'un fichier ouvert (son FCB : les objets fichiers qui ont un handle) ; le fichier part avec
+  le dernier handle (`Volume::cleanup` : son entrée, celles de son nom long, même sur deux clusters, et ses
+  clusters) ; une ouverture d'un fichier en attente rend `STATUS_DELETE_PENDING` ; un fichier en lecture seule
+  (`STATUS_CANNOT_DELETE`), un répertoire qui tient quelque chose (`STATUS_DIRECTORY_NOT_EMPTY`) et la racine ne
+  s'effacent pas.
+- **Le banc** : il imprime aussi les 12 premières lignes du journal de l'installeur (sa version, qui l'exécute), et
+  entre elles et les 40 dernières, celles qui disent une erreur (« error », « fail », « exception », « rolling
+  back », « abort ») ; il répond à une boîte par son bouton par défaut (DM_GETDEFID : Oui d'une question), plus
+  seulement par IDOK.
+
+Sur la branche, AMD, un passage par application :
+
+| Application | Ce qui se passe |
+|---|---|
+| KeePass (Inno 5.3.10) | **installée** en 10 s : Setup rend 0, ses fichiers sont dans `C:\Program Files\KeePass Password Safe` sans temporaires laissés ; `KeePass.exe` démarre, puis finit sur un accès mémoire non géré (0xC0000005) |
+| WinMerge (Inno 5.2.3) | Setup copie ses fichiers, puis l'enregistrement d'une DLL échoue (« RegSvr32 failed with exit code 0x3 ») : Abandonner, supposé en silencieux, et retour arrière ; Setup rend 5 |
+| PeaZip (Inno 5.4.2) | Setup crée son répertoire temporaire, puis finit sur STATUS_BAD_STACK (0xC0000028, levée par RtlUnwind de `ntdll`) en 8 s, avant de commencer l'installation |
+| GIMP (Inno 5.4.3) | de même, après son script (associations, pages de l'assistant) |
+| Notepad++ (NSIS) | **installé** en 66 s (le dossier de plugins : un fichier temporaire effacé, puis un répertoire de son nom) ; `notepad++.exe` démarre, puis finit sur 0xC0000005 |
+| AbiWord (NSIS) | **installé** en 108 s ; `AbiWord.exe` démarre, puis finit sur 0xC0000005 |
+| Dev-C++ (NSIS) | **installé** en 459 s : ses fichiers, puis « Do you want to install Dev-C++ for all users on this computer ? » (Oui), et NSIS rend 0 ; `devcpp.exe` s'arrête toujours sur « EReadError … Code: 120 » (ERROR_CALL_NOT_IMPLEMENTED, en lisant le glyphe d'un bouton) |
+
+L'apitest NtAccessCheck de `ntdll` passe de nouveau (`rostests` : 44/84 sur un hôte chargé, où
+NtProtectVirtualMemory dépasse ses 20 s ; le plancher reste 44) ; `kernel32` reste à 16/29.
+
+Les planchers des sept scénarios sont relevés à ce qui marche : les fichiers installés et le programme démarré pour
+KeePass, Notepad++, AbiWord et Dev-C++ ; « User privileges: Administrative » et la fin de Setup pour les autres. Y
+sont interdits « Unable to create a temporary file », « User privileges: None », « Can't initialize plug-ins
+directory » et un installeur arrêté par le banc.
+
+Ce qui vient ensuite, dans l'ordre où cela débloque le plus :
+
+1. **L'accès mémoire des programmes installés** (KeePass, Notepad++, AbiWord ; peut-être SumatraPDF, dont
+   l'installeur finit de même) : le filtre des exceptions non gérées de `kernel32` le prend (d'où
+   NtQueryInformationProcess(ProcessDebugPort), puis NtRaiseHardError, puis la fin du processus avec 0xC0000005),
+   si bien que rien ne journalise l'adresse. ProcessDebugPort en est une conséquence, pas la cause. Une trace
+   temporaire de `sys::exceptions` (adresse, registres, octets du code) trouvera l'instruction et sa DLL.
+2. **STATUS_BAD_STACK d'Inno Setup 5.4** (PeaZip, GIMP) : RtlUnwind trouve un cadre SEH hors des limites de pile
+   du TEB, ou mal aligné. KeePass (5.3) et WinMerge (5.2) ne le rencontrent pas. Les limites du TEB suivent bien la
+   croissance de la pile (`AddressSpace::extend_user_stack`) ; à chercher du côté des rappels du mode utilisateur
+   (une exception levée dans une procédure de fenêtre appelée par win32k et attrapée au-dessus).
+3. **L'enregistrement des DLL** (WinMerge) : Inno lance son aide d'enregistrement, qui rend 3 sur
+   `ShellExtensionU.dll` ; à suivre par les services sans handler de ce processus.
+4. **Le renommage** (NtSetInformationFile classe 0xa, FileRenameInformation) : Inno installe chaque fichier sous un
+   nom temporaire puis le renomme ; sans renommage, il copie puis efface. Pas bloquant, mais lent et à faire.
+5. **Les raccourcis** : CoCreateInstance(CLSID_ShellLink) rend REGDB_E_CLASSNOTREG sur le disque du banc (les
+   serveurs COM de `shell32` ne sont enregistrés que par `minoinit`, au premier démarrage d'une installation) ;
+   Inno passe outre.
 
 ### La suite
 

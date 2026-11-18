@@ -1,5 +1,22 @@
 # Notes de passation
 
+- **NtAccessCheck et l'effacement : quatre applications s'installent** (`claude/inspiring-allen-8bb1b7`, sur
+  `claude/m7-test-bench`, M7, [`compat/applications.md`](compat/applications.md#ntaccesscheck-et-leffacement-le-2026-11-18) ;
+  demandé le 2026-11-18, suite de l'entrée suivante). Se : `se::access` (SeAccessCheck : privilèges, propriétaire,
+  DACL absente, nulle ou vide, ACE dans l'ordre, `MAXIMUM_ALLOWED`), NtAccessCheck (`sys::security`, le vrai
+  résultat : `CheckTokenMembership` d'Inno trouve Administrators). Io : l'effacement, FileDispositionInformation et
+  FILE_DELETE_ON_CLOSE (`Volume::handle_opened`, `set_delete_pending`, `cleanup` : le FCB d'un fichier ouvert, ses
+  objets fichiers qui ont un handle ; `File::handle_opened` après le handle de NtCreateFile, la procédure de
+  fermeture du type `File`), `STATUS_DELETE_PENDING` à l'ouverture ; FAT : `FatVolume::delete_entry` (l'entrée, son
+  nom long même sur deux clusters, la chaîne), `FatMount::delete`, `is_empty_directory`. Le banc imprime le début du
+  journal de l'installeur et ses lignes d'erreur, et répond par le bouton par défaut (DM_GETDEFID). KeePass,
+  Notepad++, AbiWord et Dev-C++ s'installent, leurs programmes démarrent ; WinMerge revient en arrière (RegSvr32
+  rend 3), PeaZip et GIMP (Inno 5.4) finissent sur STATUS_BAD_STACK ; planchers des sept scénarios relevés. Tests
+  hôte : `access::tests` (se), `write_tests::a_deleted_entry_takes_its_long_name_across_clusters`,
+  `a_file_goes_with_the_last_handle_once_its_deletion_is_pending`. **Suite** : l'accès mémoire (0xC0000005) des
+  programmes installés (une trace de `sys::exceptions`), STATUS_BAD_STACK d'Inno 5.4, l'enregistrement de DLL de
+  WinMerge, le renommage (FileRenameInformation), EReadError de Dev-C++.
+
 - **Les quatre Inno Setup du banc passent leur fichier temporaire** (`claude/inspiring-allen-8bb1b7`, sur
   `claude/m7-test-bench`, M7, [`compat/applications.md`](compat/applications.md#les-quatre-inno-setup-le-2026-11-18) ;
   demandé le 2026-11-18, premier point du bilan). KeePass, WinMerge, PeaZip et GIMP s'arrêtaient sur « Unable to

@@ -539,7 +539,9 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   `xtask/src/apps.rs`, scénarios `app-<id>`, `tests/native/appbench.c`) ; aucune ne s'installe encore, le bilan
   désigne ce qui bloque. Les quatre Inno Setup passent leur fichier temporaire (FileAllocationInformation,
   `io_manager::File::set_allocation_size` ; FileAttributeTagInformation) et leur chargeur finit seul (`win32k::queue` :
-  le bit de changement de `QS_SENDMESSAGE` tombe avec le dernier message envoyé) ; ils s'arrêtent à NtAccessCheck.
+  le bit de changement de `QS_SENDMESSAGE` tombe avec le dernier message envoyé). NtAccessCheck (`se::access`) et
+  l'effacement des fichiers (FileDispositionInformation, FILE_DELETE_ON_CLOSE : `io_manager::Volume::cleanup`) :
+  KeePass, Notepad++, AbiWord et Dev-C++ s'installent et leurs programmes démarrent (puis s'arrêtent).
   Suite : [`docs/passation.md`](docs/passation.md).
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.

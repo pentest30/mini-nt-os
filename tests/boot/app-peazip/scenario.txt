@@ -8,16 +8,18 @@ initial-command = APPBENCH.EXE
 app = peazip
 cpus = default
 timeout = 600
-# What works today, a floor: the loader extracts its setup.tmp to a
-# temporary file (SetEndOfFile: FileAllocationInformation) and runs it;
-# setup.tmp opens its log, then gives up: not an administrator
-# (CheckTokenMembership needs NtAccessCheck). The loader then ends by
-# itself (MsgWaitForMultipleObjects: the change bit of QS_SENDMESSAGE).
+# What works today, a floor: the loader extracts its setup.tmp
+# (SetEndOfFile: FileAllocationInformation), which finds the user an
+# administrator (CheckTokenMembership: NtAccessCheck) and creates its
+# temporary directory; Inno Setup 5.4 then ends on STATUS_BAD_STACK
+# (RtlUnwind), see docs/compat/applications.md.
 expect = [appbench] installer started
 expect = Setup version: Inno Setup version 5.4.2
-expect = Original Setup EXE: C:\APPS\peazip-plain-3.9.1.WINDOWS.exe
+expect = User privileges: Administrative
+expect = Created temporary directory:
 expect = [appbench] installer ended: exit code
 expect = [appbench] PeaZip 3.9.1: report done
 forbid = Unable to create a temporary file
+forbid = User privileges: None
 forbid = [appbench] installer still running after
 forbid = *** STOP:
