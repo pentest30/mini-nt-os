@@ -1,0 +1,14 @@
+# M7 bench: PeaZip 3.9.1 (Inno Setup), installed silently by APPBENCH.EXE
+# (tests/native/appbench.c) from C:\APPS, then started and closed.
+# The markers say how far it goes; docs/compat/applications.md has the
+# report.
+features = test-smss, interactive
+requires = userland, native
+initial-command = APPBENCH.EXE
+app = peazip
+cpus = default
+timeout = 600
+# What works today, a floor: the installer starts.
+expect = [appbench] installer started
+expect = [appbench] PeaZip 3.9.1: report done
+forbid = *** STOP:

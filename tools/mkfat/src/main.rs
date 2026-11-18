@@ -6,22 +6,59 @@
 //!   CMD.EXE     — hand-crafted PE32 that exercises the Win32 message pump
 //!   + any extra files supplied on the command line
 //!
-//! Usage:  mkfat <output.img> [HOST_PATH:FAT_PATH ...]
+//! Usage:  mkfat <output.img> [--free-mib N] [HOST_PATH:FAT_PATH | @LIST ...]
 //!   e.g.: mkfat fat.img /path/to/ntdll.dll:WINDOWS/SYSTEM32/NTDLL.DLL
 //!
 //! Each component of a FAT path is an 8.3 name or a long name (VFAT, with an
-//! 8.3 alias); the directories on the way are created.
+//! 8.3 alias); the directories on the way are created. `@LIST` reads
+//! `HOST_PATH:FAT_PATH` pairs from the file LIST, one per line (a whole
+//! system tree does not fit a command line). `--free-mib N` leaves at least
+//! N MiB free after the files (a system disk on which programs are
+//! installed); without it, `fatfs::FREE_CLUSTERS`.
 //! `cargo xtask` runs it to build the ramdisk of each ESP it lays out.
 
 use std::env;
 use std::fs;
 use std::process::ExitCode;
 
-use fatfs::{build, path};
+use fatfs::{build_with_free, path};
+
+/// The `HOST_PATH:FAT_PATH` pairs and the free room the arguments after the
+/// output ask for: `@LIST` lines are read as given there.
+fn pairs_and_free(args: &[String]) -> Result<(Vec<String>, usize), String> {
+    let mut pairs = Vec::new();
+    let mut free_clusters = 0;
+    let mut i = 0;
+    while i < args.len() {
+        let arg = &args[i];
+        if arg == "--free-mib" {
+            let value = args.get(i + 1).ok_or("--free-mib needs a value")?;
+            let mib: usize = value.parse().map_err(|_| format!("--free-mib: `{value}` is not a number"))?;
+            free_clusters = mib * (1024 * 1024 / 512);
+            i += 2;
+            continue;
+        }
+        if let Some(list) = arg.strip_prefix('@') {
+            let text = fs::read_to_string(list).map_err(|e| format!("{list}: {e}"))?;
+            pairs.extend(text.lines().map(str::trim).filter(|l| !l.is_empty()).map(String::from));
+        } else {
+            pairs.push(arg.clone());
+        }
+        i += 1;
+    }
+    Ok((pairs, free_clusters))
+}
 
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().collect();
     let out = args.get(1).cloned().unwrap_or_else(|| "fat.img".to_string());
+    let (pairs, free_clusters) = match pairs_and_free(args.get(2..).unwrap_or_default()) {
+        Ok(found) => found,
+        Err(e) => {
+            eprintln!("[mkfat] {e}");
+            return ExitCode::FAILURE;
+        }
+    };
 
     let pe32 = build_test_pe32(0x0200_0000, 0x1000);
     let cmd = build_cmd_pe32(0x0210_0000, 0x1000);
@@ -35,7 +72,7 @@ fn main() -> ExitCode {
 
     // Extra files from HOST_PATH:FAT_PATH pairs.
     // We split on the LAST ':' so Windows drive letters (C:\...) are handled correctly.
-    for arg in args.iter().skip(2) {
+    for arg in &pairs {
         if let Some((host, fat_path)) = arg.rsplit_once(':') {
             match path(fat_path) {
                 Ok(path) => match fs::read(host) {
@@ -49,7 +86,7 @@ fn main() -> ExitCode {
         }
     }
 
-    let img = match build(&files) {
+    let img = match build_with_free(&files, free_clusters) {
         Ok(img) => img,
         Err(e) => {
             eprintln!("[mkfat] {e}");
@@ -59,11 +96,34 @@ fn main() -> ExitCode {
     fs::write(&out, &img).unwrap_or_else(|e| panic!("mkfat: write {out}: {e}"));
 
     eprint!("[mkfat] {} bytes → {out} ", img.len());
-    for (path, data) in &files {
-        eprint!(" {}={}", path.join("/"), data.len());
+    // A whole system tree is listed by its count only.
+    if files.len() > 200 {
+        eprint!(" {} files", files.len());
+    } else {
+        for (path, data) in &files {
+            eprint!(" {}={}", path.join("/"), data.len());
+        }
     }
     eprintln!();
     ExitCode::SUCCESS
+}
+
+#[cfg(test)]
+mod tests {
+    use super::pairs_and_free;
+
+    #[test]
+    fn a_list_file_and_the_free_room_join_the_pairs() {
+        let list = std::env::temp_dir().join(format!("mkfat-list-{}.txt", std::process::id()));
+        std::fs::write(&list, "C:\\a.dll:WINDOWS/A.DLL\r\n\r\nC:\\b.dll:WINDOWS/B.DLL\n").unwrap();
+        let args: Vec<String> =
+            ["x:ONE.TXT", "--free-mib", "3", &format!("@{}", list.display()), "y:TWO.TXT"].map(String::from).to_vec();
+        let (pairs, free) = pairs_and_free(&args).unwrap();
+        assert_eq!(pairs, ["x:ONE.TXT", "C:\\a.dll:WINDOWS/A.DLL", "C:\\b.dll:WINDOWS/B.DLL", "y:TWO.TXT"]);
+        assert_eq!(free, 3 * 2048, "512-byte clusters");
+        assert!(pairs_and_free(&["--free-mib".to_string()]).is_err());
+        std::fs::remove_file(list).unwrap();
+    }
 }
 
 // ── PE32 builder ──────────────────────────────────────────────────────────────
