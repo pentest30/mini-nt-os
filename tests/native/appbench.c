@@ -113,7 +113,52 @@ static void print_windows(BOOL always)
     EnumWindows(print_window, 0);
 }
 
-/* The last lines of the installer's log (ANSI or UTF-16). */
+/* Prints the lines from `p`, `max` of them at most (0: all); returns where
+   it stopped. */
+static char *print_lines(char *p, unsigned int max)
+{
+    char line[220];
+    for (unsigned int printed = 0; *p && (max == 0 || printed < max); ++printed) {
+        unsigned int n = 0;
+        while (p[n] && p[n] != '\n' && n < sizeof(line) - 1) { line[n] = p[n] == '\r' ? ' ' : p[n]; ++n; }
+        line[n] = 0;
+        if (n) DbgPrint(TAG "  log: %s\n", line);
+        p += n;
+        while (*p && *p != '\n') ++p;
+        if (*p) ++p;
+    }
+    return p;
+}
+
+/* `word` is in the line from `p`, in any case. */
+static BOOL line_has(const char *p, const char *word)
+{
+    for (; *p && *p != '\n'; ++p) {
+        unsigned int i = 0;
+        while (word[i] && (p[i] | 0x20) == word[i]) ++i;
+        if (!word[i]) return TRUE;
+    }
+    return FALSE;
+}
+
+/* The lines from `p` to `end` that tell of a failure. */
+static void print_failures(char *p, const char *end)
+{
+    static const char *const words[] = {"error", "fail", "exception", "rolling back", "abort"};
+    while (p < end && *p) {
+        BOOL failure = FALSE;
+        for (unsigned int i = 0; i < sizeof(words) / sizeof(words[0]); ++i) failure |= line_has(p, words[i]);
+        p = failure ? print_lines(p, 1) : p;
+        if (!failure) {
+            while (*p && *p != '\n') ++p;
+            if (*p) ++p;
+        }
+    }
+}
+
+/* The first and the last lines of the installer's log (ANSI or UTF-16): the
+   first ones say what the installer is and who runs it, those in between
+   that tell of a failure why it stopped, the last ones where. */
 static char log_bytes[65536];
 static void print_log(void)
 {
@@ -136,20 +181,21 @@ static void print_log(void)
         for (unsigned int i = 0; i <= length(converted); ++i) log_bytes[i] = converted[i];
         count = length(log_bytes);
     }
-    DbgPrint(TAG "installer log, %lu bytes, its last lines:\n", size);
+    DbgPrint(TAG "installer log, %lu bytes, its first and last lines:\n", size);
     /* Back from the end: 40 lines. */
     unsigned int start = count, lines = 0;
     while (start > 0 && lines < 40) if (log_bytes[--start] == '\n') ++lines;
-    char *p = log_bytes + start;
-    while (*p) {
-        unsigned int n = 0;
-        while (p[n] && p[n] != '\n' && n < sizeof(line) - 1) { line[n] = p[n] == '\r' ? ' ' : p[n]; ++n; }
-        line[n] = 0;
-        if (n) DbgPrint(TAG "  log: %s\n", line);
-        p += n;
-        while (*p && *p != '\n') ++p;
-        if (*p) ++p;
+    char *p = log_bytes;
+    if (size <= sizeof(log_bytes) - 2) {   /* the whole log: its first 12 lines too */
+        p = print_lines(p, 12);
+        if (p < log_bytes + start) {
+            DbgPrint(TAG "  log: ...\n");
+            print_failures(p, log_bytes + start);
+            DbgPrint(TAG "  log: ...\n");
+        }
     }
+    if (p < log_bytes + start) p = log_bytes + start;
+    print_lines(p, 0);
 }
 
 /* What a directory holds, two levels down, 80 entries at most. */
@@ -211,10 +257,20 @@ static BOOL CALLBACK find_dialog_window(HWND window, LPARAM argument)
     return TRUE;
 }
 
+/* The default button of a dialog (DM_GETDEFID): Yes in a question box, OK,
+   Next or I Agree elsewhere; IDOK without one. */
+#define APPBENCH_DM_GETDEFID 0x0400
+#define APPBENCH_DC_HASDEFID 0x534B
+static WORD default_button(HWND dialog)
+{
+    LRESULT id = SendMessageW(dialog, APPBENCH_DM_GETDEFID, 0, 0);
+    return HIWORD(id) == APPBENCH_DC_HASDEFID ? LOWORD(id) : IDOK;
+}
+
 /* Runs an installer's command line for `limit` seconds at most. A dialog
    on the screen that has not changed for 10 s is answered as a person
-   would, by its default button (IDOK: OK, Next, I Agree), 8 times at most;
-   its texts are printed first. Returns the exit code. */
+   would, by its default button (DM_GETDEFID: Yes, OK, Next, I Agree), 8
+   times at most; its texts are printed first. Returns the exit code. */
 static DWORD run_installer(WCHAR *command, DWORD limit)
 {
     char line[400];
@@ -251,7 +307,9 @@ static DWORD run_installer(WCHAR *command, DWORD limit)
             }
             DbgPrint(TAG "a dialog waits since %lu s: answered with its default button\n", last_change);
             print_windows(TRUE);
-            PostMessageW(dialog.window, WM_COMMAND, MAKEWPARAM(IDOK, BN_CLICKED), 0);
+            WORD button = default_button(dialog.window);
+            PostMessageW(dialog.window, WM_COMMAND, MAKEWPARAM(button, BN_CLICKED),
+                         (LPARAM)GetDlgItem(dialog.window, button));
             last_change = seconds;
         }
         if (seconds >= limit) {
