@@ -34,6 +34,18 @@
   attendent par MsgWaitForMultipleObjects tournaient à vide avant le correctif de `QS_SENDMESSAGE` (sous
   VirtualBox, la charge du processeur).
 
+- **La liste des dix applications du M7** (`claude/m7-applications`, M7,
+  [`compat/applications.md`](compat/applications.md#la-liste-du-m7-premier-critère) ; demandé le 2026-11-17).
+  Le premier critère du M7 a sa liste : 7-Zip 9.20 (MSI), Notepad++ 7.9.2 (NSIS), KeePass 1.18, WinMerge 2.12.4,
+  SumatraPDF 2.5.2, AbiWord 2.4.1 (NSIS), PeaZip 3.9.1, Dev-C++ 4.9.9.2 (NSIS), GIMP 2.6.12 (Inno Setup pour les
+  quatre autres) et Apache OpenOffice 4.1.17. Chaque installeur vient de la source officielle de son projet, son
+  type est lu dans le fichier, son SHA-256 est noté ; les fichiers sont dans `third_party/apps/` de la machine qui
+  les a téléchargés (pas dans Git). Écarts : Notepad++ 7.9.2 et Apache OpenOffice 4.1.17 sont des versions
+  récentes qui tournent sur XP (les versions de l'époque ne sont plus servies, ou trop lentement) ; aucune n'a
+  d'installeur InstallShield, que la feuille de route nomme (à trancher). **Suite** : une commande `xtask` qui
+  télécharge et vérifie les installeurs ; les DLL importées par chaque application installée ; un scénario par
+  application, de 7-Zip (MSI) à OpenOffice.
+
 - **Activer la fenêtre d'un autre thread (WM_ASYNC_SETACTIVEWINDOW)** (`claude/new-session-696xfc`, M6,
   [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 43 ; demandé après l'étape 42). Activer la fenêtre d'un
   autre thread ne lui envoyait ni WM_NCACTIVATE, ni WM_ACTIVATE, ni WM_SETFOCUS (le noyau peignait son cadre), et le
