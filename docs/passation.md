@@ -1,5 +1,15 @@
 # Notes de passation
 
+- **SetActiveWindow** (`claude/new-session-696xfc`, M6, [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 46 ;
+  demandé après la PR 143). Mes étapes 44 et 45 (ChangeDisplaySettings, EnableWindow, le panneau Affichage)
+  doublaient la PR 143, fusionnée pendant qu'elles étaient en cours : abandonnées. Reste ce que `main` n'avait pas :
+  NtUserSetActiveWindow (`input::set_active`, UserSetActiveWindow ; une dette de l'entrée de la résolution), qu'EndDialog
+  appelle pour rendre l'activation au propriétaire d'une boîte modale. Scénario `enable-window`
+  (`tests/native/enable1.c`, huit étapes, AMD et Intel), qui met aussi à l'épreuve l'EnableWindow de la PR 143.
+  **Écarts** : SetActiveWindow prend toujours le premier plan (IsAllowedFGActive) ; `spwndActivePrev` pas gardé.
+  Huit mutations détectées (cinq de SetActiveWindow, trois de l'EnableWindow de la PR 143). À faire : la suite
+  complète (elle ira dans cette entrée).
+
 - **Le changement de résolution : le troisième critère du M6 est coché** (`claude/display-resolution`, partie de
   `main` 93197f3 puis fusionnée avec `main` c16673b (PR 138 et 139), puis 5ca4cab (PR 140 et 141), puis ec13720 (PR 142) ; M6, [`compat/m6-fenetres.md`](compat/m6-fenetres.md),
   étape 44). Le pilote `drivers/video/bochs-dispi` (le VGA standard de QEMU, le VBoxVGA de VirtualBox : Bochs DISPI

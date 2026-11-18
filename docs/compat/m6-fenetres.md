@@ -2160,3 +2160,35 @@ acceptée, CDS_NORESET seul accepté, CDS_TEST qui change le mode, le registre n
 pilote qui garde son mode. Quatre font échouer `display-panel` : sans EnableWindow, sans TransparentBlt, le
 registre non écrit, le pilote qui garde son mode. Deux font échouer `display-desktop` : sans WM_DISPLAYCHANGE (la
 barre des tâches reste en bas de l'ancien écran, hors du nouveau), le pilote qui garde son mode.
+
+## Étape 46 : SetActiveWindow (et EnableWindow mis à l'épreuve)
+
+Une dette de l'étape 44, vue dans le panneau Affichage : NtUserSetActiveWindow n'avait pas de handler. EndDialog
+l'appelle pour rendre l'activation au propriétaire d'une boîte modale (la confirmation « Display Settings » du
+panneau, « Goto line » du Bloc-notes), comme SetActiveWindow d'une application ; sans lui, l'appel était sans
+effet, et l'activation ne revenait au propriétaire que par un autre chemin (la boîte cachée ou détruite qui cède
+l'activation).
+
+`focus.c` de win32k (NtUserSetActiveWindow, UserSetActiveWindow, IntUserSetActiveWindow) et `dialog.c` de `user32`
+(EndDialog), ReactOS comme spécification ; `win32k::input`.
+
+| Partie | Ce que fait Mino |
+|---|---|
+| SetActiveWindow (`input::set_active`, NtUserSetActiveWindow) | une fenêtre du thread qui n'est pas une fille devient active et le thread prend le premier plan (`input::activate`, comme co_IntSetForegroundAndFocusWindow) ; une fille ne change rien ; NULL : une autre que la fenêtre active (`activate_other_min`, sinon `activate_other`) ; rend la fenêtre active d'avant si elle vit encore ; la fenêtre d'un autre thread : NULL, rien ne change ; une fenêtre inconnue : NULL et ERROR_INVALID_WINDOW_HANDLE |
+
+Écarts avec ReactOS : SetActiveWindow prend toujours le premier plan (IsAllowedFGActive pas encore) ; avec NULL, la
+fenêtre active d'avant du premier plan précédent n'est pas essayée d'abord (`spwndActivePrev` pas gardé).
+
+Le banc d'essai : `tests/native/enable1.c` (`ENABLE1.EXE`, MinGW), scénario `enable-window`, à la place de
+`winlogon.exe` : ce qu'une boîte modale fait à son propriétaire, avec l'EnableWindow de l'étape 44
+(`window::enable_window`). B, puis O dont la fille C a le clavier. EnableWindow(O, FALSE) : FALSE, WM_CANCELMODE puis
+WM_ENABLE ; de nouveau : TRUE et WM_CANCELMODE seul ; C garde le clavier, SetFocus(O) échoue. D, contextuelle à O,
+active ; EnableWindow(O, TRUE) : TRUE et WM_ENABLE ; SetActiveWindow(O) rend D : O active, au premier plan, avec le
+clavier, D désactivée. SetActiveWindow(C) rend O sans rien changer ; O qui a le clavier désactivée : WM_KILLFOCUS
+avant WM_ENABLE ; SetActiveWindow(NULL) rend O et active B ; une fenêtre inconnue : ERROR_INVALID_WINDOW_HANDLE pour
+les deux ; la fenêtre d'un autre thread : NULL, B reste active et au premier plan.
+
+Tests : `enable-window` sur AMD et Intel. Huit mutations le font échouer chacune : la fenêtre d'un autre thread
+activée ; une fille activée ; SetActiveWindow(NULL) qui n'active personne ; SetActiveWindow qui rend toujours NULL ;
+NtUserSetActiveWindow sans handler ; et, dans l'EnableWindow de l'étape 44, pas de WM_CANCELMODE, le clavier gardé
+par la fenêtre désactivée, WM_ENABLE envoyé sans changement d'état.

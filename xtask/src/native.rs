@@ -61,6 +61,7 @@ const PROGRAMS: &[(&[&str], &str, Toolchain)] = &[
     (&["kbdmove1.c"], "KBDMOVE1.EXE", Toolchain::MinGwWin32),
     (&["nextmenu1.c"], "NEXTMENU1.EXE", Toolchain::MinGwWin32),
     (&["closebtn1.c"], "CLOSEBTN1.EXE", Toolchain::MinGwWin32),
+    (&["enable1.c"], "ENABLE1.EXE", Toolchain::MinGwWin32),
     (&["asyncact1.c"], "ASYNCACT1.EXE", Toolchain::MinGwWin32),
     (&["fgmin1.c"], "FGMIN1.EXE", Toolchain::MinGwWin32),
     (&["caret1.c"], "CARET1.EXE", Toolchain::MinGwWin32),

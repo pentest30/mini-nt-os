@@ -395,6 +395,7 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtUserRegisterWindowMessage, Handler::Status(user::nt_user_register_window_message)),
     (services::NtUserResolveDesktop, Handler::Status(console::nt_user_resolve_desktop)),
     (services::NtUserRemoveMenu, Handler::Status(menu::nt_user_remove_menu)),
+    (services::NtUserSetActiveWindow, Handler::Status(input::nt_user_set_active_window)),
     (services::NtUserSetCapture, Handler::Status(mouse::nt_user_set_capture)),
     (services::NtUserSetCursor, Handler::Status(cursor::nt_user_set_cursor)),
     (services::NtUserSetCursorIconData, Handler::Status(cursor::nt_user_set_cursor_icon_data)),
