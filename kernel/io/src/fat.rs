@@ -1,6 +1,7 @@
 use alloc::string::{String, ToString};
 use alloc::vec;
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicBool, Ordering};
 use hal::sync::KSpinLock;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -321,12 +322,17 @@ pub struct FatVolume<D: BlockDevice> {
     /// writes them back to every copy (one device write per dirty sector
     /// instead of per entry).
     fat_cache: KSpinLock<FatCache>,
+    /// Something went to the device since its last flush: its own cache
+    /// (an ATA disk's) may still hold it.
+    written: AtomicBool,
 }
 
 /// The cached first FAT copy and its per-sector dirty marks.
 struct FatCache {
     bytes: Vec<u8>,
     dirty: Vec<bool>,
+    /// How many of `dirty` are set.
+    dirty_count: usize,
 }
 
 impl<D: BlockDevice> FatVolume<D> {
@@ -428,7 +434,8 @@ impl<D: BlockDevice> FatVolume<D> {
             fat_start_lba: rsvd as u64,
             data_start_lba: first_data_sector as u64,
             clusters: if bpb_ok { (total_sectors - first_data_sector) / u32::from(spc) } else { 0 },
-            fat_cache: KSpinLock::new(FatCache { bytes: fat_bytes, dirty: vec![false; fat_sectors] }),
+            fat_cache: KSpinLock::new(FatCache { bytes: fat_bytes, dirty: vec![false; fat_sectors], dirty_count: 0 }),
+            written: AtomicBool::new(false),
         };
         Ok(vol)
     }
@@ -442,35 +449,68 @@ impl<D: BlockDevice> FatVolume<D> {
         &self.device
     }
 
-    /// Writes every dirty FAT sector back to each copy. Called by the flush
-    /// and by the drop: a fresh mount must see the written chains.
+    /// Writes every dirty FAT sector back to each copy, and marks it clean;
+    /// returns how many there were. Called by the flush and by the drop: a
+    /// fresh mount must see the written chains. A sector whose write fails
+    /// stays dirty. (Before the marks were cleared, each flush wrote again
+    /// every sector ever changed.)
     ///
     /// # IRQL
     /// <= DISPATCH_LEVEL (device I/O may wait actively).
-    fn flush_fats(&self) -> Result<(), FatError> {
-        let cache = self.fat_cache.lock();
+    fn flush_fats(&self) -> Result<usize, FatError> {
+        let mut cache = self.fat_cache.lock();
+        if cache.dirty_count == 0 {
+            return Ok(0);
+        }
         let bps = self.bytes_per_sector();
         let fat_count = u64::from(self.bpb.fat_count);
         let spf = u64::from(self.bpb.sectors_per_fat);
-        for (index, dirty) in cache.dirty.iter().enumerate() {
-            if *dirty {
+        let mut written = 0;
+        for index in 0..cache.dirty.len() {
+            if cache.dirty[index] {
                 let sector = &cache.bytes[index * bps..(index + 1) * bps];
                 for copy in 0..fat_count {
-                    self.device.write_sector(self.fat_start_lba + index as u64 + copy * spf, sector)?;
+                    self.write_device(self.fat_start_lba + index as u64 + copy * spf, sector)?;
                 }
+                cache.dirty[index] = false;
+                cache.dirty_count -= 1;
+                written += 1;
             }
         }
-        Ok(())
+        Ok(written)
     }
 
     /// Makes what was written reach the medium: the dirty FAT sectors to
-    /// each copy, then the device flush.
+    /// each copy, then the device flush, if anything went to the device
+    /// since the last one.
     ///
     /// # IRQL
     /// <= DISPATCH_LEVEL (device I/O may wait actively).
     pub fn flush(&self) -> Result<(), FatError> {
         self.flush_fats()?;
-        self.device.flush()
+        if self.written.swap(false, Ordering::AcqRel) {
+            if let Err(error) = self.device.flush() {
+                self.written.store(true, Ordering::Release);
+                return Err(error);
+            }
+        }
+        Ok(())
+    }
+
+    /// What was written has not all reached the medium: a FAT sector is
+    /// dirty, or the device has not been flushed since a write. What the
+    /// lazy writer looks for (`crate::lazy_writer`).
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn is_dirty(&self) -> bool {
+        self.written.load(Ordering::Acquire) || self.fat_cache.lock().dirty_count != 0
+    }
+
+    /// Writes the sector `lba` to the device, which then needs a flush.
+    fn write_device(&self, lba: u64, data: &[u8]) -> Result<(), FatError> {
+        self.written.store(true, Ordering::Release);
+        self.device.write_sector(lba, data)
     }
 
     /// Mount and open a file in a single stack frame, avoiding cross-frame copy of FatVolume.
@@ -916,7 +956,10 @@ impl<D: BlockDevice> FatVolume<D> {
         let new = (old & 0xF000_0000) | (value & 0x0FFF_FFFF);
         cache.bytes[offset..offset + 4].copy_from_slice(&new.to_le_bytes());
         let sector = offset / self.bytes_per_sector();
-        cache.dirty[sector] = true;
+        if !cache.dirty[sector] {
+            cache.dirty[sector] = true;
+            cache.dirty_count += 1;
+        }
         Ok(())
     }
 
@@ -924,7 +967,7 @@ impl<D: BlockDevice> FatVolume<D> {
         let zero = vec![0u8; self.bytes_per_sector()];
         let first = self.cluster_to_lba(cluster);
         for i in 0..u64::from(self.bpb.sectors_per_cluster) {
-            self.device.write_sector(first + i, &zero)?;
+            self.write_device(first + i, &zero)?;
         }
         Ok(())
     }
@@ -1060,7 +1103,7 @@ impl<D: BlockDevice> FatVolume<D> {
                 self.device.read_sector(lba, &mut sector)?;
             }
             sector[within..within + take].copy_from_slice(&data[done..done + take]);
-            self.device.write_sector(lba, &sector)?;
+            self.write_device(lba, &sector)?;
             done += take;
         }
         Ok(())
@@ -1142,7 +1185,7 @@ impl<D: BlockDevice> FatVolume<D> {
         let mut sector = vec![0u8; self.bytes_per_sector()];
         self.device.read_sector(lba, &mut sector)?;
         sector[within..within + 32].copy_from_slice(entry);
-        self.device.write_sector(lba, &sector)
+        self.write_device(lba, &sector)
     }
 
     /// The first cluster and the size of the entry at `at`, rewritten.

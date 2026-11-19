@@ -12,11 +12,14 @@
 //! - [`request`] : les demandes d'E/S en attente et leur fin (ce que
 //!   garde un IRP en attente).
 //! - [`completion`] : les ports de complétion (le type `IoCompletion`).
+//! - [`lazy_writer`] : les volumes montés, que l'écrivain paresseux du noyau
+//!   vide chaque seconde et l'arrêt une dernière fois.
 //!
 //! Au démarrage, [`mount_boot_volumes`] monte le disque RAM
 //! (`\Device\Ramdisk0`) et le disque système ATA, s'il y en a un
 //! (`\Device\HarddiskVolume1`, le maître du canal secondaire) : `\??\C:` et
-//! `\SystemRoot` mènent au disque ATA, ou sans lui au disque RAM.
+//! `\SystemRoot` mènent au disque ATA, ou sans lui au disque RAM. Chacun
+//! s'inscrit dans [`lazy_writer::MOUNTED`].
 //!
 //! Pas encore : IRP et piles de périphériques, pilotes de disque, E/S
 //! asynchrones des volumes (seuls les tubes en ont), l'association d'un
@@ -46,6 +49,7 @@ mod fat_volume;
 pub mod file;
 pub mod install;
 pub mod irp;
+pub mod lazy_writer;
 pub mod name;
 pub mod npfs;
 mod ntfs_volume;
@@ -105,7 +109,9 @@ pub fn mount_boot_volumes() -> Result<BootVolumes, abi::ntstatus::NtStatus> {
     let mut volumes = BootVolumes::default();
     if let Some(disk) = ramdisk_device() {
         let size = disk.total_size as u64;
-        let device: ob::ObjectRef = Device::with_volume(Volume::mount(alloc::boxed::Box::new(disk))?);
+        let device = Device::with_volume(Volume::mount(alloc::boxed::Box::new(disk))?);
+        lazy_writer::MOUNTED.register(device.volume().expect("a volume"));
+        let device: ob::ObjectRef = device;
         namespace.insert(&device, RAMDISK_VOLUME, None, permanent)?;
         volumes.ramdisk = Some(size);
         volumes.system = Some(RAMDISK_VOLUME);
@@ -131,7 +137,9 @@ pub fn mount_boot_volumes() -> Result<BootVolumes, abi::ntstatus::NtStatus> {
             }) {
             Ok(volume) => {
                 volumes.ntfs_data = volume.is_read_only();
-                let device: ob::ObjectRef = Device::with_volume(volume);
+                let device = Device::with_volume(volume);
+                lazy_writer::MOUNTED.register(device.volume().expect("a volume"));
+                let device: ob::ObjectRef = device;
                 namespace.insert(&device, DISK_VOLUME, None, permanent)?;
                 volumes.disk = Some(Ok(sectors));
                 if volumes.ntfs_data {

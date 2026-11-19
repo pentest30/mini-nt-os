@@ -537,6 +537,31 @@ impl FatMount {
         self.fat.flush().map_err(device_error)
     }
 
+    /// Le passage de l'écrivain paresseux (`crate::lazy_writer`) : si ce
+    /// qui est écrit n'a pas tout atteint le support (des secteurs de la FAT
+    /// en mémoire, des écritures depuis le dernier vidage du disque), le
+    /// vidage, sous le verrou du volume, entre deux opérations ; rend s'il y
+    /// en avait un à faire.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn write_behind(&self) -> Result<bool, NtStatus> {
+        let _guard = self.lock.lock();
+        if !self.fat.is_dirty() {
+            return Ok(false);
+        }
+        self.fat.flush().map_err(device_error)?;
+        Ok(true)
+    }
+
+    /// Ce qui est écrit n'a pas tout atteint le support.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn is_dirty(&self) -> bool {
+        self.fat.is_dirty()
+    }
+
     /// Crée dans le répertoire `directory` le fichier vide (ou, avec
     /// `as_directory`, le répertoire) `name`, avec les attributs
     /// `attributes` (lecture seule, caché, système ; archive pour un
