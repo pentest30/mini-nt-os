@@ -181,15 +181,18 @@ Commit relu par le bot : `60ec7a8`. Évalué le 2026-11-19.
 
 | Où | Remarque | Verdict | Pourquoi | Suite |
 |---|---|---|---|---|
-| `kernel/io/src/file.rs:653` | `check_open` accepte FILE_DELETE_ON_CLOSE sur un volume NTFS, en lecture seule ; le fichier ne serait pas effacé, sans erreur. | Inatteignable | `create_file` (`kernel/ntoskrnl/src/sys/file.rs`) refuse FILE_DELETE_ON_CLOSE sans DELETE. Sur un volume en lecture seule, `File::granted_access` rend `STATUS_MEDIA_WRITE_PROTECTED` pour DELETE, qui est dans `MUTATION_ACCESS`. La fonction seule reste incohérente avec `Volume::set_delete_pending`. | Refus ajouté à `check_open`, avec un test (en cours dans la PR 149). |
-| `kernel/ntoskrnl/src/sys/file.rs:116` | Le commentaire dit que FILE_DELETE_ON_CLOSE ajoute DELETE, mais le code refuse l'ouverture sans DELETE. Selon le bot, le fichier temporaire de CreateFile échouerait. Il propose d'ajouter DELETE ou de corriger le commentaire. | Partiellement fondé | Le commentaire est faux et le code juste : la documentation publique de ZwCreateFile exige DELETE avec FILE_DELETE_ON_CLOSE. Ajouter DELETE s'écarterait de NT. L'échec annoncé de CreateFile est faux : le CreateFileW de `kernel32` ajoute DELETE pour FILE_FLAG_DELETE_ON_CLOSE (`client/file/create.c` de ReactOS). | Commentaire réécrit (en cours dans la PR 149). |
-| `tests/native/appbench.c:266` | Si la boîte d'un installeur est figée, SendMessageW bloque le banc jusqu'au délai de QEMU, sans ses diagnostics. | Fondé | Un message envoyé à la fenêtre d'un autre thread attend que ce thread le traite. Une boîte figée est justement le cas que cette boucle cherche. | SendMessageTimeoutW, 2 s, puis IDOK (en cours dans la PR 149). |
+| `kernel/io/src/file.rs:653` | `check_open` accepte FILE_DELETE_ON_CLOSE sur un volume NTFS, en lecture seule ; le fichier ne serait pas effacé, sans erreur. | Inatteignable | `create_file` (`kernel/ntoskrnl/src/sys/file.rs`) refuse FILE_DELETE_ON_CLOSE sans DELETE. Sur un volume en lecture seule, `File::granted_access` rend `STATUS_MEDIA_WRITE_PROTECTED` pour DELETE, qui est dans `MUTATION_ACCESS`. La fonction seule reste incohérente avec `Volume::set_delete_pending`. | Refus ajouté quand même (`delete_on_close_allowed`), avec un test : `f8e1b71`. |
+| `kernel/ntoskrnl/src/sys/file.rs:116` | Le commentaire dit que FILE_DELETE_ON_CLOSE ajoute DELETE, mais le code refuse l'ouverture sans DELETE. Selon le bot, le fichier temporaire de CreateFile échouerait. Il propose d'ajouter DELETE ou de corriger le commentaire. | Partiellement fondé | Le commentaire est faux et le code juste : la documentation publique de ZwCreateFile exige DELETE avec FILE_DELETE_ON_CLOSE. Ajouter DELETE s'écarterait de NT. L'échec annoncé de CreateFile est faux : le CreateFileW de `kernel32` ajoute DELETE pour FILE_FLAG_DELETE_ON_CLOSE (`client/file/create.c` de ReactOS). | Commentaire réécrit : `f8e1b71`. |
+| `tests/native/appbench.c:266` | Si la boîte d'un installeur est figée, SendMessageW bloque le banc jusqu'au délai de QEMU, sans ses diagnostics. | Fondé | Un message envoyé à la fenêtre d'un autre thread attend que ce thread le traite. Une boîte figée est justement le cas que cette boucle cherche. | SendMessageTimeoutW (SMTO_ABORTIFHUNG, 2 s), puis IDOK : `96ed824`. |
 
 Manqués :
 
 - **Une ouverture et le dernier close du même fichier se croisent** (`kernel/ntoskrnl/src/sys/file.rs:166`). Un
   thread peut être préempté entre `check_open` et `handle_opened`. Pendant ce temps, `Volume::cleanup` efface le
   fichier en attente d'effacement, et l'ouverture rend un handle sur une entrée FAT effacée. Trouvé par la revue de
-  Codex (P1).
+  Codex (P1). Corrigé par `eee962c` (`ke::KGuardedMutex`) et `f8e1b71` : sous un verrou de FCB qui peut attendre,
+  l'ouverture vérifie que l'entrée nomme toujours le fichier, et se compte (`Volume::begin_open`) ; le dernier close
+  efface sous le même verrou. Test hôte `an_open_looked_up_before_the_deletion_finds_the_file_gone`.
 - **`Volume::cleanup` efface le fichier sous un `KSpinLock`.** Il écrit sur le disque et alloue en tenant `opened`,
-  donc à DISPATCH_LEVEL, contre 06 §4. Trouvé en vérifiant les remarques.
+  donc à DISPATCH_LEVEL, contre 06 §4. Trouvé en vérifiant les remarques. Corrigé par `f8e1b71` : l'effacement se
+  fait sous le verrou de FCB, et le `KSpinLock` ne garde plus que les comptes.
