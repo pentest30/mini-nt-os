@@ -150,6 +150,7 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtCreateToken, Handler::Status(security::nt_create_token)),
     (services::NtDelayExecution, Handler::Status(wait::nt_delay_execution)),
     (services::NtDeleteAtom, Handler::Status(atom::nt_delete_atom)),
+    (services::NtDeleteKey, Handler::Status(registry::nt_delete_key)),
     (services::NtDeleteValueKey, Handler::Status(registry::nt_delete_value_key)),
     (services::NtDeviceIoControlFile, Handler::Status(file::nt_device_io_control_file)),
     (services::NtDuplicateObject, Handler::Status(object::nt_duplicate_object)),

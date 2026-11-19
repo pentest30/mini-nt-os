@@ -8,7 +8,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 
 | Table | Implémentés | Services |
 |---|---:|---:|
-| ntoskrnl | 132 | 296 |
+| ntoskrnl | 133 | 296 |
 | win32k | 216 | 737 |
 
 ## ntoskrnl
@@ -81,7 +81,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x003f` | `NtDeleteBootEntry` | 1 |  |
 | `0x0040` | `NtDeleteDriverEntry` | 1 |  |
 | `0x0041` | `NtDeleteFile` | 1 |  |
-| `0x0042` | `NtDeleteKey` | 1 |  |
+| `0x0042` | `NtDeleteKey` | 1 | ✅ |
 | `0x0043` | `NtDeleteObjectAuditAlarm` | 3 |  |
 | `0x0044` | `NtDeleteValueKey` | 2 | ✅ |
 | `0x0045` | `NtDeviceIoControlFile` | 10 | ✅ |
