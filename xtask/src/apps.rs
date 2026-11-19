@@ -5,7 +5,9 @@
 //! `app = <id>` puts its installer on a larger system disk with the
 //! command file of the bench's probe (`tests/native/appbench.c`), which runs
 //! the installer silently, then the program it installed, and logs what it
-//! sees.
+//! sees. `cargo xtask image --apps` (or `--app ID`) puts the installers in
+//! `C:\APPS` of an image with the real logon and `explorer`, where a person
+//! starts them by hand.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -194,6 +196,32 @@ pub fn find(id: &str) -> Option<&'static App> {
     APPS.iter().find(|app| app.id == id)
 }
 
+/// The applications `ids` of the bench, in its order; all of them when
+/// `ids` is empty. An id the bench does not have is an error.
+pub fn select(ids: &[String]) -> Result<Vec<&'static App>> {
+    for id in ids {
+        find(id).ok_or_else(|| format!("--app {id}: not an application of the bench ({})", ids_list()))?;
+    }
+    Ok(APPS.iter().filter(|app| ids.is_empty() || ids.iter().any(|id| id == app.id)).collect())
+}
+
+/// Among `apps`, those whose installer `fetch-apps` checked, with its path;
+/// each other one is reported and left out (`what` says where).
+pub fn fetched(ws: &Workspace, apps: &[&'static App], what: &str) -> Vec<(&'static App, PathBuf)> {
+    apps.iter()
+        .filter_map(|app| match installer(ws, app) {
+            Some(path) => Some((*app, path)),
+            None => {
+                println!(
+                    "xtask: {what}: {} skipped, {} is not fetched (cargo xtask fetch-apps --app {})",
+                    app.id, app.file, app.id
+                );
+                None
+            }
+        })
+        .collect()
+}
+
 /// Where the installers are downloaded.
 pub fn dir(ws: &Workspace) -> PathBuf {
     ws.root.join("third_party").join("apps")
@@ -215,6 +243,11 @@ pub fn installer(ws: &Workspace, app: &App) -> Option<PathBuf> {
     (size == app.size && stamped.trim() == app.sha256).then_some(path)
 }
 
+/// Stamps the installer of `app` at `path` as checked.
+pub(crate) fn mark_checked(app: &App, path: &Path) -> Result<()> {
+    fs::write(stamp(path), format!("{}\n", app.sha256)).map_err(|e| format!("{}: {e}", path.display()))
+}
+
 /// Checks `bytes` against `app`: its size, then its SHA-256.
 pub fn check(app: &App, bytes: &[u8]) -> Result<()> {
     if bytes.len() as u64 != app.size {
@@ -233,11 +266,8 @@ pub fn check(app: &App, bytes: &[u8]) -> Result<()> {
 pub fn fetch(ws: &Workspace, mut args: Args) -> Result<()> {
     let only = args.values("--app")?;
     args.finish()?;
-    for id in &only {
-        find(id).ok_or_else(|| format!("--app {id}: not an application of the bench ({})", ids()))?;
-    }
     let mut failed = Vec::new();
-    for app in APPS.iter().filter(|app| only.is_empty() || only.iter().any(|id| id == app.id)) {
+    for app in select(&only)? {
         if installer(ws, app).is_some() {
             println!("xtask: {}: {} already checked", app.id, app.file);
             continue;
@@ -258,7 +288,7 @@ pub fn fetch(ws: &Workspace, mut args: Args) -> Result<()> {
         }
         match checked.expect("set above") {
             Ok(()) => {
-                fs::write(stamp(&path), format!("{}\n", app.sha256)).map_err(|e| format!("{}: {e}", path.display()))?;
+                mark_checked(app, &path)?;
                 println!("xtask: {}: {} checked (SHA-256)", app.id, app.file);
             }
             Err(e) => {
@@ -275,7 +305,7 @@ pub fn fetch(ws: &Workspace, mut args: Args) -> Result<()> {
     }
 }
 
-fn ids() -> String {
+fn ids_list() -> String {
     APPS.iter().map(|app| app.id).collect::<Vec<_>>().join(", ")
 }
 
@@ -320,6 +350,15 @@ mod tests {
     }
 
     #[test]
+    fn the_applications_are_selected_by_id_in_the_order_of_the_bench() {
+        let ids = |apps: Vec<&App>| apps.iter().map(|app| app.id).collect::<Vec<_>>();
+        assert_eq!(select(&[]).unwrap().len(), APPS.len(), "all of them");
+        let some = select(&["openoffice".into(), "7zip".into()]).unwrap();
+        assert_eq!(ids(some), ["7zip", "openoffice"]);
+        assert!(select(&["word".into()]).err().unwrap().contains("--app word: not an application of the bench"));
+    }
+
+    #[test]
     fn an_installer_is_checked_by_size_then_digest() {
         let app =
             App { size: 3, sha256: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", ..APPS[0] };
@@ -355,7 +394,7 @@ mod tests {
         let path = folder.join(app.file);
         fs::write(&path, vec![0u8; app.size as usize]).unwrap();
         assert!(installer(&ws, app).is_none(), "not checked yet");
-        fs::write(stamp(&path), format!("{}\n", app.sha256)).unwrap();
+        mark_checked(app, &path).unwrap();
         assert_eq!(installer(&ws, app), Some(path.clone()));
         fs::write(&path, b"short").unwrap();
         assert!(installer(&ws, app).is_none(), "the size changed");

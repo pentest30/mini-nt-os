@@ -90,6 +90,81 @@ Il ne juge rien : le noyau journalise chaque service sans handler à son premier
 un processus. Les marqueurs d'un scénario sont un plancher, ce qui marche aujourd'hui : l'installeur démarre ; pour
 Dev-C++, ses fichiers sont copiés et son programme démarre.
 
+### Les essayer à la main : `cargo xtask image --apps`
+
+```bash
+cargo xtask fetch-apps
+cargo xtask image --apps --output mino-apps.img                    # les dix
+cargo xtask image --app keepass --app notepadpp --output mino.img   # ou quelques-unes
+```
+
+L'image est celle de `cargo xtask image` (GPT : ESP, puis le volume système), avec le vrai `winlogon` de ReactOS
+(`--initial-command system`, la seule commande permise avec `--apps`) et le shell (`explorer.exe` et ses imports sur
+le disque RAM, comme `shell = explorer`). `C:` y est un volume à part, fait comme celui d'un scénario `app = ID`
+(`apps_disk`) : les fichiers du disque RAM, tout l'arbre de ReactOS, les installeurs choisis dans `C:\APPS` sous
+leur nom publié, et la place libre de leurs installations, la somme de leurs `free_mib` (`xtask/src/apps.rs`). Le
+disque RAM de l'ESP reste celui d'une image ordinaire (64 Mio au plus) ; le noyau prend `C:` sur la partition
+système. Un installeur que `fetch-apps` n'a pas vérifié est signalé et sauté ; un identifiant inconnu est une
+erreur. `install::create` copie le volume système par flux : il ne passe plus par la mémoire.
+
+| Application | Installeur | Place libre prévue |
+|---|---:|---:|
+| 7-Zip, Notepad++, KeePass, WinMerge, SumatraPDF | 1 à 4 Mo chacun | 64 Mio chacune |
+| AbiWord, PeaZip | 5 et 6 Mo | 96 Mio chacune |
+| Dev-C++ | 9 Mo | 192 Mio |
+| GIMP | 21 Mo | 320 Mio |
+| Apache OpenOffice | 143 Mo | 1 024 Mio |
+| **Les dix** | **199 Mo** | **2 048 Mio** |
+
+Avec les dix (mesuré le 2026-11-19) : `C:` a 1 075 fichiers et fait 2 541 Mio (l'arbre de ReactOS, les
+installeurs, 2 048 Mio libres), l'ESP 59 Mio (dont le disque RAM, 53 Mio), l'image 2 602 Mio ; tout tient,
+OpenOffice compris. Le noyau garde en mémoire la première FAT entière (clusters de 512 octets : 20 Mio pour ce
+volume), et `mkfat` construit le volume en mémoire sur l'hôte (2,5 Go). Mémoire de la machine : celle de
+l'application la plus lourde (`memory_mb` : 768 Mio avec OpenOffice, 512 avec GIMP, 256 sinon) ; `xtask`
+l'imprime.
+
+Le premier démarrage est celui de l'installation (`minoinit` : profils, enregistrement COM, ruches vidées sur le
+disque, puis redémarrage), le second ouvre la session d'`Administrator` (AutoAdminLogon) et montre le bureau
+d'`explorer`. Un installeur se lance par Win+R (`C:\APPS\KeePass-1.18-Setup.exe` ; pour 7-Zip, `msiexec /i
+C:\APPS\7z920.msi`) ou depuis le Poste de travail. Ce qu'on peut en attendre est le bilan du banc (plus bas, le
+2026-11-19) : KeePass s'installe et ouvre sa fenêtre, Notepad++ s'arrête sur son avertissement Authenticode, AbiWord
+et Dev-C++ s'installent mais leurs programmes plantent, les autres ne s'installent pas. Une différence avec le banc :
+ici l'installeur tourne sous le jeton d'`Administrator`, dans sa session, pas sous celui de System ; le profil
+introuvable de SumatraPDF peut changer.
+
+**Essai sous QEMU** (2026-11-19, AMD, 768 Mio, l'image des dix) : le premier démarrage va jusqu'au redémarrage en
+133 s ; au second, la session s'ouvre et le bureau s'affiche (ses quatre icônes, la barre des tâches, l'horloge).
+Win+R complète `C:\APPS\KeePass-1.18-Setup.exe` et le lance dans la session : sa boîte « Select Setup Language »
+s'ouvre, mais son texte et sa liste sont des carrés. Inno Setup 5.3 est un programme ANSI, et win32k n'a pas encore
+de CALLPROCDATA (« the procedure of class 0xc009 asked in the other character set », voir
+[`m6-fenetres.md`](m6-fenetres.md), étape 33) ; le banc, silencieux, ne montre pas cette boîte.
+
+**Ce qu'une session écrit ne survit pas à l'arrêt de la machine.** Le noyau garde la FAT de `C:` en mémoire et ne
+l'écrit qu'à un vidage explicite (NtFlushBuffersFile, ou l'écriture d'une ruche) ; les ruches ne s'écrivent qu'à
+NtFlushKey et NtUnloadKey ; NtShutdownSystem ne fait que le redémarrage, sans rien vider, et l'arrêt n'existe pas.
+Ce que le second démarrage écrit dans la ruche SOFTWARE (la clé du profil d'`Administrator` sous `ProfileList`) et
+ce qu'un installeur copie restent en mémoire : la machine éteinte, ils sont perdus et le volume est incohérent. Au
+troisième démarrage du même disque, sous QEMU, la session ne s'ouvre plus (« ReactOS could not load the locally
+stored user profile » : IncrementRefCount de `userenv` ne trouve pas cette clé, Error 2 ; une boîte qui ne répond ni
+au clavier ni à son délai), et trois fichiers écrits pendant les sessions (le `.tmp` de KeePass sous `Local Settings\Temp`, `RECYCLED\INFO2`…) ont
+dans la FAT du disque une chaîne qui finit sur 0. Le premier démarrage, lui, vide tout avant de redémarrer : après
+lui, la FAT relue sur l'hôte n'a aucune chaîne coupée (1 095 fichiers).
+
+D'où la marche à suivre : démarrer l'image une fois, jusqu'au redémarrage de l'installation, puis repartir de cet
+état à chaque essai. QEMU s'arrête de lui-même à ce redémarrage (`-no-reboot`) ; ensuite, la convertir et la rendre
+immuable sous VirtualBox, qui jette alors les écritures de chaque session à la mise en marche suivante :
+
+```bash
+cargo xtask run --image mino-apps.img --memory 768 --headless   # l'installation (1 min 40 s), puis QEMU s'arrête
+VBoxManage convertfromraw --format VDI mino-apps.img mino-apps.vdi
+VBoxManage storageattach Mino --storagectl IDE --port 0 --device 0 --type hdd --medium mino-apps.vdi --mtype immutable
+```
+
+La VM est celle de [`vbox.md`](vbox.md) (EFI, IDE PIIX4 en maître primaire, profil de CPU Intel), avec la mémoire
+ci-dessus. Le VDI est dynamique : les secteurs à zéro de la place libre n'y sont pas écrits (520 Mio pour l'image des
+dix, convertie en 2 s par VirtualBox 7.2.22). Sous QEMU seul, relancer `cargo xtask run --image` sur une copie de
+l'image prise après l'installation. Le parcours sous VirtualBox n'est pas encore essayé.
+
 ### Bilan du 2026-11-17
 
 Sur `main` `5ca4cab`, AMD (`int 2Eh`), un passage par application (`cargo xtask test --boot --scenario app-<id>`).

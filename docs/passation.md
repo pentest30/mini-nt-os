@@ -1,5 +1,26 @@
 # Notes de passation
 
+- **Une image pour essayer à la main les applications du banc** (`claude/relaxed-wilson-e4616f`, sur
+  `claude/inspiring-allen-8bb1b7`, M7, [`compat/applications.md`](compat/applications.md#les-essayer-à-la-main--cargo-xtask-image---apps) ;
+  demandé le 2026-11-19 : utiliser les applications dans une image sous VirtualBox). `cargo xtask image --apps`
+  (les dix) ou `--app ID` (répétable) : le vrai `winlogon` (`system`, seule commande initiale permise), `explorer`
+  et ses imports sur le disque RAM, et `C:` à part (`apps_disk`, que les scénarios `app = ID` partagent) : l'arbre
+  de ReactOS, les installeurs dans `C:\APPS`, la somme de leurs `free_mib` libres (2 048 Mio pour les dix, image de
+  2 602 Mio). Un installeur absent de `third_party/apps` est signalé et sauté (`apps::fetched`). `install::create`
+  prend le volume système à part et le copie par flux. Tests hôte : `an_image_with_the_bench_has_each_fetched_installer_in_apps`
+  (le disque GPT relu : `C:\APPS\<fichier>` octet pour octet, l'absent sauté), `an_image_with_the_bench_keeps_the_real_winlogon`,
+  `the_applications_are_selected_by_id_in_the_order_of_the_bench`. VirtualBox : `VBoxManage convertfromraw --format VDI`
+  (VDI dynamique de 520 Mio). Essai QEMU (AMD, 768 Mio) : l'installation en 133 s, puis la session et le bureau
+  d'`explorer` ; Win+R lance l'installeur de KeePass, dont la boîte de langue montre des carrés (Inno Setup 5.3 est
+  ANSI : pas encore de CALLPROCDATA). Trouvé en passant : **ce qu'une session écrit est perdu à l'arrêt de la
+  machine** (FAT de `C:` en mémoire, écrite seulement par NtFlushBuffersFile ou l'écriture d'une ruche ; ruches
+  seulement par NtFlushKey et NtUnloadKey ; NtShutdownSystem ne fait que le redémarrage, sans rien vider) : au troisième démarrage du même disque,
+  le profil d'`Administrator` du second ne se charge plus (sa clé de `ProfileList`, dans la ruche SOFTWARE jamais
+  réécrite : Error 2 de `userenv`) et trois fichiers ont une chaîne qui
+  finit sur 0 dans la FAT. D'où la marche à suivre documentée : un démarrage pour l'installation, puis un disque
+  immuable sous VirtualBox. **Suite** : un écrivain paresseux (FAT, ruches) et un arrêt qui vide les volumes ;
+  CALLPROCDATA pour les programmes ANSI ; essayer le parcours sous VirtualBox.
+
 - **Revue de la PR 149 : l'ouverture et l'effacement mis en ordre** (`claude/inspiring-allen-8bb1b7`, M7 ; demandé
   le 2026-11-19). Ke : `ke::KGuardedMutex` (`guarded_mutex`), un verrou qui peut attendre (région gardée, événement
   de synchronisation du dispatcher ; il tourne sur place sans thread de Ke, avant `ke::init` et dans les tests

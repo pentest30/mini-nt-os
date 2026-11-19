@@ -63,6 +63,12 @@ commands:
           --initial-command P  program booted as winlogon.exe (default BOOT1.EXE)
                               BOOT1 offers install or live desktop; `system`
                               keeps ReactOS winlogon.exe; native programs need MinGW
+          --apps              the installers of the M7 bench (fetch-apps) in
+                              C:\\APPS, with ReactOS winlogon, the logon and
+                              explorer (`system`), the whole ReactOS tree and
+                              the free room each installation needs; one not
+                              fetched is skipped
+          --app ID            only this application of the bench (repeatable)
   lint    rustfmt --check, the generated service tables up to date, then
           clippy -D warnings on the host and the bare-metal targets (06 §6)
   run     build, then boot in QEMU with the serial port on stdio
@@ -200,12 +206,20 @@ fn install_image(ws: &Workspace, mut args: Args) -> Result<()> {
     // A person drives an image (VirtualBox): `interactive`, or the probe ends
     // its program 10 s after the last key, an installation mid-copy.
     let features = args.value("--features")?.unwrap_or_else(|| "test-smss,interactive".into());
-    let initial_command = args.value("--initial-command")?.unwrap_or_else(|| "BOOT1.EXE".into());
+    let initial_command = args.value("--initial-command")?;
+    // The installers of the M7 bench, which a person starts from the desktop.
+    let all_apps = args.flag("--apps");
+    let app_ids = args.values("--app")?;
     args.finish()?;
+    let apps =
+        (all_apps || !app_ids.is_empty()).then(|| apps::select(if all_apps { &[] } else { &app_ids })).transpose()?;
+    let initial_command = image_initial_command(initial_command, apps.is_some())?;
     if output.exists() {
         return Err(format!("{} already exists; choose another --output", output.display()));
     }
-    let mut files = userland_files(ws)?.ok_or("fetch ReactOS first: cargo xtask fetch-userland")?;
+    let files = if apps.is_some() { shell_userland_files(ws)? } else { userland_files(ws)? };
+    let mut files = files.ok_or("fetch ReactOS first: cargo xtask fetch-userland")?;
+    let apps = apps.map(|apps| apps::fetched(ws, &apps, "image"));
     let artifacts = build(ws, Some(&features))?;
     // Even with the real winlogon: it starts MINOINIT.EXE at the first boot.
     let native = native::build(ws)?
@@ -213,12 +227,54 @@ fn install_image(ws: &Workspace, mut args: Args) -> Result<()> {
     add_image_programs(&mut files, native, &initial_command)?;
     let run_dir = ws.target.join("xtask").join("image-source");
     let esp = qemu::assemble_esp(ws, &run_dir, &artifacts, &files)?;
+    // With the bench, `C:` is a disk of its own, larger than the ramdisk the
+    // loader takes (64 MiB at most), as for a scenario `app = ID`.
+    let system = match &apps {
+        Some(apps) => {
+            let image = run_dir.join("system.img");
+            let free_mib = apps.iter().map(|(app, _)| app.free_mib).sum();
+            let names: Vec<&str> = apps.iter().map(|(app, _)| app.id).collect();
+            println!("xtask: image: C:\\APPS: {}", if names.is_empty() { "none".into() } else { names.join(", ") });
+            apps_disk(ws, &run_dir, &image, &files, &image_apps(apps), free_mib)?;
+            image
+        }
+        None => esp.join("fat.img"),
+    };
     if let Some(parent) = output.parent().filter(|p| !p.as_os_str().is_empty()) {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    install::create(&esp, &output)?;
+    install::create(&esp, &system, &output)?;
     println!("Mino development image: {}", output.display());
+    if let Some(apps) = &apps {
+        let memory = apps.iter().map(|(app, _)| app.memory_mb).max().unwrap_or(qemu::DEFAULT_MEMORY_MB);
+        // A dynamic VDI leaves out the free room's zeroed sectors.
+        println!(
+            "xtask: image: give the machine {memory} MiB at least; VirtualBox: \
+             VBoxManage convertfromraw --format VDI {} {}",
+            output.display(),
+            output.with_extension("vdi").display()
+        );
+    }
     Ok(())
+}
+
+/// The program an image boots as winlogon.exe: `requested`, BOOT1.EXE by
+/// default; with the bench's installers (`apps`), ReactOS's winlogon.exe
+/// (`system`), which goes to the logon and explorer, and nothing else.
+fn image_initial_command(requested: Option<String>, apps: bool) -> Result<String> {
+    match (requested, apps) {
+        (requested, false) => Ok(requested.unwrap_or_else(|| "BOOT1.EXE".into())),
+        (None, true) => Ok("system".into()),
+        (Some(requested), true) if requested == "system" => Ok(requested),
+        (Some(requested), true) => {
+            Err(format!("--apps keeps ReactOS winlogon.exe (the logon, explorer): not --initial-command {requested}"))
+        }
+    }
+}
+
+/// The installers of `apps` for [`apps_disk`]: each under its published name.
+fn image_apps(apps: &[(&apps::App, PathBuf)]) -> Vec<(PathBuf, String)> {
+    apps.iter().map(|(app, installer)| (installer.clone(), app.file.to_string())).collect()
 }
 
 /// Builds, then boots interactively: serial on stdio, until QEMU exits.
@@ -408,11 +464,17 @@ fn test(ws: &Workspace, mut args: Args) -> Result<()> {
                         .map_err(|e| format!("{}: {e}", image.display()))?;
                     file.set_len(128 * 1024 * 1024).map_err(|e| format!("{}: {e}", image.display()))?;
                 } else if sc.installed_disk {
-                    install::create(&esp, image)?;
+                    install::create(&esp, &esp.join("fat.img"), image)?;
                 } else if sc.gpt_disk {
                     partition::create(&esp.join("fat.img"), image)?;
                 } else if let (Some(app), Some(installer)) = (app, &installer) {
-                    app_disk(ws, &run_dir, image, &extra_files, app, installer)?;
+                    // The installer and the probe's command file.
+                    let probe = run_dir.join("probe.txt");
+                    std::fs::write(&probe, apps::probe_commands(app))
+                        .map_err(|e| format!("{}: {e}", probe.display()))?;
+                    let in_apps = [(installer.clone(), app.file.to_string()), (probe, apps::PROBE_FILE.to_string())];
+                    println!("xtask: {}: {} MiB free on C: for {}", app.id, app.free_mib, app.name);
+                    apps_disk(ws, &run_dir, image, &extra_files, &in_apps, app.free_mib)?;
                 } else {
                     std::fs::copy(esp.join("fat.img"), image).map_err(|e| format!("{}: {e}", image.display()))?;
                 }
@@ -422,7 +484,7 @@ fn test(ws: &Workspace, mut args: Args) -> Result<()> {
             // master (c.img).
             let boot_image = (sc.installed_disk && sc.target_disk).then(|| run_dir.join("boot.img"));
             if let Some(image) = &boot_image {
-                install::create(&esp, image)?;
+                install::create(&esp, &esp.join("fat.img"), image)?;
             }
             // The ramdisk image: the source the installer copies, which the
             // check of a setup target compares the copy with.
@@ -601,36 +663,40 @@ fn shell_userland_files(ws: &Workspace) -> Result<Option<Vec<String>>> {
     disk_files(userland::shell_boot_files(ws), ws)
 }
 
-/// The system disk `C:` of an application of the M7 bench (`app = ID`): the
-/// scenario's files (`extra_files`, as on the ramdisk), the rest of the
-/// ReactOS tree ([`userland::whole_tree`]), the installer and the probe's
-/// command file in `APPS`, and the free room the installation needs. The
-/// ramdisk stays as it is: the loader takes 64 MiB at most.
-fn app_disk(
+/// The system disk `C:` of applications of the M7 bench (a scenario `app =
+/// ID`, or `image --apps`): the disk's files (`extra_files`, as on the
+/// ramdisk), the rest of the ReactOS tree ([`userland::whole_tree`]), each
+/// of `in_apps` (host file, name) in `APPS`, and `free_mib` of free room for
+/// the installations. The ramdisk stays as it is: the loader takes 64 MiB at
+/// most.
+fn apps_disk(
     ws: &Workspace,
     run_dir: &Path,
     image: &Path,
     extra_files: &[String],
-    app: &apps::App,
-    installer: &Path,
+    in_apps: &[(PathBuf, String)],
+    free_mib: u32,
 ) -> Result<()> {
     let have: Vec<(PathBuf, String)> = extra_files
         .iter()
         .filter_map(|file| file.rsplit_once(':').map(|(host, fat)| (PathBuf::from(host), fat.to_string())))
         .collect();
     let tree = userland::whole_tree(ws, &have).ok_or("app: needs the ReactOS userland (cargo xtask fetch-userland)")?;
-    let probe = run_dir.join("probe.txt");
-    std::fs::write(&probe, apps::probe_commands(app)).map_err(|e| format!("{}: {e}", probe.display()))?;
-    let mut lines = extra_files.to_vec();
-    lines.extend(tree.iter().map(|(path, fat)| format!("{}:{fat}", path.display())));
-    lines.push(format!("{}:{}/{}", installer.display(), apps::APPS_DIR, app.file));
-    lines.push(format!("{}:{}/{}", probe.display(), apps::APPS_DIR, apps::PROBE_FILE));
+    let lines = apps_disk_lines(extra_files, &tree, in_apps);
     let list = run_dir.join("app-disk.lst");
     std::fs::write(&list, lines.join("\n")).map_err(|e| format!("{}: {e}", list.display()))?;
     let image = image.to_str().ok_or_else(|| format!("non UTF-8 path: {}", image.display()))?;
-    let (free, list) = (app.free_mib.to_string(), format!("@{}", list.display()));
-    println!("xtask: {}: {} files on C:, {} MiB free for {}", app.id, lines.len(), app.free_mib, app.name);
+    let (free, list) = (free_mib.to_string(), format!("@{}", list.display()));
+    println!("xtask: C: has {} files and {free_mib} MiB free", lines.len());
     cargo(ws, &["run", "--quiet", "-p", "mkfat", "--", image, "--free-mib", &free, &list])
+}
+
+/// The `HOST:FAT_PATH` lines of [`apps_disk`] for `mkfat`.
+fn apps_disk_lines(extra_files: &[String], tree: &[(PathBuf, String)], in_apps: &[(PathBuf, String)]) -> Vec<String> {
+    let mut lines = extra_files.to_vec();
+    lines.extend(tree.iter().map(|(path, fat)| format!("{}:{fat}", path.display())));
+    lines.extend(in_apps.iter().map(|(path, name)| format!("{}:{}/{name}", path.display(), apps::APPS_DIR)));
+    lines
 }
 
 /// The paths of `files` for the ramdisk, the hives under the Mino layer.
@@ -769,6 +835,74 @@ mod tests {
             ]
         );
         assert!(put_initial_command(&mut files, "NONE.EXE").is_err());
+    }
+
+    #[test]
+    fn an_image_with_the_bench_keeps_the_real_winlogon() {
+        assert_eq!(image_initial_command(None, false).unwrap(), "BOOT1.EXE");
+        assert_eq!(image_initial_command(Some("GUI1.EXE".into()), false).unwrap(), "GUI1.EXE");
+        assert_eq!(image_initial_command(None, true).unwrap(), "system");
+        assert_eq!(image_initial_command(Some("system".into()), true).unwrap(), "system");
+        assert!(image_initial_command(Some("BOOT1.EXE".into()), true).is_err());
+    }
+
+    /// `image --app keepass --app 7zip` with only KeePass fetched: its
+    /// installer is in `C:\APPS` of the image, byte for byte, read back from
+    /// the GPT disk; 7-Zip is skipped.
+    #[test]
+    fn an_image_with_the_bench_has_each_fetched_installer_in_apps() {
+        use std::fs;
+        let root = std::env::temp_dir().join(format!("mino-image-apps-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let ws = Workspace { root: root.clone(), target: root.join("target") };
+        let keepass = apps::find("keepass").unwrap();
+        let folder = apps::dir(&ws).join(keepass.id);
+        fs::create_dir_all(&folder).unwrap();
+        let installer = folder.join(keepass.file);
+        let mut bytes: Vec<u8> = (0..keepass.size).map(|i| (i % 251) as u8).collect();
+        bytes[..2].copy_from_slice(b"MZ");
+        fs::write(&installer, &bytes).unwrap();
+        apps::mark_checked(keepass, &installer).unwrap();
+
+        let selected = apps::select(&["keepass".into(), "7zip".into()]).unwrap();
+        let fetched = apps::fetched(&ws, &selected, "image");
+        assert_eq!(fetched.iter().map(|(app, _)| app.id).collect::<Vec<_>>(), ["keepass"], "7-Zip is not fetched");
+
+        // The disk's files, then mkfat's work: each `HOST:FAT_PATH` line.
+        let ntdll = root.join("ntdll.dll");
+        fs::write(&ntdll, b"MZ ntdll").unwrap();
+        let files = [format!("{}:WINDOWS/SYSTEM32/NTDLL.DLL", ntdll.display())];
+        let lines = apps_disk_lines(&files, &[], &image_apps(&fetched));
+        let volume: Vec<_> = lines
+            .iter()
+            .map(|line| {
+                let (host, fat) = line.rsplit_once(':').unwrap();
+                (fatfs::path(fat).unwrap(), fs::read(host).unwrap())
+            })
+            .collect();
+        let system = root.join("system.img");
+        fs::write(&system, fatfs::build_with_free(&volume, 0).unwrap()).unwrap();
+
+        let esp = root.join("esp");
+        fs::create_dir_all(esp.join("EFI").join("BOOT")).unwrap();
+        fs::write(esp.join("EFI").join("BOOT").join("BOOTX64.EFI"), b"MZ loader").unwrap();
+        fs::write(esp.join("kernel.elf"), b"\x7fELF").unwrap();
+        fs::write(esp.join("fat.img"), fatfs::build(&[]).unwrap()).unwrap();
+        let output = root.join("mino.img");
+        let plan = install::create(&esp, &system, &output).unwrap();
+
+        let disk = partition::Disk(fs::File::open(&output).unwrap());
+        let (layout, _) = gpt::read(&disk, plan.total_sectors).unwrap();
+        let part = layout.partitions().iter().find(|p| p.kind == gpt::BASIC_DATA).unwrap();
+        let mut file = &disk.0;
+        let volume = fat32::Fat32::read(&mut file, part.first_lba, part.last_lba - part.first_lba + 1).unwrap();
+        let stats = volume.walk().unwrap();
+        let name = format!("APPS/{}", keepass.file.to_ascii_uppercase());
+        assert_eq!(stats.contents.get(&name), Some(&(keepass.size as u32, fat32::fnv1a(&bytes))), "{name}");
+        assert!(stats.contents.contains_key("WINDOWS/SYSTEM32/NTDLL.DLL"));
+        assert_eq!(stats.paths.iter().filter(|path| path.starts_with("APPS/")).count(), 1, "only KeePass");
+        drop(disk);
+        fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
