@@ -12,7 +12,12 @@
 # RegistrationPhase2: browseui's Start menu and band site, which explorer
 # creates; shell32's CLSIDs of the shell's folders under HKCR, where
 # advapi32 asks the name of each key it creates by NtQueryKey, which a
-# handle without KEY_QUERY_VALUE must get), copies HKU\.DEFAULT, written
+# handle without KEY_QUERY_VALUE must get), consumes the RunOnceEx that a
+# registration can leave behind (syssetup's Finalize: a finished install has
+# run it; explorer's ProcessRunOnceEx would launch « rundll32 iernonce.dll
+# RunOnceExProcess » for it, and that rundll32 — no iernonce.dll on the disk
+# — stops on its « LoadLibrary failed » MessageBox without ever returning,
+# holding explorer's startup), copies HKU\.DEFAULT, written
 # back, as NTUSER.DAT of Default User, sets SetupType = 0, writes the hives
 # back and reboots. Every step logs "[minoinit] ..."; a failed step stops it
 # ("[minoinit] stopped: ..."). It also logs its environment: smss passes on
@@ -82,6 +87,7 @@ expect = [minoinit] environment: SystemDrive=C:
 expect = [minoinit] CoInitialize: 0
 expect = [minoinit] DllRegisterServer browseui.dll: 0
 expect = [minoinit] DllRegisterServer shell32.dll: 0
+expect = [minoinit] RunOnceEx: 0
 expect = [minoinit] done; rebooting
 expect = IncrementRefCount(S-1-5-21-
 expect = We are logged on
@@ -99,6 +105,7 @@ screen-wait = 120
 
 forbid = [minoinit] stopped:
 forbid = *** STOP:
+forbid = LoadLibrary failed to load 'iernonce.dll'
 forbid = NtCreateToken failed
 forbid = LsaLogonUser failed
 forbid = CreateUserProfileW() failed
