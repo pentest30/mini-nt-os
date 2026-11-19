@@ -15,6 +15,7 @@ extern crate alloc;
 mod hardware;
 mod input;
 mod launcher;
+mod lazy_writer;
 mod shared_data;
 mod srm;
 mod sys;
@@ -364,10 +365,21 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
         }
     }
     hal::idt::set_user_fault_hook(Some(user_fault));
+    // What NtShutdownSystem(ShutdownPowerOff) needs to power the machine off.
+    match hal::acpi::init(boot_info.rsdp_phys) {
+        Some(off) => log::info!(
+            "[boot] ACPI: power off through PM1a_CNT {:#x}, SLP_TYPa {} of \\_S5_",
+            off.pm1a_control,
+            off.sleep_type_a
+        ),
+        None => log::info!("[boot] ACPI: no \\_S5_ found: power off halts the processor"),
+    }
 
     x86_64::instructions::interrupts::enable();
     // The keyboard to win32k (once it has the screen).
     input::start();
+    // The hives and the volumes written back every second.
+    lazy_writer::start();
     match srm::start() {
         Ok(()) => log::info!(
             "[boot] Se: {}, {} and {}, waiting for lsass",

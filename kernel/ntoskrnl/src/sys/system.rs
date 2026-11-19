@@ -3,7 +3,7 @@
 use abi::ntstatus::{
     NtStatus, STATUS_INFO_LENGTH_MISMATCH, STATUS_INVALID_PARAMETER, STATUS_PRIVILEGE_NOT_HELD, STATUS_SUCCESS,
 };
-use abi::security::SE_LOAD_DRIVER_PRIVILEGE;
+use abi::security::{SE_LOAD_DRIVER_PRIVILEGE, SE_SHUTDOWN_PRIVILEGE};
 use abi::system_information::{
     SystemBasicInformation32, SystemProcessInformation32, SystemProcessorInformation32, SystemThreadInformation32,
     MAXIMUM_USER_MODE_ADDRESS, MINIMUM_USER_MODE_ADDRESS, PROCESSOR_ARCHITECTURE_INTEL, SYSTEM_BASIC_INFORMATION,
@@ -35,18 +35,51 @@ const UNICODE_STRING_SIZE: u32 = 8;
 /// `NtGlobalFlag` du PEB de chaque processus.
 const NT_GLOBAL_FLAG: u32 = 0;
 
-/// `SHUTDOWN_ACTION::ShutdownReboot` on XP.
+/// `SHUTDOWN_ACTION::ShutdownNoReboot`: the machine stops, powered on.
+const SHUTDOWN_NO_REBOOT: u32 = 0;
+/// `SHUTDOWN_ACTION::ShutdownReboot`.
 const SHUTDOWN_REBOOT: u32 = 1;
+/// `SHUTDOWN_ACTION::ShutdownPowerOff`.
+const SHUTDOWN_POWER_OFF: u32 = 2;
 
-/// NtShutdownSystem(ShutdownAction). The installer uses the reboot action
-/// after every target cache has been flushed. Other actions wait for power
-/// management and an orderly shutdown path.
+/// NtShutdownSystem(Action), as ReactOS's NtShutdownSystem and
+/// NtSetSystemPowerState (as a specification): an action out of
+/// `SHUTDOWN_ACTION` is `STATUS_INVALID_PARAMETER`; a caller without
+/// SeShutdownPrivilege enabled, `STATUS_PRIVILEGE_NOT_HELD` (winlogon,
+/// minoinit and the installer enable it first). Then everything waiting is
+/// written back (`crate::lazy_writer::flush_everything`: the hives, then the
+/// volumes), and the machine resets (ShutdownReboot), or stops: ShutdownNoReboot
+/// halts the processor (« It is now safe to turn off your computer »);
+/// ShutdownPowerOff powers the machine off when `hal` can, and halts
+/// otherwise. Before the flush, the hives that a session changed without
+/// NtFlushKey, and the FAT of `C:`, were lost at the reset.
 pub(super) fn nt_shutdown_system(arguments: &[u32]) -> NtStatus {
-    if arguments[0] != SHUTDOWN_REBOOT {
+    let action = arguments[0];
+    if !matches!(action, SHUTDOWN_NO_REBOOT | SHUTDOWN_REBOOT | SHUTDOWN_POWER_OFF) {
         return STATUS_INVALID_PARAMETER;
     }
-    log::info!("[power] NtShutdownSystem: reboot requested");
-    hal::power::reset()
+    if !super::security::privilege_enabled(SE_SHUTDOWN_PRIVILEGE) {
+        return STATUS_PRIVILEGE_NOT_HELD;
+    }
+    let name = match action {
+        SHUTDOWN_REBOOT => "reboot",
+        SHUTDOWN_POWER_OFF => "power off",
+        _ => "shutdown",
+    };
+    log::info!("[power] NtShutdownSystem: {name} requested");
+    match crate::lazy_writer::flush_everything() {
+        Ok(()) => log::info!("[power] the hives and the volumes written back"),
+        // ReactOS shuts down past a failed flush too.
+        Err(status) => log::error!("[power] not everything written back: {status}"),
+    }
+    match action {
+        SHUTDOWN_REBOOT => hal::power::reset(),
+        SHUTDOWN_POWER_OFF => hal::power::power_off(),
+        _ => {
+            log::info!("[power] It is now safe to turn off your computer");
+            hal::power::halt()
+        }
+    }
 }
 
 /// NtQuerySystemInformation(SystemInformationClass, SystemInformation,

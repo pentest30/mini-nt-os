@@ -74,6 +74,10 @@ test-resolution = []
 # no deadline, instead of ending it 10 s after its last key. An installation
 # copies for minutes over PIO; the deadline killed the installer mid-copy.
 interactive = []
+# Each pass of the lazy writer that writes says what it wrote, and
+# "everything written" when nothing waits after it: the marker the
+# power-cut scenario waits for before cutting the power (tests/boot/power-cut).
+trace-lazy-writer = []
 # Timer ISR heartbeat on the serial port (hal), to tell a hang from a crawl.
 heartbeat = ["hal/heartbeat"]
 

@@ -10,6 +10,7 @@ NtDeviceIoControlFile@40
 NtOpenFile@24
 NtQuerySystemInformation@16
 NtShutdownSystem@4
+RtlAdjustPrivilege@16
 NtTerminateProcess@8
 RtlUnwind@16
 NtCreateFile@44

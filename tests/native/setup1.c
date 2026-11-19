@@ -89,6 +89,7 @@ typedef struct {
 #define SETUP_READY 0
 #define SETUP_DISK_CANDIDATE 1
 #define SHUTDOWN_REBOOT 1
+#define SE_SHUTDOWN_PRIVILEGE 19
 #define KLF_ACTIVATE 0x00000001
 
 enum Screen {
@@ -139,6 +140,8 @@ __declspec(dllimport) LONG __stdcall NtDeviceIoControlFile(HANDLE file, HANDLE e
 __declspec(dllimport) LONG __stdcall NtOpenFile(HANDLE *file, DWORD access, OBJECT_ATTRIBUTES *attributes,
                                                 IO_STATUS_BLOCK *iosb, DWORD share, DWORD options);
 __declspec(dllimport) LONG __stdcall NtShutdownSystem(DWORD action);
+__declspec(dllimport) LONG __stdcall RtlAdjustPrivilege(DWORD privilege, unsigned char enable,
+                                                        unsigned char current_thread, unsigned char *was_enabled);
 
 static void format_mib(WCHAR *out, DWORD value, const WCHAR *suffix)
 {
@@ -729,6 +732,13 @@ static void activate(HWND window)
         break;
     case SCREEN_COMPLETE:
         DbgPrint("[setup] finish requested; rebooting into the installed system\n");
+        {
+            /* NtShutdownSystem wants SeShutdownPrivilege enabled, as
+             * winlogon enables it before calling it. */
+            unsigned char was_enabled;
+            if (RtlAdjustPrivilege(SE_SHUTDOWN_PRIVILEGE, 1, 0, &was_enabled) < 0)
+                DbgPrint("[setup] SeShutdownPrivilege not enabled\n");
+        }
         if (NtShutdownSystem(SHUTDOWN_REBOOT) < 0)
             DbgPrint("[setup] reboot request failed\n");
         break;

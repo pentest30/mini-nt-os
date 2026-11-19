@@ -29,7 +29,8 @@
  *    (syssetup's SaveDefaultUserHive saves the key itself, RegSaveKeyEx);
  * 5. setup done: SetupType = 0, SystemSetupInProgress = 0, CmdLine empty;
  * 6. the hives written back to their files (NtFlushKey), then a reboot
- *    (NtShutdownSystem).
+ *    (NtShutdownSystem, with SeShutdownPrivilege enabled, as winlogon
+ *    enables it).
  *
  * Each step says how it went by DbgPrint ("[minoinit] ..."); a failed step
  * other than a registration stops the program without the reboot.
@@ -46,6 +47,7 @@ typedef int BOOL;
 typedef void *HANDLE;
 typedef void *HMODULE;
 typedef LONG NTSTATUS;
+typedef unsigned char BOOLEAN;
 
 typedef struct {
     unsigned short Length;
@@ -76,6 +78,7 @@ typedef struct {
 #define REG_SZ 1
 #define REG_DWORD 4
 #define SHUTDOWN_REBOOT 1
+#define SE_SHUTDOWN_PRIVILEGE 19
 #define NT_SUCCESS(status) ((status) >= 0)
 
 __declspec(dllimport) unsigned long __cdecl DbgPrint(const char *format, ...);
@@ -87,6 +90,8 @@ __declspec(dllimport) NTSTATUS __stdcall NtQueryValueKey(HANDLE key, UNICODE_STR
 __declspec(dllimport) NTSTATUS __stdcall NtFlushKey(HANDLE key);
 __declspec(dllimport) NTSTATUS __stdcall NtClose(HANDLE handle);
 __declspec(dllimport) NTSTATUS __stdcall NtShutdownSystem(DWORD action);
+__declspec(dllimport) NTSTATUS __stdcall RtlAdjustPrivilege(DWORD privilege, BOOLEAN enable, BOOLEAN current_thread,
+                                                            BOOLEAN *was_enabled);
 
 __declspec(dllimport) HMODULE __stdcall LoadLibraryW(const WCHAR *name);
 __declspec(dllimport) void *__stdcall GetProcAddress(HMODULE module, const char *name);
@@ -347,6 +352,14 @@ static void finish(void)
         || !NT_SUCCESS(flush(L"\\Registry\\Machine\\SAM")) || !NT_SUCCESS(flush(L"\\Registry\\Machine\\SECURITY")))
         stop("a hive not written back");
     DbgPrint("[minoinit] done; rebooting\n");
+    /* NtShutdownSystem wants the caller's SeShutdownPrivilege enabled; the
+     * token of System holds it disabled. */
+    {
+        BOOLEAN was_enabled;
+        status = RtlAdjustPrivilege(SE_SHUTDOWN_PRIVILEGE, 1, 0, &was_enabled);
+        if (!NT_SUCCESS(status))
+            DbgPrint("[minoinit] SeShutdownPrivilege not enabled: %lx\n", (DWORD)status);
+    }
     status = NtShutdownSystem(SHUTDOWN_REBOOT);
     DbgPrint("[minoinit] NtShutdownSystem: %lx\n", (DWORD)status);
 }
