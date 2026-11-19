@@ -1,9 +1,14 @@
 //! PEB32 (CLAUDE.md, rule 5): the Process Environment Block that an i386
-//! process sees, laid out as on XP SP2. ReactOS's NDK headers serve as the
-//! specification of the format; offsets are checked at compile time.
+//! process sees, laid out as on XP SP2, then the fields of Server 2003 that
+//! ReactOS's user mode, built for it, uses: fiber-local storage (`ntdll`
+//! initialises them, `kernel32`'s FlsAlloc reads them). ReactOS's NDK
+//! headers serve as the specification of the format; offsets are checked at
+//! compile time. The version it shows stays XP's (ADR-003).
 //!
 //! The PEB has a page of its own; its heap list (`process_heaps`) follows it
-//! in that page.
+//! in that page ([`PROCESS_HEAPS_OFFSET`]), past the FLS fields, as
+//! ReactOS's MmCreatePeb puts it (`Peb + 1`). At XP's 0x210, the heaps a
+//! process creates overwrote `FlsBitmap`, and FlsAlloc read address 0.
 //!
 //! Moved from `ps::peb` (audit §3.2), whose offsets after 0x20 were not those
 //! of XP: the OS version is at 0xA4, not 0x74.
@@ -102,12 +107,22 @@ pub struct Peb32 {
     pub system_default_activation_context_data: u32,
     pub system_assembly_storage_map: u32,
     pub minimum_stack_commit: u32,
-    _tail: u32,
+    /// Server 2003: the FLS callbacks (FlsAlloc allocates them).
+    pub fls_callback: u32,
+    /// LIST_ENTRY: the RTL_FLS_DATA of the threads.
+    pub fls_list_head: [u32; 2],
+    /// The RTL_BITMAP of the FLS indexes, in `ntdll`.
+    pub fls_bitmap: u32,
+    pub fls_bitmap_bits: [u32; 4],
+    pub fls_high_index: u32,
 }
+
+/// Where the heap list begins in the PEB's page: right past the PEB.
+pub const PROCESS_HEAPS_OFFSET: u32 = size_of::<Peb32>() as u32;
 
 const _: () = {
     assert!(size_of::<UnicodeString32>() == 8);
-    assert!(size_of::<Peb32>() == 0x210);
+    assert!(size_of::<Peb32>() == 0x230);
     assert!(offset_of!(Peb32, being_debugged) == 0x02);
     assert!(offset_of!(Peb32, image_base_address) == 0x08);
     assert!(offset_of!(Peb32, ldr) == 0x0C);
@@ -139,6 +154,11 @@ const _: () = {
     assert!(offset_of!(Peb32, app_compat_flags) == 0x1D8);
     assert!(offset_of!(Peb32, csd_version) == 0x1F0);
     assert!(offset_of!(Peb32, minimum_stack_commit) == 0x208);
+    assert!(offset_of!(Peb32, fls_callback) == 0x20C);
+    assert!(offset_of!(Peb32, fls_list_head) == 0x210);
+    assert!(offset_of!(Peb32, fls_bitmap) == 0x218);
+    assert!(offset_of!(Peb32, fls_bitmap_bits) == 0x21C);
+    assert!(offset_of!(Peb32, fls_high_index) == 0x22C);
 };
 
 impl Peb32 {
@@ -165,9 +185,8 @@ impl Peb32 {
 
     /// Its bytes, as they go into the process.
     pub fn as_bytes(&self) -> &[u8] {
-        // SAFETY: the struct has no implicit padding (explicit `_align` and
-        // `_tail`, size checked above) and only integer fields: every byte is
-        // initialised.
+        // SAFETY: the struct has no implicit padding (explicit `_align`, size
+        // checked above) and only integer fields: every byte is initialised.
         unsafe { core::slice::from_raw_parts((self as *const Self).cast::<u8>(), size_of::<Self>()) }
     }
 }
@@ -189,10 +208,21 @@ mod tests {
         let peb = Peb32::xp(0x0040_0000);
         let bytes = peb.as_bytes();
         let u32_at = |offset: usize| u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap());
-        assert_eq!(bytes.len(), 0x210);
+        assert_eq!(bytes.len(), 0x230);
         assert_eq!(u32_at(0x08), 0x0040_0000, "ImageBaseAddress");
         assert_eq!(u32_at(0x64), 1, "NumberOfProcessors");
         assert_eq!((u32_at(0xA4), u32_at(0xA8), u32_at(0xB0)), (5, 1, 2), "OSMajor/MinorVersion, OSPlatformId");
         assert_eq!(u16::from_le_bytes([bytes[0xAC], bytes[0xAD]]), 2600, "OSBuildNumber");
+    }
+
+    #[test]
+    fn the_heap_list_leaves_the_fls_fields_alone() {
+        // KeePass, Notepad++ and AbiWord ended on an access violation in
+        // FlsAlloc: their fourth heap, written at PEB + 0x218 of a heap list
+        // that began at XP's 0x210, had replaced `FlsBitmap`.
+        assert!(PROCESS_HEAPS_OFFSET as usize >= offset_of!(Peb32, fls_high_index) + 4);
+        assert_eq!(PROCESS_HEAPS_OFFSET, 0x230, "as ReactOS's MmCreatePeb: Peb + 1");
+        let bytes = Peb32::xp(0x0040_0000).as_bytes().to_vec();
+        assert!(bytes[0x20C..].iter().all(|&b| b == 0), "ntdll fills them");
     }
 }

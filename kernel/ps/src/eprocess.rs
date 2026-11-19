@@ -755,10 +755,10 @@ fn build_address_space(
     peb.heap_decommit_total_free_threshold = HEAP_DECOMMIT_TOTAL_FREE_THRESHOLD;
     peb.heap_decommit_free_block_threshold = HEAP_DECOMMIT_FREE_BLOCK_THRESHOLD;
     peb.critical_section_timeout = CRITICAL_SECTION_TIMEOUT;
-    // The heap list follows the PEB, to the end of its page.
-    let peb_size = core::mem::size_of::<Peb32>() as u32;
-    peb.maximum_number_of_heaps = (PAGE_SIZE as u32 - peb_size) / 4;
-    peb.process_heaps = PEB_VA + peb_size;
+    // The heap list follows the PEB, its FLS fields included, to the end of
+    // its page.
+    peb.maximum_number_of_heaps = (PAGE_SIZE as u32 - abi::peb32::PROCESS_HEAPS_OFFSET) / 4;
+    peb.process_heaps = PEB_VA + abi::peb32::PROCESS_HEAPS_OFFSET;
     peb.image_subsystem = u32::from(info.subsystem);
     peb.image_subsystem_major_version = u32::from(info.subsystem_version.0);
     peb.image_subsystem_minor_version = u32::from(info.subsystem_version.1);
