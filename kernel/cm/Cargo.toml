@@ -13,4 +13,10 @@ ob   = { path = "../ob" }
 # The builder writes a hive back to its file.
 regf = { path = "../../libs/regf", features = ["builder"] }
 io-manager = { path = "../io" }
+# A hive is written back by one writer at a time (KGuardedMutex).
+ke   = { path = "../ke" }
 log  = { workspace = true }
+
+[dev-dependencies]
+# A FAT image in memory, where the tests' hives are written back.
+fatfs = { path = "../../libs/fatfs" }
