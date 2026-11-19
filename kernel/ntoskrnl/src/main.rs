@@ -178,8 +178,9 @@ pub unsafe extern "C" fn kernel_main(boot_info_ptr: *const BootInfo) -> ! {
 
     // ── 1.5. Framebuffer console ─────────────────────────────────────────────
     // Init before the first log::info! so kernel messages appear on screen.
-    // The GOP framebuffer (always below 4 GiB on QEMU/VBox) is reachable at
-    // hhdm_offset + framebuffer.base. The boot splash takes the screen at
+    // The GOP framebuffer is reachable at hhdm_offset + framebuffer.base:
+    // inside the HHDM on QEMU/VBox, mapped there by the bootloader on a PC
+    // whose graphics aperture lies above 4 GiB. The boot splash takes the screen at
     // once: the journal keeps going to COM1 alone until win32k, the launcher
     // or a fatal screen takes over.
     hal::fb::init(&boot_info.framebuffer, boot_info.hhdm_offset);
@@ -345,8 +346,8 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     ps::set_win32_callouts(win32k::destroy::thread_exit, win32k::destroy::process_exit);
     // The display driver: Bochs DISPI (QEMU's and VirtualBox's VGA), which
     // changes modes; else the UEFI framebuffer, if the loader found one.
-    // SAFETY: the HHDM maps [0, 4 GiB) for good and both drivers check that
-    // their framebuffer lies below 4 GiB; only the driver and the boot
+    // SAFETY: the HHDM maps [0, 4 GiB) for good, and `bochs_dispi` checks
+    // that its framebuffer lies below 4 GiB; only the driver and the boot
     // console write to it.
     if let Some(driver) = unsafe { bochs_dispi::BochsDispi::probe(boot_info.hhdm_offset) } {
         log::info!(
@@ -357,7 +358,9 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
         );
         win32k::display::install(alloc::boxed::Box::new(driver));
     } else {
-        // SAFETY: as above.
+        // SAFETY: the HHDM maps the GOP framebuffer for good (inside
+        // [0, 4 GiB), or added by the bootloader above it: a PC's graphics
+        // aperture); only gopfb and the boot console write to it.
         match unsafe { gopfb::GopFramebuffer::new(&boot_info.framebuffer, boot_info.hhdm_offset) } {
             Some(driver) => win32k::display::install(alloc::boxed::Box::new(driver)),
             None => log::info!("[boot] no display: no GOP framebuffer of a known format"),

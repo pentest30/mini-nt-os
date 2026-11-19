@@ -733,15 +733,14 @@ extern "x86-interrupt" fn irq_spurious(_frame: InterruptStackFrame) {}
 /// Send End-Of-Interrupt to the local APIC.
 ///
 /// Writes 0 to the APIC EOI register (offset 0x0B0), reached like every APIC
-/// register through `timer::apic_reg` (HHDM once set).
+/// register through `timer::apic_write`: its MSR in x2APIC mode, else MMIO
+/// through `timer::apic_reg` (HHDM once set).
 ///
 /// # Safety
 /// Must be called only from an APIC-sourced interrupt handler.
 #[inline]
 unsafe fn apic_eoi() {
-    // SAFETY: apic_reg(0xB0) is the mapped APIC EOI register; writing 0
+    // SAFETY: the EOI register is reachable in the APIC's mode; writing 0
     // acknowledges the current interrupt.
-    unsafe {
-        core::ptr::write_volatile(super::timer::apic_reg(0xB0) as *mut u32, 0);
-    }
+    unsafe { super::timer::apic_write(super::timer::APIC_EOI, 0) };
 }

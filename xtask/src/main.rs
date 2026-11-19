@@ -435,7 +435,7 @@ fn test(ws: &Workspace, mut args: Args) -> Result<()> {
                     firmware: qemu::find_firmware(&options, &run_dir)?,
                     esp: esp.clone(),
                     cpu: cpu.clone(),
-                    memory_mb: qemu::DEFAULT_MEMORY_MB,
+                    memory_mb: sc.memory_mb.unwrap_or(qemu::DEFAULT_MEMORY_MB),
                     data_dir: None,
                     boot_disk: attached_disk.clone(),
                     system_disk: None,
@@ -447,7 +447,9 @@ fn test(ws: &Workspace, mut args: Args) -> Result<()> {
                 firmware: qemu::find_firmware(&options, &run_dir)?,
                 esp,
                 cpu,
-                memory_mb: app.map_or(qemu::DEFAULT_MEMORY_MB, |app| app.memory_mb),
+                // La clé `memory` du scénario d'abord, sinon ce que demande
+                // son application du banc, sinon celle de QEMU.
+                memory_mb: sc.memory_mb.or(app.map(|app| app.memory_mb)).unwrap_or(qemu::DEFAULT_MEMORY_MB),
                 data_dir: None,
                 boot_disk: match &boot_image {
                     Some(image) => Some(image.clone()),

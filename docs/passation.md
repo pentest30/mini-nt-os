@@ -77,6 +77,25 @@
   (Intel) ne passent que lancés seuls, hors de la charge d'autres QEMU. **Suite** : corriger ces blocages dans
   l'ordre du bilan, en remontant le plancher de chaque application débloquée.
 
+- **Démarrer sur un vrai PC** (`claude/real-hardware-boot` ; demandé le 2026-11-18). Une clé USB écrite par Rufus
+  (image du bureau de ReactOS, partition EFI saine) s'arrêtait au chargeur sur un Dell Inspiron 15 3530 (i7-1355U,
+  32 Gio, Iris Xe, Secure Boot désactivé). Cause : le chargeur a pour base préférée `0x1_4000_0000` ; avec de la RAM
+  à cette adresse, le firmware l'y charge, hors de la projection identité [0, 4 Gio) : au changement de CR3, son code
+  disparaît et le firmware s'arrête sur l'exception. Corrigé (`boot/loader`) : CR3 est changé par un tremplin copié
+  sous 4 Gio (`TRAMPOLINE`) ; tout ce que le noyau atteint par la HHDM (tables des pages, `BootInfo`, pile,
+  disque RAM, image du noyau, symboles) est alloué sous 4 Gio (`memory::allocate_low`) ; le framebuffer est projeté à
+  `HHDM_OFFSET + base` quand il est au-delà (`paging::map_framebuffer` : celui de l'Iris Xe est à 256 Gio) ; la
+  console du firmware reste ouverte (GOP sans ouverture exclusive) et le chargeur y écrit où il est chargé, le mode
+  de l'APIC, la RAM, puis un message de panique. Scénario `high-memory` (8 Gio, clé `memory = MiB` de `xtask`) :
+  l'ancien chargeur s'y arrête dans le firmware, le nouveau va au bout. Côté HAL (`hal::timer`), deux différences
+  d'un vrai PC, sans test dans QEMU (OVMF laisse l'xAPIC, le PIT compte) : l'APIC en mode x2APIC laissé par le
+  firmware (registres en MSR, `x2apic_msr`) et un PIT arrêté par le chipset (les fréquences du cristal de CPUID
+  0x15, `crystal_rates`, avec un avertissement) ; LINT0 en ExtINT et LINT1 en NMI sont programmés (le 8259 du clavier
+  passe par LINT0). Sur ce Dell : clavier interne en PS/2 (il doit marcher), pavé tactile Goodix en I2C et souris
+  USB sans pilote (pas de pointeur), NVMe sans pilote (Mino tourne en mémoire, depuis la clé). Essayé le
+  2026-11-18 : le Dell démarre normalement depuis la clé. **Suite** : un pilote du pavé tactile (I2C HID) ou de
+  l'USB pour avoir un pointeur ; un STOP sur un autre PC se photographie (pas de port série).
+
 - **SetActiveWindow** (`claude/new-session-696xfc`, M6, [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 46 ;
   demandé après la PR 143). Mes étapes 44 et 45 (ChangeDisplaySettings, EnableWindow, le panneau Affichage)
   doublaient la PR 143, fusionnée pendant qu'elles étaient en cours : abandonnées. Reste ce que `main` n'avait pas :

@@ -5,7 +5,19 @@
 //! `BootInfo`. Must be called *before* `ExitBootServices`.
 
 use abi::{MemoryKind, MemoryRegion, MEMORY_MAP_MAX};
-use uefi::table::boot::{BootServices, MemoryType};
+use uefi::table::boot::{AllocateType, BootServices, MemoryType};
+
+/// Highest physical address the kernel reaches through the HHDM.
+const HHDM_LAST: u64 = crate::paging::HHDM_SIZE - 1;
+
+/// Allocates `pages` pages of `ty` below 4 GiB, inside the HHDM.
+///
+/// Everything the kernel reads or writes through the HHDM (page tables,
+/// `BootInfo`, its stack, the ramdisk, its image) comes from here: with
+/// more RAM than 4 GiB, `AnyPages` may return pages above it.
+pub fn allocate_low(bt: &BootServices, ty: MemoryType, pages: usize) -> uefi::Result<u64> {
+    bt.allocate_pages(AllocateType::MaxAddress(HHDM_LAST), ty, pages)
+}
 
 /// Collect the UEFI physical memory map into a `MemoryRegion` array.
 ///
@@ -50,10 +62,17 @@ pub fn collect(bt: &BootServices) -> ([MemoryRegion; MEMORY_MAP_MAX], usize) {
         count += 1;
     }
 
+    let ram_end = out[..count]
+        .iter()
+        .filter(|r| r.kind == MemoryKind::Usable)
+        .map(|r| (r.start_pfn + r.page_count) * 4096)
+        .max()
+        .unwrap_or(0);
     log::info!(
-        "memory map: {} regions ({} total pages)",
+        "memory map: {} regions ({} total pages), free RAM up to {:#x}",
         count,
-        out[..count].iter().map(|r| r.page_count).sum::<u64>()
+        out[..count].iter().map(|r| r.page_count).sum::<u64>(),
+        ram_end
     );
 
     (out, count)

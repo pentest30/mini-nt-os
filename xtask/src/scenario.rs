@@ -116,6 +116,8 @@ pub struct Scenario {
     /// The boots after the first start from the target disk alone.
     pub reboot_target: bool,
     pub boots: u32,
+    /// Guest memory in MiB (`memory`); the QEMU default without it.
+    pub memory_mb: Option<u32>,
     /// Pixels the screen must show once the markers are found.
     pub screen: Vec<crate::screen::Pixel>,
     /// How long the screen may take to show them once the markers are found
@@ -253,6 +255,7 @@ impl Scenario {
             target_disk: false,
             reboot_target: false,
             boots: 1,
+            memory_mb: None,
             screen: Vec::new(),
             screen_wait: Duration::ZERO,
             screen_size: None,
@@ -339,6 +342,14 @@ impl Scenario {
                         .ok()
                         .filter(|&boots| boots >= 1)
                         .ok_or_else(|| format!("{}: boots `{value}` is not a number from 1", at()))?;
+                }
+                "memory" => {
+                    let mib = value
+                        .parse()
+                        .ok()
+                        .filter(|&mib| mib >= 64)
+                        .ok_or_else(|| format!("{}: memory `{value}` is not a number of MiB from 64", at()))?;
+                    sc.memory_mb = Some(mib);
                 }
                 "requires" => {
                     for requirement in list() {
@@ -483,6 +494,10 @@ requires = userland
         assert!(ntfs.ntfs_disk && !ntfs.system_disk && !ntfs.target_disk);
         assert!(Scenario::parse("x", "expect = a\ndisk = ntfs-data\ndisk = target").is_err());
         assert!(twice.system_disk && twice.boots == 2);
+        assert_eq!(sc.memory_mb, None, "QEMU's default memory");
+        assert_eq!(Scenario::parse("x", "expect = a\nmemory = 8192").unwrap().memory_mb, Some(8192));
+        assert!(Scenario::parse("x", "expect = a\nmemory = 8G").is_err());
+        assert!(Scenario::parse("x", "expect = a\nmemory = 16").is_err(), "too little to boot");
         let gpt = Scenario::parse("x", "expect = a\ndisk = system-gpt").unwrap();
         assert!(gpt.system_disk && gpt.gpt_disk);
         let installed = Scenario::parse("x", "expect = a\ndisk = installed").unwrap();
