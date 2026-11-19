@@ -8,10 +8,17 @@ initial-command = APPBENCH.EXE
 app = devcpp
 cpus = default
 timeout = 900
-# What works today, a floor: the installer starts (and for Dev-C++,
-# its files are copied and its program starts).
+# What works today, a floor: NSIS makes its plug-ins directory (a
+# temporary file deleted, FileDispositionInformation, then a directory of
+# its name), its files are copied, its questions answered (the default
+# button: DM_GETDEFID, Yes to "for all users"), it ends with 0; the program
+# starts (then stops on EReadError).
 expect = [appbench] installer started
+expect = [appbench] installer ended: exit code 0
 expect = [appbench] installed: C:\Dev-Cpp\devcpp.exe
 expect = [appbench] program started
 expect = [appbench] Dev-C++ 4.9.9.2: report done
+forbid = Can't initialize plug-ins directory
+forbid = [appbench] installer still running after
+forbid = [appbench] 8 dialogs answered already
 forbid = *** STOP:

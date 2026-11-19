@@ -7,7 +7,8 @@
 //!   - Dispatcher (ADR-005): waitable objects, KWAIT_BLOCK, wait and signal
 //!   - Timer wheel and KTIMER objects (periodic, with a DPC)
 //!   - FPU state per thread (ADR-009) and kernel FPU brackets (`fpu`)
-//!   - Synchronisation primitives: KEVENT, KSEMAPHORE, KMUTEX
+//!   - Synchronisation primitives: KEVENT, KSEMAPHORE, KMUTEX, and a lock
+//!     that can wait, KGUARDED_MUTEX (`guarded_mutex`)
 //!   - Kernel APCs: `KApc` objects, delivered at APC_LEVEL (`apc`)
 //!   - DPC (Deferred Procedure Call) queue, without allocation, and the
 //!     DISPATCH interrupt that drains it
@@ -30,6 +31,7 @@ pub mod dpc;
 pub mod event;
 pub mod exception;
 pub mod fpu;
+pub mod guarded_mutex;
 pub mod prcb;
 pub mod sched;
 pub mod thread;
@@ -37,6 +39,7 @@ pub mod timer;
 pub mod usermem;
 
 pub use event::{EventType, KEvent};
+pub use guarded_mutex::{KGuardedMutex, KGuardedMutexGuard};
 
 /// Initialise the Ke layer. Called from kernel_main after HAL and Mm.
 ///

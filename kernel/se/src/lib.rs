@@ -1,6 +1,8 @@
 //! Se — la sécurité (02 §5.8, ADR-011).
 //!
 //! - [`sid`] : les SID et les SID connus (LocalSystem, Administrators…).
+//! - [`access`] : SeAccessCheck, les droits qu'un descripteur accorde à un
+//!   jeton (NtAccessCheck).
 //! - [`acl`] : les ACL, vérifiées comme le fait RtlValidAcl.
 //! - [`descriptor`] : les descripteurs de sécurité ; capture du mode
 //!   utilisateur, forme relative, requête et changement de leurs parties.
@@ -15,8 +17,8 @@
 //!
 //! Les LUID viennent de [`allocate_luid`] (ExAllocateLocallyUniqueId).
 //!
-//! Pas encore : SeAccessCheck et le mode permissif qui journalise les refus
-//! (ADR-011) ; jusque-là, Ob accorde tout ce qui est demandé.
+//! Pas encore : le mode permissif qui journalise les refus d'Ob (ADR-011) ;
+//! jusque-là, Ob accorde tout ce qui est demandé, sans appeler SeAccessCheck.
 //!
 //! WI7e Ch.6 §Security
 
@@ -24,6 +26,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 extern crate alloc;
 
+pub mod access;
 pub mod acl;
 pub mod client;
 pub mod descriptor;

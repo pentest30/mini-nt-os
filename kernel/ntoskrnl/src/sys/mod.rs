@@ -113,6 +113,7 @@ pub enum Completion {
 /// `(services::NtNom, Handler::…(module::handler)),`.
 pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtAcceptConnectPort, Handler::Status(port::nt_accept_connect_port)),
+    (services::NtAccessCheck, Handler::Status(security::nt_access_check)),
     (services::NtAdjustPrivilegesToken, Handler::Status(security::nt_adjust_privileges_token)),
     (services::NtAddAtom, Handler::Status(atom::nt_add_atom)),
     (services::NtAllocateVirtualMemory, Handler::Status(memory::nt_allocate_virtual_memory)),
@@ -149,6 +150,7 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtCreateToken, Handler::Status(security::nt_create_token)),
     (services::NtDelayExecution, Handler::Status(wait::nt_delay_execution)),
     (services::NtDeleteAtom, Handler::Status(atom::nt_delete_atom)),
+    (services::NtDeleteKey, Handler::Status(registry::nt_delete_key)),
     (services::NtDeleteValueKey, Handler::Status(registry::nt_delete_value_key)),
     (services::NtDeviceIoControlFile, Handler::Status(file::nt_device_io_control_file)),
     (services::NtDuplicateObject, Handler::Status(object::nt_duplicate_object)),

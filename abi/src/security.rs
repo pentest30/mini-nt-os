@@ -84,6 +84,8 @@ pub const SYSTEM_AUDIT_ACE_TYPE: u8 = 2;
 pub const SYSTEM_ALARM_ACE_TYPE: u8 = 3;
 /// The last of the four types whose ACE is a header, a mask and a SID.
 pub const ACCESS_MAX_MS_V2_ACE_TYPE: u8 = 3;
+/// `AceFlags`: the ACE is only inherited, it does not apply to its object.
+pub const INHERIT_ONLY_ACE: u8 = 0x08;
 /// In an ACE of those four types: where the SID starts, after the header
 /// and the mask (`SidStart` of ACCESS_ALLOWED_ACE).
 pub const KNOWN_ACE_SID_START: usize = 8;

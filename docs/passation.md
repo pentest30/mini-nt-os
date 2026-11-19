@@ -1,5 +1,64 @@
 # Notes de passation
 
+- **Revue de la PR 149 : l'ouverture et l'effacement mis en ordre** (`claude/inspiring-allen-8bb1b7`, M7 ; demandé
+  le 2026-11-19). Ke : `ke::KGuardedMutex` (`guarded_mutex`), un verrou qui peut attendre (région gardée, événement
+  de synchronisation du dispatcher ; il tourne sur place sans thread de Ke, avant `ke::init` et dans les tests
+  hôte). Io : le FCB de `Volume` (`fcb`, ce verrou) met en ordre les ouvertures, vérifiées et comptées d'un coup
+  (`Volume::begin_open`, `File::begin_open` avant `check_open` dans NtCreateFile, `File::abandon_open` si la suite
+  échoue avant le handle), et les derniers cleanups avec leur effacement : une ouverture trouvée avant un
+  effacement trouve l'entrée partie (`FatMount::still_names` : le nom 8.3 de l'entrée, que garde le `Node`) et rend
+  `STATUS_OBJECT_NAME_NOT_FOUND`. L'effacement écrit le volume sous ce verrou, plus sous le verrou tournant de la
+  table (`opened`). FILE_DELETE_ON_CLOSE : `delete_on_close_allowed` (volume en lecture seule, racine, fichier en
+  lecture seule) ; le commentaire de NtCreateFile dit pourquoi DELETE est exigé (CreateFileW l'ajoute). Le banc
+  demande le bouton par défaut par SendMessageTimeoutW (2 s, IDOK sinon). Tests hôte : `guarded_mutex::tests`,
+  `an_open_looked_up_before_the_deletion_finds_the_file_gone`, `delete_on_close_is_refused_where_nothing_can_be_deleted`.
+
+- **Le plantage des programmes installés : le PEB de ReactOS** (`claude/inspiring-allen-8bb1b7`, M7,
+  [`compat/applications.md`](compat/applications.md#le-plantage-des-programmes-installés-le-2026-11-19) ;
+  demandé le 2026-11-18, suite de l'entrée suivante). KeePass finissait sur 0xC0000005 dans FlsAlloc (tracé) : la
+  liste des tas suivait le PEB à 0x210 (XP), sur les champs FLS du PEB de Server 2003 pour lequel le mode
+  utilisateur de ReactOS est construit (`FlsBitmap` en 0x218), et le quatrième tas d'un processus y remplaçait le
+  bitmap. Avec le correctif, Notepad++ et l'installeur de SumatraPDF ne plantent plus non plus. `abi::peb32` : les champs FLS, 0x230,
+  `PROCESS_HEAPS_OFFSET` (test `the_heap_list_leaves_the_fls_fields_alone`) ; `ps::eprocess` place la liste après.
+  KeePass ouvre sa fenêtre principale, Notepad++ s'arrête sur sa vérification Authenticode, AbiWord plante dans
+  `libAbiWord.dll` après NtGdiGetCharWidthW et NtGdiGetOutlineTextMetricsInternalW, l'installeur de SumatraPDF rend
+  1 (un profil introuvable). Trouvé par une trace temporaire de `sys::exceptions` (jamais commitée). **Suite** :
+  les métriques des polices de GDI, STATUS_BAD_STACK d'Inno 5.4, Authenticode, le profil de SumatraPDF.
+
+- **NtAccessCheck et l'effacement : quatre applications s'installent** (`claude/inspiring-allen-8bb1b7`, sur
+  `claude/m7-test-bench`, M7, [`compat/applications.md`](compat/applications.md#ntaccesscheck-et-leffacement-le-2026-11-18) ;
+  demandé le 2026-11-18, suite de l'entrée suivante). Se : `se::access` (SeAccessCheck : privilèges, propriétaire,
+  DACL absente, nulle ou vide, ACE dans l'ordre, `MAXIMUM_ALLOWED`), NtAccessCheck (`sys::security`, le vrai
+  résultat : `CheckTokenMembership` d'Inno trouve Administrators). Io : l'effacement, FileDispositionInformation et
+  FILE_DELETE_ON_CLOSE (`Volume::handle_opened`, `set_delete_pending`, `cleanup` : le FCB d'un fichier ouvert, ses
+  objets fichiers qui ont un handle ; `File::handle_opened` après le handle de NtCreateFile, la procédure de
+  fermeture du type `File`), `STATUS_DELETE_PENDING` à l'ouverture ; FAT : `FatVolume::delete_entry` (l'entrée, son
+  nom long même sur deux clusters, la chaîne), `FatMount::delete`, `is_empty_directory`. Le banc imprime le début du
+  journal de l'installeur et ses lignes d'erreur, et répond par le bouton par défaut (DM_GETDEFID). KeePass,
+  Notepad++, AbiWord et Dev-C++ s'installent, leurs programmes démarrent ; WinMerge revient en arrière (RegSvr32
+  rend 3), PeaZip et GIMP (Inno 5.4) finissent sur STATUS_BAD_STACK ; planchers des sept scénarios relevés. Tests
+  hôte : `access::tests` (se), `write_tests::a_deleted_entry_takes_its_long_name_across_clusters`,
+  `a_file_goes_with_the_last_handle_once_its_deletion_is_pending`. **Suite** : l'accès mémoire (0xC0000005) des
+  programmes installés (une trace de `sys::exceptions`), STATUS_BAD_STACK d'Inno 5.4, l'enregistrement de DLL de
+  WinMerge, le renommage (FileRenameInformation), EReadError de Dev-C++.
+
+- **Les quatre Inno Setup du banc passent leur fichier temporaire** (`claude/inspiring-allen-8bb1b7`, sur
+  `claude/m7-test-bench`, M7, [`compat/applications.md`](compat/applications.md#les-quatre-inno-setup-le-2026-11-18) ;
+  demandé le 2026-11-18, premier point du bilan). KeePass, WinMerge, PeaZip et GIMP s'arrêtaient sur « Unable to
+  create a temporary file » : `SetEndOfFile` envoie FileAllocationInformation après FileEndOfFileInformation, sans
+  handler. Io : `File::set_allocation_size` (sous la fin, le fichier est coupé ; au-dessus, la place est vérifiée,
+  pas gardée) et `File::attribute_tag_information` (FileAttributeTagInformation, l'étiquette 0), dans
+  NtSetInformationFile et NtQueryInformationFile (`sys::file`) ; `abi::file::FileAttributeTagInformation`. Le
+  chargeur d'Inno attendait ensuite sans fin, après `setup.tmp` : `win32k::queue` gardait le bit de changement de
+  `QS_SENDMESSAGE` après le dernier message envoyé, et `MsgWaitForMultipleObjects(QS_ALLINPUT)` rendait sans
+  attendre ; il tombe maintenant avec son bit de réveil (ClearMsgBitsMask). Les quatre écrivent leur journal et
+  s'arrêtent sur les droits d'administrateur (`CheckTokenMembership` : NtAccessCheck), le chargeur rend 1 en 11 à
+  27 s ; planchers relevés (version d'Inno, installeur d'origine, fin du chargeur ; « Unable to create a temporary
+  file » et l'arrêt par le banc interdits). Tests hôte : `write_tests::set_end_of_file_sets_the_allocation_too`,
+  `queue::tests::the_last_sent_message_taken_clears_its_change_bit`, le NTFS en lecture seule. **Suite** :
+  NtAccessCheck (les quatre Inno, Notepad++), puis la suppression (FileDispositionInformation, classe 0xd : le
+  `setup.tmp` reste dans `C:\WINDOWS\TEMP` ; NSIS en a besoin pour son dossier de plugins).
+
 - **Le banc d'essai des applications du M7** (`claude/m7-test-bench`, M7,
   [`compat/applications.md`](compat/applications.md#le-banc-dessai) ; demandé le 2026-11-17, sur la PR 142).
   `cargo xtask fetch-apps` (`xtask/src/apps.rs` : les dix installeurs épinglés, vérifiés par taille et SHA-256,

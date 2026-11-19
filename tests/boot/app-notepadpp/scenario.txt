@@ -8,7 +8,18 @@ initial-command = APPBENCH.EXE
 app = notepadpp
 cpus = default
 timeout = 600
-# What works today, a floor: the installer starts.
+# What works today, a floor: NSIS makes its plug-ins directory (a
+# temporary file deleted, FileDispositionInformation, then a directory of
+# its name) and installs; the program starts and shows a window (its FLS
+# fields in the PEB untouched by the heap list): the failure of its
+# Authenticode check of its own DLL.
 expect = [appbench] installer started
+expect = [appbench] installer ended: exit code 0
+expect = [appbench] installed: C:\Program Files\Notepad++\notepad++.exe
+expect = [appbench] program started
+expect = [appbench] program window after
 expect = [appbench] Notepad++ 7.9.2: report done
+forbid = Can't initialize plug-ins directory
+forbid = [appbench] installer still running after
+forbid = [appbench] program ended by itself: exit code c0000005
 forbid = *** STOP:

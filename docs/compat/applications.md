@@ -116,15 +116,159 @@ Ce que le bilan désigne, dans l'ordre où il débloque le plus d'applications (
 vérifiées) :
 
 1. **NtSetInformationFile, classe 0x13** (FileAllocationInformation, que `SetEndOfFile` envoie après
-   FileEndOfFileInformation) : les quatre Inno Setup.
+   FileEndOfFileInformation) : les quatre Inno Setup. Fait le 2026-11-18 (plus bas).
 2. **Le dossier de plugins de NSIS** (Notepad++, AbiWord, Dev-C++) : NtQueryInformationFile classe 0x23
-   (FileAttributeTagInformation) est le seul service sans handler de la phase qui échoue.
+   (FileAttributeTagInformation) est le seul service sans handler de la phase qui échoue. La classe est faite le
+   2026-11-18 ; `DeleteFileW` va alors jusqu'à FileDispositionInformation (classe 0xd), qui ne l'est pas (la
+   suppression, plus bas).
 3. **NtLockFile** : `msiexec` (7-Zip, puis OpenOffice, dont l'installeur NSIS lance un MSI).
 4. **SumatraPDF** : l'accès mémoire qui suit NtQueryInformationProcess(ProcessDebugPort).
 5. **Dev-C++** : l'EReadError, puis le GDI et le USER qui lui manquent (palettes, métriques des polices, moniteurs).
 6. **La lenteur des gros fichiers** : la vérification d'OpenOffice lit 143 Mo en 440 s. Deux suspects, à mesurer :
    le `kernel32` de ReactOS (variante DBG) écrit deux `DbgPrint` par ReadFile sur le port série (12 525 lignes), et
    un fichier de 143 Mo fait 280 000 clusters de 512 octets dans la FAT.
+
+### Les quatre Inno Setup, le 2026-11-18
+
+Ce qui manquait : FileAllocationInformation (`io_manager::File::set_allocation_size` : sous la fin du fichier, le
+fichier est coupé là ; au-dessus, la taille ne change pas et le volume doit avoir les clusters qui manquent, sans
+que la réservation soit gardée) et FileAttributeTagInformation (`File::attribute_tag_information` : les attributs,
+l'étiquette 0). Le chargeur d'Inno Setup extrait son `setup.tmp` dans `C:\WINDOWS\TEMP\is-XXXXX.tmp\` en lui donnant
+d'abord sa taille (SetFilePointer puis SetEndOfFile) : c'est la seconde classe de `SetEndOfFile` qui échouait
+(« Error 1: Incorrect function »).
+
+Un second défaut, de USER, gardait ensuite le chargeur jusqu'à la limite du banc (300 s, 900 s pour GIMP, à 27 s
+du délai du scénario) après la fin de `setup.tmp` : il l'attend par `MsgWaitForMultipleObjects(1, &hProcess, FALSE,
+INFINITE, QS_ALLINPUT)` et recommence tant qu'elle rend 1 ; `setup.tmp` envoie des messages à la fenêtre du chargeur
+(`/SL5="$20060,…"`), et le bit de changement de `QS_SENDMESSAGE` restait levé après le dernier, si bien que
+`user32` rendait 1 sans attendre. `win32k::queue` l'efface maintenant avec son bit de réveil quand il ne reste
+plus de message envoyé, comme ClearMsgBitsMask. Le chargeur finit alors seul, avec le code de `setup.tmp`.
+
+Sur la branche du banc, AMD, un passage par application :
+
+| Application | Inno Setup | Ce qui se passe |
+|---|---|---|
+| KeePass | 5.3.10 | `setup.tmp` démarre et écrit son journal, « User privileges: None », puis « You must be logged in as an administrator when installing this program. » (OK supposé, en silencieux) : EAbort, le chargeur rend 1 en 11 s |
+| WinMerge | 5.2.3 | la même chose, en 12 s |
+| PeaZip | 5.4.2 | la même chose, en 14 s |
+| GIMP | 5.4.3 | la même chose (« … or as a member of the Power Users group »), en 27 s |
+
+Les planchers de leurs scénarios sont relevés là : la version d'Inno Setup et l'installeur d'origine dans le
+journal, la fin du chargeur avec son code ; « Unable to create a temporary file » et un installeur arrêté par le banc
+y sont interdits.
+
+Ce qui venait ensuite, pour les quatre (fait le même jour, section suivante) :
+
+1. **NtAccessCheck** (Se) : Inno Setup demande si l'utilisateur est administrateur (et, pour GIMP, de Power Users)
+   par `CheckTokenMembership` d'`advapi32`, qui fait NtAccessCheck sur un descripteur dont la DACL donne l'accès 1 au
+   SID du groupe ; sans handler, le groupe passe pour absent. Le banc tourne sous le jeton de System, où
+   Administrators est activé : NtAccessCheck suffirait à passer ce point. Notepad++ l'appelle aussi.
+2. **La suppression** (Io) : à sa sortie, le chargeur efface `setup.tmp` (`DeleteFileW` :
+   FileAttributeTagInformation, puis FileDispositionInformation, classe 0xd, sans handler) ; le fichier et son
+   répertoire restent dans `C:\WINDOWS\TEMP`. Sans effet sur l'issue aujourd'hui ; une installation qui remplace ou
+   efface des fichiers en aura besoin, et NSIS pour son dossier de plugins (point 2 du bilan).
+
+### NtAccessCheck et l'effacement, le 2026-11-18
+
+Ce qui est fait :
+
+- **NtAccessCheck** (`se::access`, `sys::security`) : SeAccessCheck d'XP (ReactOS comme spécification) ; les
+  privilèges d'abord (`ACCESS_SYSTEM_SECURITY`, `WRITE_OWNER`), les droits du propriétaire, une DACL absente ou nulle
+  qui accorde tout, les ACE dans l'ordre (refus, autorisation, « héritage seulement » ignorées, droits génériques
+  par la correspondance de l'objet), `MAXIMUM_ALLOWED`. Le service rend le vrai résultat : le mode permissif de
+  l'ADR-011 ne concerne que les ouvertures d'Ob. `CheckTokenMembership` trouve Administrators dans le jeton de
+  System : « User privileges: Administrative ».
+- **L'effacement** (Io, FAT) : FileDispositionInformation et FILE_DELETE_ON_CLOSE le mettent en attente, sur ce
+  que le volume garde d'un fichier ouvert (son FCB : les objets fichiers qui ont un handle) ; le fichier part avec
+  le dernier handle (`Volume::cleanup` : son entrée, celles de son nom long, même sur deux clusters, et ses
+  clusters) ; une ouverture d'un fichier en attente rend `STATUS_DELETE_PENDING` ; un fichier en lecture seule
+  (`STATUS_CANNOT_DELETE`), un répertoire qui tient quelque chose (`STATUS_DIRECTORY_NOT_EMPTY`) et la racine ne
+  s'effacent pas.
+- **Le banc** : il imprime aussi les 12 premières lignes du journal de l'installeur (sa version, qui l'exécute), et
+  entre elles et les 40 dernières, celles qui disent une erreur (« error », « fail », « exception », « rolling
+  back », « abort ») ; il répond à une boîte par son bouton par défaut (DM_GETDEFID : Oui d'une question), plus
+  seulement par IDOK.
+
+Sur la branche, AMD, un passage par application :
+
+| Application | Ce qui se passe |
+|---|---|
+| KeePass (Inno 5.3.10) | **installée** en 10 s : Setup rend 0, ses fichiers sont dans `C:\Program Files\KeePass Password Safe` sans temporaires laissés ; `KeePass.exe` démarre, puis finit sur un accès mémoire non géré (0xC0000005) |
+| WinMerge (Inno 5.2.3) | Setup copie ses fichiers, puis l'enregistrement d'une DLL échoue (« RegSvr32 failed with exit code 0x3 ») : Abandonner, supposé en silencieux, et retour arrière ; Setup rend 5 |
+| PeaZip (Inno 5.4.2) | Setup crée son répertoire temporaire, puis finit sur STATUS_BAD_STACK (0xC0000028, levée par RtlUnwind de `ntdll`) en 8 s, avant de commencer l'installation |
+| GIMP (Inno 5.4.3) | de même, après son script (associations, pages de l'assistant) |
+| Notepad++ (NSIS) | **installé** en 66 s (le dossier de plugins : un fichier temporaire effacé, puis un répertoire de son nom) ; `notepad++.exe` démarre, puis finit sur 0xC0000005 |
+| AbiWord (NSIS) | **installé** en 108 s ; `AbiWord.exe` démarre, puis finit sur 0xC0000005 |
+| Dev-C++ (NSIS) | **installé** en 459 s : ses fichiers, puis « Do you want to install Dev-C++ for all users on this computer ? » (Oui), et NSIS rend 0 ; `devcpp.exe` s'arrête toujours sur « EReadError … Code: 120 » (ERROR_CALL_NOT_IMPLEMENTED, en lisant le glyphe d'un bouton) |
+
+L'apitest NtAccessCheck de `ntdll` passe de nouveau (`rostests` : 44/84 sur un hôte chargé, où
+NtProtectVirtualMemory dépasse ses 20 s ; le plancher reste 44) ; `kernel32` reste à 16/29.
+
+Les planchers des sept scénarios sont relevés à ce qui marche : les fichiers installés et le programme démarré pour
+KeePass, Notepad++, AbiWord et Dev-C++ ; « User privileges: Administrative » et la fin de Setup pour les autres. Y
+sont interdits « Unable to create a temporary file », « User privileges: None », « Can't initialize plug-ins
+directory » et un installeur arrêté par le banc.
+
+Ce qui venait ensuite, dans l'ordre où cela débloque le plus (le premier point est fait le lendemain, section
+suivante) :
+
+1. **L'accès mémoire des programmes installés** (KeePass, Notepad++, AbiWord ; peut-être SumatraPDF, dont
+   l'installeur finit de même) : le filtre des exceptions non gérées de `kernel32` le prend (d'où
+   NtQueryInformationProcess(ProcessDebugPort), puis NtRaiseHardError, puis la fin du processus avec 0xC0000005),
+   si bien que rien ne journalise l'adresse. ProcessDebugPort en est une conséquence, pas la cause. Une trace
+   temporaire de `sys::exceptions` (adresse, registres, octets du code) trouvera l'instruction et sa DLL.
+2. **STATUS_BAD_STACK d'Inno Setup 5.4** (PeaZip, GIMP) : RtlUnwind trouve un cadre SEH hors des limites de pile
+   du TEB, ou mal aligné. KeePass (5.3) et WinMerge (5.2) ne le rencontrent pas. Les limites du TEB suivent bien la
+   croissance de la pile (`AddressSpace::extend_user_stack`) ; à chercher du côté des rappels du mode utilisateur
+   (une exception levée dans une procédure de fenêtre appelée par win32k et attrapée au-dessus).
+3. **L'enregistrement des DLL** (WinMerge) : Inno lance son aide d'enregistrement, qui rend 3 sur
+   `ShellExtensionU.dll` ; à suivre par les services sans handler de ce processus.
+4. **Le renommage** (NtSetInformationFile classe 0xa, FileRenameInformation) : Inno installe chaque fichier sous un
+   nom temporaire puis le renomme ; sans renommage, il copie puis efface. Pas bloquant, mais lent et à faire.
+5. **Les raccourcis** : CoCreateInstance(CLSID_ShellLink) rend REGDB_E_CLASSNOTREG sur le disque du banc (les
+   serveurs COM de `shell32` ne sont enregistrés que par `minoinit`, au premier démarrage d'une installation) ;
+   Inno passe outre.
+
+### Le plantage des programmes installés, le 2026-11-19
+
+La cause : la liste des tas du processus (`ProcessHeaps`) suivait le PEB à 0x210, la taille du PEB d'XP. Le mode
+utilisateur de ReactOS est construit pour Server 2003, dont le PEB a ses champs de stockage local aux fibres (FLS)
+de 0x20C à 0x22F et fait 0x230 : `ntdll` y met son bitmap des index FLS (`FlsBitmap`, en 0x218), FlsAlloc de
+`kernel32` le lit, et le noyau de ReactOS place la liste des tas après eux (`Peb + 1`). Chaque tas qu'un processus
+crée s'inscrivait sur ces champs ; au quatrième (celui d'un CRT, de MFC), `Peb->FlsBitmap` désignait un tas, et
+FlsAlloc, que le CRT de MSVC appelle à son démarrage, lisait l'adresse 0 dans RtlFindClearBits. Une trace
+temporaire de `sys::exceptions` (adresse, registres, octets du code, pile) et la pile que le filtre des exceptions
+de `kernel32` imprime l'ont montré : `ntdll!RtlFindClearBits` ← `RtlFindClearBitsAndSet` ← `kernel32!FlsAlloc` ←
+`KeePass.exe`. `abi::peb32` a maintenant les champs FLS (0x230), et la liste des tas commence après eux
+(`PROCESS_HEAPS_OFFSET`) ; les champs de version restent ceux d'XP (ADR-003).
+
+Les nombreux accès invalides en `ntdll!strncpy` (0x7C97B92E) que la trace montre aussi viennent des `TRACE` de
+ReactOS, qui lisent un identifiant de ressource comme une chaîne : ils sont rattrapés, sauf dans les processus
+d'aide de Dev-C++ (huit, qui finissent ainsi).
+
+Sur la branche, AMD, un passage par application :
+
+| Application | Ce qui se passe |
+|---|---|
+| KeePass | ne plante plus : sa fenêtre principale s'ouvre (arbre, liste, New, Open, Save…) ; son titre se lit « K » ; elle ne se ferme pas sur WM_CLOSE en 15 s, le banc la termine |
+| Notepad++ | ne plante plus : il montre « Authenticode check failed: signing certificate or hash is not recognized » (« DLL signature verification failed ») : il vérifie la signature de sa propre DLL |
+| AbiWord | plante encore, ailleurs : `libAbiWord.dll` lit l'adresse 0x3C (le champ d'un objet nul), juste après NtGdiGetOutlineTextMetricsInternalW et NtGdiGetCharWidthW, sans handler |
+| SumatraPDF | l'installeur ne plante plus : il ne trouve pas `ktmw32.dll` (une DLL de Vista), puis `userenv` rend l'erreur 2 (un profil introuvable), et il rend 1 en 5 s |
+| Dev-C++ | inchangé : `devcpp.exe` s'arrête sur EReadError (code 120) |
+
+Les planchers de KeePass et de Notepad++ attendent la fenêtre du programme et interdisent sa fin sur 0xC0000005.
+
+Ce qui vient ensuite, dans l'ordre où cela débloque le plus :
+
+1. **Les métriques des polices de GDI** (AbiWord ; Dev-C++ et les installeurs les appellent aussi) :
+   NtGdiGetCharWidthW et NtGdiGetOutlineTextMetricsInternalW rendent 0 sans être faits.
+2. **STATUS_BAD_STACK d'Inno Setup 5.4** (PeaZip, GIMP).
+3. **Authenticode** (Notepad++) : WinVerifyTrust et la chaîne de certificats de `wintrust` et `crypt32` de ReactOS.
+4. **Le profil que `userenv` ne trouve pas** (SumatraPDF) : le banc remplace `winlogon` et tourne sous le jeton
+   de System, sans session ouverte.
+5. **KeePass** : WM_CLOSE de sa fenêtre principale, et son titre.
+6. Et toujours : l'enregistrement de DLL de WinMerge, le renommage (FileRenameInformation), EReadError de Dev-C++,
+   les processus d'aide de Dev-C++.
 
 ### La suite
 

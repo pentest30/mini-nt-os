@@ -17,7 +17,13 @@
  *    classes under HKCR (browseui: the Start menu and the taskbar's band site,
  *    which explorer creates; shell32: the CLSIDs of the shell's folders and
  *    their icons, the user's shell folders); a failed registration is logged,
- *    not fatal, as in syssetup;
+ *    not fatal, as in syssetup. One of them leaves the Finalize of syssetup in
+ *    RunOnceEx (« rundll32 setupapi.dll,InstallHinfSection Finalize ») : a
+ *    finished install has consumed it (iernonce runs it at the first logon),
+ *    and it is deleted here — without iernonce.dll nor setupapi.dll on the
+ *    disk, explorer's ProcessRunOnceEx would launch « rundll32 iernonce.dll
+ *    RunOnceExProcess », whose rundll32 stops on its « LoadLibrary failed »
+ *    MessageBox and never comes back;
  * 4. the hive of Default User: HKU\.DEFAULT written back to its file
  *    (NtFlushKey), copied as NTUSER.DAT in the Default User profile
  *    (syssetup's SaveDefaultUserHive saves the key itself, RegSaveKeyEx);
@@ -94,6 +100,11 @@ typedef BOOL(__stdcall *InitializeProfilesFn)(void);
 typedef BOOL(__stdcall *GetDefaultUserProfileDirectoryWFn)(WCHAR *path, DWORD *size);
 typedef LONG(__stdcall *CoInitializeFn)(void *reserved);
 typedef LONG(__stdcall *DllRegisterServerFn)(void);
+typedef LONG(__stdcall *SHDeleteKeyWFn)(void *key, const WCHAR *subkey);
+
+/* HKEY_LOCAL_MACHINE, as shlwapi takes it (a predefined handle, not a key of
+ * the kernel's registry: shlwapi resolves it itself). */
+#define HKEY_LOCAL_MACHINE_PREDEFINED ((void *)0x80000002)
 
 /* How long samsrv may take to make the accounts. */
 #define SAM_WAIT_MS 30000
@@ -281,6 +292,24 @@ static void register_the_dlls(void)
     }
 }
 
+/* 3, the end. RunOnceEx, where a registration can leave syssetup's Finalize,
+ * is consumed: a finished install has run it, and the logon of the next boot
+ * has nothing to do there (explorer launches iernonce for it, which the disk
+ * has not). SHDeleteKeyW of shlwapi takes the whole subtree down (ReactOS's
+ * advapi32 has no RegDeleteTreeW). */
+static void consume_the_run_once(void)
+{
+    HMODULE shlwapi = LoadLibraryW(L"shlwapi.dll");
+    SHDeleteKeyWFn delete_key = shlwapi ? (SHDeleteKeyWFn)GetProcAddress(shlwapi, "SHDeleteKeyW") : 0;
+    if (!delete_key) {
+        DbgPrint("[minoinit] RunOnceEx: no SHDeleteKeyW (%lu)\n", GetLastError());
+        return;
+    }
+    DbgPrint("[minoinit] RunOnceEx: %lx\n",
+             (DWORD)delete_key(HKEY_LOCAL_MACHINE_PREDEFINED,
+                               L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\RunOnceEx"));
+}
+
 /* 4. The hive of Default User, in its profile `profile`. */
 static void save_the_default_user_hive(WCHAR *profile)
 {
@@ -333,6 +362,7 @@ DWORD __stdcall GuiStartup(void)
     wait_for_the_accounts();
     make_the_profiles(profile, 260);
     register_the_dlls();
+    consume_the_run_once();
     save_the_default_user_hive(profile);
     finish();
     ExitProcess(0);

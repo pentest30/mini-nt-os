@@ -19,15 +19,20 @@
 //! Un nom sous `\Device\NamedPipe` ouvre un tube, et les services d'un
 //! fichier de tube passent par [`super::pipe`] (NPFS).
 //!
+//! L'effacement : FileDispositionInformation (NtSetInformationFile) ou
+//! FILE_DELETE_ON_CLOSE (NtCreateFile) le mettent en attente, et le fichier
+//! part avec le dernier handle de ses ouvertures (`io_manager::File`).
+//!
 //! Pas encore : les attributs étendus (`STATUS_EAS_NOT_SUPPORTED`), le
 //! partage, les E/S asynchrones des volumes (un événement ou une APC de fin :
 //! `STATUS_NOT_IMPLEMENTED`, journalisé une fois ; celles des tubes sont
-//! faites), la suppression.
+//! faites), le renommage.
 
 use abi::file::{
-    directory_entry_layout, FILE_APPEND_DATA, FILE_CREATED, FILE_END_OF_FILE_INFORMATION,
-    FILE_ID_BOTH_DIRECTORY_INFORMATION, FILE_ID_FULL_DIRECTORY_INFORMATION, FILE_LIST_DIRECTORY, FILE_READ_DATA,
-    FILE_USE_FILE_POINTER_POSITION, FILE_WRITE_DATA, FILE_WRITE_TO_END_OF_FILE,
+    directory_entry_layout, FileAttributeTagInformation, FILE_ALLOCATION_INFORMATION, FILE_APPEND_DATA,
+    FILE_ATTRIBUTE_TAG_INFORMATION, FILE_CREATED, FILE_DELETE_ON_CLOSE, FILE_DISPOSITION_INFORMATION,
+    FILE_END_OF_FILE_INFORMATION, FILE_ID_BOTH_DIRECTORY_INFORMATION, FILE_ID_FULL_DIRECTORY_INFORMATION,
+    FILE_LIST_DIRECTORY, FILE_READ_DATA, FILE_USE_FILE_POINTER_POSITION, FILE_WRITE_DATA, FILE_WRITE_TO_END_OF_FILE,
 };
 use abi::file::{
     FileBasicInformation, FileEaInformation, FileFsAttributeInformation, FileFsDeviceInformation,
@@ -108,10 +113,14 @@ fn split_last(name: &str) -> (&str, &str) {
 /// d'état en `iosb`.
 fn create_file(out: u32, attributes: u32, iosb: u32, open: Open) -> Result<(), NtStatus> {
     let both = FILE_DIRECTORY_FILE | FILE_NON_DIRECTORY_FILE;
+    // FILE_DELETE_ON_CLOSE needs DELETE in the desired access, else
+    // STATUS_INVALID_PARAMETER, as IopCreateFile (ZwCreateFile documents it):
+    // CreateFileW of kernel32 adds DELETE for FILE_FLAG_DELETE_ON_CLOSE.
     if open.options & !FILE_VALID_OPTION_FLAGS != 0
         || open.share & !FILE_SHARE_VALID_FLAGS != 0
         || open.disposition > FILE_MAXIMUM_DISPOSITION
         || open.options & both == both
+        || (open.options & FILE_DELETE_ON_CLOSE != 0 && open.desired & AccessMask::DELETE.0 == 0)
     {
         return Err(STATUS_INVALID_PARAMETER);
     }
@@ -133,7 +142,11 @@ fn create_file(out: u32, attributes: u32, iosb: u32, open: Open) -> Result<(), N
             }
             let file = ob::downcast::<File>(&object).ok_or(STATUS_OBJECT_TYPE_MISMATCH)?;
             let granted = file.granted_access(AccessMask(open.desired))?;
-            let information = io_manager::check_open(&file, open.disposition, open.options, granted)?;
+            // Counted before the disposition is applied: a last close that
+            // deletes the file waits for it, or it finds the file gone.
+            file.begin_open(open.options)?;
+            let information = io_manager::check_open(&file, open.disposition, open.options, granted)
+                .inspect_err(|_| file.abandon_open())?;
             (file, information, granted)
         }
         Err(STATUS_OBJECT_NAME_NOT_FOUND) if io_manager::creates(open.disposition) => {
@@ -149,6 +162,7 @@ fn create_file(out: u32, attributes: u32, iosb: u32, open: Open) -> Result<(), N
             let as_directory = open.options & FILE_DIRECTORY_FILE != 0;
             let file = directory.create_child(last, as_directory, open.file_attributes)?;
             let granted = file.granted_access(AccessMask(open.desired))?;
+            file.begin_open(open.options)?;
             (file, FILE_CREATED, granted)
         }
         Err(status) => return Err(status),
@@ -156,7 +170,8 @@ fn create_file(out: u32, attributes: u32, iosb: u32, open: Open) -> Result<(), N
     file.set_mode(open.options);
     let process = super::current_process();
     let handle_attributes = HandleAttributes { inherit: attributes & OBJ_INHERIT != 0, protect_from_close: false };
-    let handle = process.handle_table.insert(file, granted, handle_attributes)?;
+    let handle =
+        process.handle_table.insert(file.clone(), granted, handle_attributes).inspect_err(|_| file.abandon_open())?;
     give_handle(&out, handle)?;
     let block = IoStatusBlock32 { status: STATUS_SUCCESS.0, information };
     if let Err(fault) = ke::usermem::copy_to_user(u64::from(iosb), &block.to_bytes()) {
@@ -223,7 +238,8 @@ pub(super) fn nt_query_full_attributes_file(arguments: &[u32]) -> NtStatus {
 /// Length, FileInformationClass) : FileBasic (`FILE_READ_ATTRIBUTES`),
 /// FileStandard, FileEa (0 : ni la FAT ni NPFS n'ont d'attributs étendus),
 /// FileName (le chemin depuis la racine du volume),
-/// FilePosition ou FileNetworkOpenInformation (`FILE_READ_ATTRIBUTES`) ;
+/// FilePosition, FileNetworkOpenInformation ou FileAttributeTagInformation
+/// (`FILE_READ_ATTRIBUTES` ; l'étiquette 0, sans point d'analyse) ;
 /// sur un tube, FileName (`\nom`), FilePipe et FilePipeLocalInformation
 /// (`FILE_READ_ATTRIBUTES`, [`super::pipe::query_information`]).
 /// `STATUS_INFO_LENGTH_MISMATCH` sous la taille de la classe ; un nom
@@ -266,6 +282,7 @@ fn query_information_file(arguments: &[u32]) -> Result<NtStatus, NtStatus> {
         FILE_NAME_INFORMATION => (size_of::<FileNameInformation>(), 0),
         FILE_POSITION_INFORMATION => (size_of::<FilePositionInformation>(), 0),
         FILE_NETWORK_OPEN_INFORMATION => (size_of::<FileNetworkOpenInformation>(), FILE_READ_ATTRIBUTES),
+        FILE_ATTRIBUTE_TAG_INFORMATION => (size_of::<FileAttributeTagInformation>(), FILE_READ_ATTRIBUTES),
         FILE_PIPE_INFORMATION => (size_of::<FilePipeInformation>(), FILE_READ_ATTRIBUTES),
         FILE_PIPE_LOCAL_INFORMATION => (size_of::<FilePipeLocalInformation>(), FILE_READ_ATTRIBUTES),
         // NT rend INVALID_INFO_CLASS pour une classe qu'il ne connaît pas
@@ -311,6 +328,7 @@ fn query_information_file(arguments: &[u32]) -> Result<NtStatus, NtStatus> {
         FILE_POSITION_INFORMATION => {
             (FilePositionInformation { current_byte_offset: file.position() }.to_bytes().into(), STATUS_SUCCESS)
         }
+        FILE_ATTRIBUTE_TAG_INFORMATION => (file.attribute_tag_information()?.to_bytes().into(), STATUS_SUCCESS),
         _ => (file.network_open_information()?.to_bytes().into(), STATUS_SUCCESS),
     };
     give_information(&information, status, iosb, buffer)
@@ -681,9 +699,12 @@ static SET_CLASSES: super::ClassReport = super::ClassReport::new("NtSetInformati
 /// NtSetInformationFile(FileHandle, IoStatusBlock, FileInformation, Length,
 /// FileInformationClass) : FileBasicInformation (les dates et les attributs,
 /// `FILE_WRITE_ATTRIBUTES` ; 0 laisse un champ comme il est),
-/// FilePositionInformation (la position) et FileEndOfFileInformation (la
-/// taille, `FILE_WRITE_DATA`) ; FilePipeInformation d'un tube (ses modes,
-/// `FILE_WRITE_ATTRIBUTES`).
+/// FilePositionInformation (la position), FileEndOfFileInformation (la
+/// taille, `FILE_WRITE_DATA`), FileAllocationInformation (la place
+/// réservée, `FILE_WRITE_DATA` : `io_manager::File::set_allocation_size`) et
+/// FileDispositionInformation (l'effacement en attente ou annulé, `DELETE` :
+/// `io_manager::File::set_delete_pending`) ; FilePipeInformation d'un tube
+/// (ses modes, `FILE_WRITE_ATTRIBUTES`).
 pub(super) fn nt_set_information_file(arguments: &[u32]) -> NtStatus {
     status(set_information_file(arguments))
 }
@@ -696,7 +717,9 @@ fn set_information_file(arguments: &[u32]) -> Result<(), NtStatus> {
     let (size, access) = match class {
         FILE_BASIC_INFORMATION => (size_of::<FileBasicInformation>(), FILE_WRITE_ATTRIBUTES),
         FILE_POSITION_INFORMATION => (size_of::<FilePositionInformation>(), 0),
-        FILE_END_OF_FILE_INFORMATION => (8, FILE_WRITE_DATA),
+        FILE_END_OF_FILE_INFORMATION | FILE_ALLOCATION_INFORMATION => (8, FILE_WRITE_DATA),
+        // FILE_DISPOSITION_INFORMATION: a BOOLEAN.
+        FILE_DISPOSITION_INFORMATION => (1, AccessMask::DELETE.0),
         FILE_PIPE_INFORMATION => (size_of::<FilePipeInformation>(), FILE_WRITE_ATTRIBUTES),
         _ => return Err(SET_CLASSES.report(class)),
     };
@@ -731,6 +754,13 @@ fn set_information_file(arguments: &[u32]) -> Result<(), NtStatus> {
             file.set_basic_information(&FileBasicInformation::from_bytes(&bytes))?;
         }
         FILE_POSITION_INFORMATION => file.set_position(UserPtr::<u64>::new(buffer).read()?),
+        FILE_ALLOCATION_INFORMATION => file.set_allocation_size(UserPtr::<u64>::new(buffer).read()?)?,
+        FILE_DISPOSITION_INFORMATION => {
+            let mut delete = [0u8; 1];
+            ke::usermem::probe_for_read(u64::from(buffer), 1, 1)?;
+            ke::usermem::copy_from_user(&mut delete, u64::from(buffer))?;
+            file.set_delete_pending(delete[0] != 0)?;
+        }
         _ => {
             let value = UserPtr::<u64>::new(buffer).read()?;
             if file.is_directory() {

@@ -1,7 +1,9 @@
 //! Les services de Se (`se`) : les jetons d'un processus et d'un thread,
 //! leurs classes d'information, l'état de leurs privilèges, un jeton créé de
 //! toutes pièces (NtCreateToken, celui que `lsasrv` fait pour l'utilisateur
-//! qui ouvre sa session) ; les descripteurs de sécurité des objets.
+//! qui ouvre sa session) ; les descripteurs de sécurité des objets ; la
+//! vérification d'accès qu'un appelant demande (NtAccessCheck, `se::access` :
+//! `CheckTokenMembership`).
 //!
 //! L'emprunt d'identité : un serveur prend celle d'un thread client
 //! (NtImpersonateThread, comme CsrImpersonateClient), un thread prend celle
@@ -23,16 +25,17 @@ use alloc::vec::Vec;
 use abi::lpc::SecurityQualityOfService32;
 use abi::ntstatus::{
     NtStatus, STATUS_ACCESS_DENIED, STATUS_BAD_IMPERSONATION_LEVEL, STATUS_BAD_TOKEN_TYPE, STATUS_BUFFER_TOO_SMALL,
-    STATUS_CANT_OPEN_ANONYMOUS, STATUS_INVALID_PARAMETER, STATUS_NOT_ALL_ASSIGNED, STATUS_NOT_IMPLEMENTED,
-    STATUS_NO_SUCH_LOGON_SESSION, STATUS_NO_TOKEN, STATUS_PRIVILEGE_NOT_HELD, STATUS_SUCCESS,
+    STATUS_CANT_OPEN_ANONYMOUS, STATUS_GENERIC_NOT_MAPPED, STATUS_INVALID_PARAMETER, STATUS_INVALID_SECURITY_DESCR,
+    STATUS_NOT_ALL_ASSIGNED, STATUS_NOT_IMPLEMENTED, STATUS_NO_IMPERSONATION_TOKEN, STATUS_NO_SUCH_LOGON_SESSION,
+    STATUS_NO_TOKEN, STATUS_PRIVILEGE_NOT_HELD, STATUS_SUCCESS,
 };
-use abi::object::{AccessMask, ObjectAttributes32, OBJ_INHERIT};
+use abi::object::{AccessMask, GenericMapping, ObjectAttributes32, OBJ_INHERIT};
 use abi::process::{NT_CURRENT_PROCESS, NT_CURRENT_THREAD};
 use abi::security::{
     LuidAndAttributes32, SidAndAttributes32, TokenSource32, DACL_SECURITY_INFORMATION, GROUP_SECURITY_INFORMATION,
     OWNER_SECURITY_INFORMATION, SACL_SECURITY_INFORMATION, SECURITY_ANONYMOUS, SECURITY_DELEGATION,
-    SECURITY_IMPERSONATION, SE_ASSIGNPRIMARYTOKEN_PRIVILEGE, SE_CREATE_TOKEN_PRIVILEGE, TOKEN_TYPE_IMPERSONATION,
-    TOKEN_TYPE_PRIMARY,
+    SECURITY_IDENTIFICATION, SECURITY_IMPERSONATION, SE_ASSIGNPRIMARYTOKEN_PRIVILEGE, SE_CREATE_TOKEN_PRIVILEGE,
+    SE_PRIVILEGE_USED_FOR_ACCESS, TOKEN_TYPE_IMPERSONATION, TOKEN_TYPE_PRIMARY,
 };
 use ke::usermem::UserPtr;
 use ob::{Handle, Object, ObjectRef};
@@ -608,4 +611,93 @@ pub(super) fn nt_query_security_object(arguments: &[u32]) -> NtStatus {
         Ok(STATUS_SUCCESS)
     };
     status(query())
+}
+
+/// La taille d'un PRIVILEGE_SET avant ses entrées (`PrivilegeCount`,
+/// `Control`) ; `sizeof(PRIVILEGE_SET)` en compte une.
+const PRIVILEGE_SET_HEADER: usize = 8;
+
+/// NtAccessCheck(SecurityDescriptor, ClientToken, DesiredAccess,
+/// GenericMapping, PrivilegeSet, *PrivilegeSetLength, *GrantedAccess,
+/// *AccessStatus) : les droits que le descripteur accorde au jeton
+/// d'emprunt d'identité `ClientToken` (`TOKEN_QUERY`, au moins le niveau
+/// SecurityIdentification), par [`se::access`] ; le refus va dans
+/// `AccessStatus` (le service rend alors `STATUS_SUCCESS`), les privilèges
+/// qui ont servi dans `PrivilegeSet`.
+///
+/// Comme SepAccessCheck : `STATUS_GENERIC_NOT_MAPPED` pour des droits
+/// génériques ; `STATUS_NO_IMPERSONATION_TOKEN`,
+/// `STATUS_BAD_IMPERSONATION_LEVEL` ; les privilèges avant le descripteur
+/// (`ACCESS_SYSTEM_SECURITY` sans SeSecurityPrivilege :
+/// `STATUS_PRIVILEGE_NOT_HELD` dans `AccessStatus`) ; un `PrivilegeSet` trop
+/// petit : `STATUS_BUFFER_TOO_SMALL`, la taille nécessaire dans
+/// `PrivilegeSetLength` ; un descripteur sans propriétaire ou sans groupe :
+/// `STATUS_INVALID_SECURITY_DESCR`.
+pub(super) fn nt_access_check(arguments: &[u32]) -> NtStatus {
+    status(access_check(arguments))
+}
+
+fn access_check(arguments: &[u32]) -> Result<NtStatus, NtStatus> {
+    let [descriptor, token, desired, mapping, privileges, privileges_length, granted_out, status_out] = arguments[..8]
+    else {
+        unreachable!("8 arguments")
+    };
+    let mut bytes = [0u8; core::mem::size_of::<GenericMapping>()];
+    ke::usermem::probe_for_read(u64::from(mapping), bytes.len(), 4)?;
+    let length = UserPtr::<u32>::new(privileges_length);
+    let room = length.read()? as usize;
+    ke::usermem::probe_for_write(u64::from(privileges), room, 4)?;
+    ke::usermem::probe_for_write(u64::from(granted_out), 4, 4)?;
+    ke::usermem::probe_for_write(u64::from(status_out), 4, 4)?;
+    ke::usermem::copy_from_user(&mut bytes, u64::from(mapping))?;
+    let right =
+        |index: usize| AccessMask(u32::from_le_bytes(bytes[index * 4..index * 4 + 4].try_into().unwrap_or_default()));
+    let mapping = GenericMapping { read: right(0), write: right(1), execute: right(2), all: right(3) };
+    let desired = AccessMask(desired);
+    let generic =
+        AccessMask::GENERIC_READ | AccessMask::GENERIC_WRITE | AccessMask::GENERIC_EXECUTE | AccessMask::GENERIC_ALL;
+    if desired.intersects(generic) {
+        return Err(STATUS_GENERIC_NOT_MAPPED);
+    }
+    let token = reference_token(token, TOKEN_QUERY)?;
+    if token.token_type() != TOKEN_TYPE_IMPERSONATION {
+        return Err(STATUS_NO_IMPERSONATION_TOKEN);
+    }
+    if token.impersonation_level() < SECURITY_IDENTIFICATION {
+        return Err(STATUS_BAD_IMPERSONATION_LEVEL);
+    }
+    let answer = |granted: AccessMask, result: NtStatus| -> Result<NtStatus, NtStatus> {
+        UserPtr::<u32>::new(granted_out).write(&granted.0)?;
+        UserPtr::<u32>::new(status_out).write(&result.0)?;
+        Ok(STATUS_SUCCESS)
+    };
+    let grant = match se::access::privilege_check(&token, desired) {
+        Ok(grant) => grant,
+        Err(refused) => return answer(AccessMask::NONE, refused),
+    };
+    let needed = PRIVILEGE_SET_HEADER + PRIVILEGE_SIZE * grant.used.len().max(1);
+    if room < needed {
+        length.write(&(needed as u32))?;
+        return Err(STATUS_BUFFER_TOO_SMALL);
+    }
+    let mut set = Vec::with_capacity(needed);
+    set.extend_from_slice(&(grant.used.len() as u32).to_le_bytes());
+    set.extend_from_slice(&0u32.to_le_bytes());
+    for luid in &grant.used {
+        let used = LuidAndAttributes32 { luid: luid.to_abi(), attributes: SE_PRIVILEGE_USED_FOR_ACCESS };
+        set.extend_from_slice(used.as_bytes());
+    }
+    ke::usermem::copy_to_user(u64::from(privileges), &set)?;
+    if descriptor == 0 {
+        return Err(STATUS_INVALID_SECURITY_DESCR);
+    }
+    let descriptor =
+        SecurityDescriptor::capture(descriptor, &mut |at, buffer| ke::usermem::copy_from_user(buffer, u64::from(at)))?;
+    if descriptor.owner.is_none() || descriptor.group.is_none() {
+        return Err(STATUS_INVALID_SECURITY_DESCR);
+    }
+    match se::access::access_check(&descriptor, &token, grant.remaining, grant.granted, &mapping) {
+        Ok(granted) => answer(granted, STATUS_SUCCESS),
+        Err(refused) => answer(AccessMask::NONE, refused),
+    }
 }
