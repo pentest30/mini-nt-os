@@ -209,7 +209,8 @@ KeePass, Notepad++, AbiWord et Dev-C++ ; « User privileges: Administrative » e
 sont interdits « Unable to create a temporary file », « User privileges: None », « Can't initialize plug-ins
 directory » et un installeur arrêté par le banc.
 
-Ce qui vient ensuite, dans l'ordre où cela débloque le plus :
+Ce qui venait ensuite, dans l'ordre où cela débloque le plus (le premier point est fait le lendemain, section
+suivante) :
 
 1. **L'accès mémoire des programmes installés** (KeePass, Notepad++, AbiWord ; peut-être SumatraPDF, dont
    l'installeur finit de même) : le filtre des exceptions non gérées de `kernel32` le prend (d'où
@@ -227,6 +228,47 @@ Ce qui vient ensuite, dans l'ordre où cela débloque le plus :
 5. **Les raccourcis** : CoCreateInstance(CLSID_ShellLink) rend REGDB_E_CLASSNOTREG sur le disque du banc (les
    serveurs COM de `shell32` ne sont enregistrés que par `minoinit`, au premier démarrage d'une installation) ;
    Inno passe outre.
+
+### Le plantage des programmes installés, le 2026-11-19
+
+La cause : la liste des tas du processus (`ProcessHeaps`) suivait le PEB à 0x210, la taille du PEB d'XP. Le mode
+utilisateur de ReactOS est construit pour Server 2003, dont le PEB a ses champs de stockage local aux fibres (FLS)
+de 0x20C à 0x22F et fait 0x230 : `ntdll` y met son bitmap des index FLS (`FlsBitmap`, en 0x218), FlsAlloc de
+`kernel32` le lit, et le noyau de ReactOS place la liste des tas après eux (`Peb + 1`). Chaque tas qu'un processus
+crée s'inscrivait sur ces champs ; au quatrième (celui d'un CRT, de MFC), `Peb->FlsBitmap` désignait un tas, et
+FlsAlloc, que le CRT de MSVC appelle à son démarrage, lisait l'adresse 0 dans RtlFindClearBits. Une trace
+temporaire de `sys::exceptions` (adresse, registres, octets du code, pile) et la pile que le filtre des exceptions
+de `kernel32` imprime l'ont montré : `ntdll!RtlFindClearBits` ← `RtlFindClearBitsAndSet` ← `kernel32!FlsAlloc` ←
+`KeePass.exe`. `abi::peb32` a maintenant les champs FLS (0x230), et la liste des tas commence après eux
+(`PROCESS_HEAPS_OFFSET`) ; les champs de version restent ceux d'XP (ADR-003).
+
+Les nombreux accès invalides en `ntdll!strncpy` (0x7C97B92E) que la trace montre aussi viennent des `TRACE` de
+ReactOS, qui lisent un identifiant de ressource comme une chaîne : ils sont rattrapés, sauf dans les processus
+d'aide de Dev-C++ (huit, qui finissent ainsi).
+
+Sur la branche, AMD, un passage par application :
+
+| Application | Ce qui se passe |
+|---|---|
+| KeePass | ne plante plus : sa fenêtre principale s'ouvre (arbre, liste, New, Open, Save…) ; son titre se lit « K » ; elle ne se ferme pas sur WM_CLOSE en 15 s, le banc la termine |
+| Notepad++ | ne plante plus : il montre « Authenticode check failed: signing certificate or hash is not recognized » (« DLL signature verification failed ») : il vérifie la signature de sa propre DLL |
+| AbiWord | plante encore, ailleurs : `libAbiWord.dll` lit l'adresse 0x3C (le champ d'un objet nul), juste après NtGdiGetOutlineTextMetricsInternalW et NtGdiGetCharWidthW, sans handler |
+| SumatraPDF | l'installeur ne plante plus : il ne trouve pas `ktmw32.dll` (une DLL de Vista), puis `userenv` rend l'erreur 2 (un profil introuvable), et il rend 1 en 5 s |
+| Dev-C++ | inchangé : `devcpp.exe` s'arrête sur EReadError (code 120) |
+
+Les planchers de KeePass et de Notepad++ attendent la fenêtre du programme et interdisent sa fin sur 0xC0000005.
+
+Ce qui vient ensuite, dans l'ordre où cela débloque le plus :
+
+1. **Les métriques des polices de GDI** (AbiWord ; Dev-C++ et les installeurs les appellent aussi) :
+   NtGdiGetCharWidthW et NtGdiGetOutlineTextMetricsInternalW rendent 0 sans être faits.
+2. **STATUS_BAD_STACK d'Inno Setup 5.4** (PeaZip, GIMP).
+3. **Authenticode** (Notepad++) : WinVerifyTrust et la chaîne de certificats de `wintrust` et `crypt32` de ReactOS.
+4. **Le profil que `userenv` ne trouve pas** (SumatraPDF) : le banc remplace `winlogon` et tourne sous le jeton
+   de System, sans session ouverte.
+5. **KeePass** : WM_CLOSE de sa fenêtre principale, et son titre.
+6. Et toujours : l'enregistrement de DLL de WinMerge, le renommage (FileRenameInformation), EReadError de Dev-C++,
+   les processus d'aide de Dev-C++.
 
 ### La suite
 

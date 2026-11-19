@@ -1,5 +1,17 @@
 # Notes de passation
 
+- **Le plantage des programmes installés : le PEB de ReactOS** (`claude/inspiring-allen-8bb1b7`, M7,
+  [`compat/applications.md`](compat/applications.md#le-plantage-des-programmes-installés-le-2026-11-19) ;
+  demandé le 2026-11-18, suite de l'entrée suivante). KeePass finissait sur 0xC0000005 dans FlsAlloc (tracé) : la
+  liste des tas suivait le PEB à 0x210 (XP), sur les champs FLS du PEB de Server 2003 pour lequel le mode
+  utilisateur de ReactOS est construit (`FlsBitmap` en 0x218), et le quatrième tas d'un processus y remplaçait le
+  bitmap. Avec le correctif, Notepad++ et l'installeur de SumatraPDF ne plantent plus non plus. `abi::peb32` : les champs FLS, 0x230,
+  `PROCESS_HEAPS_OFFSET` (test `the_heap_list_leaves_the_fls_fields_alone`) ; `ps::eprocess` place la liste après.
+  KeePass ouvre sa fenêtre principale, Notepad++ s'arrête sur sa vérification Authenticode, AbiWord plante dans
+  `libAbiWord.dll` après NtGdiGetCharWidthW et NtGdiGetOutlineTextMetricsInternalW, l'installeur de SumatraPDF rend
+  1 (un profil introuvable). Trouvé par une trace temporaire de `sys::exceptions` (jamais commitée). **Suite** :
+  les métriques des polices de GDI, STATUS_BAD_STACK d'Inno 5.4, Authenticode, le profil de SumatraPDF.
+
 - **NtAccessCheck et l'effacement : quatre applications s'installent** (`claude/inspiring-allen-8bb1b7`, sur
   `claude/m7-test-bench`, M7, [`compat/applications.md`](compat/applications.md#ntaccesscheck-et-leffacement-le-2026-11-18) ;
   demandé le 2026-11-18, suite de l'entrée suivante). Se : `se::access` (SeAccessCheck : privilèges, propriétaire,
