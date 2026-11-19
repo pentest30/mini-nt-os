@@ -19,9 +19,18 @@
 //! ([`File::query_directory`], NtQueryDirectoryFile) : l'expression de sa
 //! première requête et la place de la prochaine entrée.
 //!
+//! L'effacement : un objet fichier qui va recevoir son premier handle compte
+//! parmi les ouvertures du fichier ([`File::begin_open`]) ; à la
+//! fermeture de son dernier handle (la procédure de fermeture du type), il
+//! n'y compte plus, et le fichier dont l'effacement est en attente
+//! (FileDispositionInformation, [`File::set_delete_pending`], ou
+//! FILE_DELETE_ON_CLOSE de cette ouverture) part avec la dernière
+//! (`Volume::cleanup`). Une ouverture d'un tel fichier rend
+//! `STATUS_DELETE_PENDING` ([`check_open`]).
+//!
 //! Pas encore : les IRP (les lectures et les écritures vont droit au volume,
-//! synchrones), le partage (IoCheckShareAccess), la suppression,
-//! l'ouverture d'un volume comme fichier.
+//! synchrones), le partage (IoCheckShareAccess), le renommage, l'ouverture
+//! d'un volume comme fichier.
 //!
 //! [`FileObject`] est celui de l'ancien chargeur (`syscall.rs`) : ne pas
 //! l'étendre.
@@ -35,15 +44,16 @@ use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use abi::file::DirectoryEntry;
 use abi::file::{
-    FileBasicInformation, FileNetworkOpenInformation, FileStandardInformation, FILE_ALL_ACCESS, FILE_APPEND_DATA,
-    FILE_ATTRIBUTE_READONLY, FILE_CREATE, FILE_DIRECTORY_FILE, FILE_GENERIC_EXECUTE, FILE_GENERIC_READ,
-    FILE_GENERIC_WRITE, FILE_MAXIMUM_DISPOSITION, FILE_NON_DIRECTORY_FILE, FILE_OPEN, FILE_OPENED, FILE_OPEN_IF,
-    FILE_OVERWRITE, FILE_OVERWRITE_IF, FILE_OVERWRITTEN, FILE_SUPERSEDE, FILE_SUPERSEDED, FILE_SYNCHRONOUS_IO_ALERT,
-    FILE_SYNCHRONOUS_IO_NONALERT, FILE_WRITE_DATA,
+    FileAttributeTagInformation, FileBasicInformation, FileNetworkOpenInformation, FileStandardInformation,
+    FILE_ALL_ACCESS, FILE_APPEND_DATA, FILE_ATTRIBUTE_READONLY, FILE_CREATE, FILE_DELETE_ON_CLOSE, FILE_DIRECTORY_FILE,
+    FILE_GENERIC_EXECUTE, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_MAXIMUM_DISPOSITION, FILE_NON_DIRECTORY_FILE,
+    FILE_OPEN, FILE_OPENED, FILE_OPEN_IF, FILE_OVERWRITE, FILE_OVERWRITE_IF, FILE_OVERWRITTEN, FILE_SUPERSEDE,
+    FILE_SUPERSEDED, FILE_SYNCHRONOUS_IO_ALERT, FILE_SYNCHRONOUS_IO_NONALERT, FILE_WRITE_DATA,
 };
 use abi::ntstatus::{
-    NtStatus, STATUS_ACCESS_DENIED, STATUS_BUFFER_OVERFLOW, STATUS_FILE_CORRUPT_ERROR, STATUS_FILE_IS_A_DIRECTORY,
-    STATUS_INVALID_DEVICE_REQUEST, STATUS_INVALID_PARAMETER, STATUS_NOT_A_DIRECTORY, STATUS_NO_MORE_FILES,
+    NtStatus, STATUS_ACCESS_DENIED, STATUS_BUFFER_OVERFLOW, STATUS_CANNOT_DELETE, STATUS_DELETE_PENDING,
+    STATUS_DISK_FULL, STATUS_FILE_CORRUPT_ERROR, STATUS_FILE_IS_A_DIRECTORY, STATUS_INVALID_DEVICE_REQUEST,
+    STATUS_INVALID_PARAMETER, STATUS_MEDIA_WRITE_PROTECTED, STATUS_NOT_A_DIRECTORY, STATUS_NO_MORE_FILES,
     STATUS_NO_SUCH_FILE, STATUS_OBJECT_NAME_COLLISION, STATUS_OBJECT_NAME_INVALID, STATUS_OBJECT_TYPE_MISMATCH,
     STATUS_SUCCESS,
 };
@@ -95,6 +105,12 @@ pub struct File {
     position: AtomicU64,
     /// Où en est l'énumération d'un répertoire ouvert.
     search: KSpinLock<Search>,
+    /// Il compte parmi les ouvertures du fichier : il a reçu un handle, et
+    /// son dernier n'est pas encore fermé.
+    counted: AtomicBool,
+    /// FILE_DELETE_ON_CLOSE (CCB_DELETE_ON_CLOSE) : l'effacement du fichier
+    /// est mis en attente à la fermeture de son dernier handle.
+    delete_on_close: AtomicBool,
 }
 
 /// Où en est l'énumération d'un répertoire ouvert (ce que le CCB d'un pilote
@@ -184,6 +200,8 @@ impl File {
             synchronous: AtomicBool::new(false),
             position: AtomicU64::new(0),
             search: KSpinLock::new(Search::default()),
+            counted: AtomicBool::new(false),
+            delete_on_close: AtomicBool::new(false),
         };
         create_object(&FILE_TYPE, file)
     }
@@ -281,9 +299,71 @@ impl File {
             allocation_size: self.allocation_size(&node),
             end_of_file: node.size,
             number_of_links: 1,
-            delete_pending: 0,
+            delete_pending: u8::from(self.volume.delete_pending(&self.opened)),
             directory: u8::from(node.directory),
         })
+    }
+
+    /// Il va recevoir un handle (NtCreateFile, NtOpenFile), ouvert avec les
+    /// options `options` : il compte parmi les ouvertures du fichier, et
+    /// FILE_DELETE_ON_CLOSE est noté. Erreurs : celles de
+    /// `Volume::begin_open` (le fichier effacé depuis sa recherche, son
+    /// effacement en attente). Une ouverture qui échoue ensuite, avant son
+    /// handle, se défait par [`File::abandon_open`].
+    ///
+    /// # IRQL
+    /// PASSIVE_LEVEL; may read the device.
+    pub fn begin_open(&self, options: u32) -> Result<(), NtStatus> {
+        if self.counted.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        self.volume.begin_open(&self.opened)?;
+        self.delete_on_close.store(options & FILE_DELETE_ON_CLOSE != 0, Ordering::Relaxed);
+        self.counted.store(true, Ordering::Release);
+        Ok(())
+    }
+
+    /// L'ouverture comptée par [`File::begin_open`] échoue avant son handle :
+    /// elle ne compte plus, sans FILE_DELETE_ON_CLOSE ; si elle retenait un
+    /// effacement en attente, il se fait.
+    ///
+    /// # IRQL
+    /// PASSIVE_LEVEL; may write the device.
+    pub fn abandon_open(&self) {
+        if self.counted.swap(false, Ordering::AcqRel) {
+            let _ = self.volume.cleanup(&self.opened, false);
+        }
+    }
+
+    /// NtSetInformationFile(FileDispositionInformation) : met l'effacement
+    /// du fichier en attente (`delete`), ou l'annule ; voir
+    /// `Volume::set_delete_pending`.
+    ///
+    /// # IRQL
+    /// PASSIVE_LEVEL for filesystem I/O; may perform device reads.
+    pub fn set_delete_pending(&self, delete: bool) -> Result<(), NtStatus> {
+        self.volume.set_delete_pending(&self.opened, delete)
+    }
+
+    /// Son dernier handle est fermé (IRP_MJ_CLEANUP) : il ne compte plus
+    /// parmi les ouvertures du fichier, qui est effacé s'il était la
+    /// dernière et que son effacement est en attente. Une erreur de
+    /// l'effacement le laisse en place : il n'y a plus personne pour la
+    /// recevoir.
+    ///
+    /// # IRQL
+    /// PASSIVE_LEVEL; may write the device.
+    fn cleanup(&self) {
+        if self.counted.swap(false, Ordering::AcqRel) {
+            let _ = self.volume.cleanup(&self.opened, self.delete_on_close.load(Ordering::Relaxed));
+        }
+    }
+
+    /// FILE_ATTRIBUTE_TAG_INFORMATION : ses attributs, et l'étiquette 0 :
+    /// ni la FAT ni le NTFS en lecture d'Io n'ont de point d'analyse
+    /// (FILE_ATTRIBUTE_REPARSE_POINT n'est jamais dans les attributs).
+    pub fn attribute_tag_information(&self) -> Result<FileAttributeTagInformation, NtStatus> {
+        Ok(FileAttributeTagInformation { file_attributes: self.node()?.attributes, reparse_tag: 0 })
     }
 
     /// FILE_NETWORK_OPEN_INFORMATION.
@@ -465,6 +545,47 @@ impl File {
     pub fn set_size(&self, size: u32) -> Result<(), NtStatus> {
         self.volume.set_size(&self.opened, size).map(|_| ())
     }
+
+    /// Change la place réservée au fichier (NtSetInformationFile,
+    /// FileAllocationInformation ; `SetEndOfFile` la demande après la fin
+    /// du fichier, à la même valeur). Sous la fin du fichier, le fichier est
+    /// coupé là ; au-dessus, la taille ne change pas, et le volume doit
+    /// avoir les clusters qui manquent (`STATUS_DISK_FULL` sinon, et au-delà
+    /// de 4 Gio, que la FAT ne tient pas).
+    ///
+    /// Une réservation au-delà de la fin du fichier n'est pas gardée : la
+    /// place que le fichier occupe reste sa taille au cluster supérieur
+    /// (FileStandardInformation), et une écriture plus loin cherche ses
+    /// clusters à ce moment-là.
+    ///
+    /// Erreurs : `STATUS_INVALID_PARAMETER` pour un répertoire,
+    /// `STATUS_MEDIA_WRITE_PROTECTED` sur un volume en lecture seule ; celles
+    /// de `Volume::set_size`.
+    ///
+    /// # IRQL
+    /// PASSIVE_LEVEL for filesystem I/O; may allocate and perform device reads.
+    pub fn set_allocation_size(&self, allocation: u64) -> Result<(), NtStatus> {
+        if self.opened.directory {
+            return Err(STATUS_INVALID_PARAMETER);
+        }
+        if self.volume.is_read_only() {
+            return Err(STATUS_MEDIA_WRITE_PROTECTED);
+        }
+        let node = self.node()?;
+        if allocation < node.size {
+            // Below the end of file: the file is cut there.
+            return self.set_size(u32::try_from(allocation).map_err(|_| STATUS_FILE_CORRUPT_ERROR)?);
+        }
+        if allocation > u64::from(u32::MAX) {
+            return Err(STATUS_DISK_FULL);
+        }
+        let cluster = u64::from(self.volume.cluster_bytes());
+        let missing = allocation.div_ceil(cluster).saturating_sub(node.size.div_ceil(cluster));
+        if missing > 0 && missing > self.volume.space()?.free_clusters {
+            return Err(STATUS_DISK_FULL);
+        }
+        Ok(())
+    }
 }
 
 /// La procédure *parse* des fichiers : un nom relatif à un répertoire ouvert.
@@ -481,11 +602,13 @@ fn parse_file(object: &ObjectRef, remaining: &str) -> Result<Parsed, NtStatus> {
 }
 
 /// La procédure de fermeture du type `File` : au dernier handle d'un objet
-/// fichier de NPFS, sa fermeture (IRP_MJ_CLEANUP).
+/// fichier, sa fermeture (IRP_MJ_CLEANUP), de NPFS ou d'un volume.
 fn close_file(object: &ObjectRef, handles_left: u32) {
     if handles_left == 0 {
         if let Some(pipe) = downcast::<crate::npfs::PipeFile>(object) {
             pipe.cleanup();
+        } else if let Some(file) = downcast::<File>(object) {
+            file.cleanup();
         }
     }
 }
@@ -524,6 +647,9 @@ pub fn check_disposition(disposition: u32, options: u32) -> Result<(), NtStatus>
 /// PASSIVE_LEVEL for filesystem I/O; may allocate and perform device reads.
 pub fn check_open(file: &File, disposition: u32, options: u32, granted: AccessMask) -> Result<u32, NtStatus> {
     check_disposition(disposition, options)?;
+    if file.volume.delete_pending(&file.opened) {
+        return Err(STATUS_DELETE_PENDING);
+    }
     if disposition == FILE_CREATE {
         return Err(STATUS_OBJECT_NAME_COLLISION);
     }
@@ -542,6 +668,10 @@ pub fn check_open(file: &File, disposition: u32, options: u32, granted: AccessMa
     if writes && file.node()?.attributes & FILE_ATTRIBUTE_READONLY != 0 {
         return Err(STATUS_ACCESS_DENIED);
     }
+    if options & FILE_DELETE_ON_CLOSE != 0 {
+        let root = file.opened.identity().is_none();
+        delete_on_close_allowed(file.volume.is_read_only(), root, file.node()?.attributes)?;
+    }
     match disposition {
         FILE_OPEN | FILE_OPEN_IF => Ok(FILE_OPENED),
         _ => {
@@ -549,6 +679,20 @@ pub fn check_open(file: &File, disposition: u32, options: u32, granted: AccessMa
             Ok(if disposition == FILE_SUPERSEDE { FILE_SUPERSEDED } else { FILE_OVERWRITTEN })
         }
     }
+}
+
+/// FILE_DELETE_ON_CLOSE sur un fichier : `STATUS_MEDIA_WRITE_PROTECTED` sur
+/// un volume en lecture seule (NtCreateFile n'y arrive pas : DELETE y est
+/// refusé avant), `STATUS_CANNOT_DELETE` pour la racine ou un fichier en
+/// lecture seule, comme vfatfs.
+pub fn delete_on_close_allowed(read_only_volume: bool, root: bool, attributes: u32) -> Result<(), NtStatus> {
+    if read_only_volume {
+        return Err(abi::ntstatus::STATUS_MEDIA_WRITE_PROTECTED);
+    }
+    if root || attributes & FILE_ATTRIBUTE_READONLY != 0 {
+        return Err(STATUS_CANNOT_DELETE);
+    }
+    Ok(())
 }
 
 /// Le fichier ouvert de l'ancien chargeur (`syscall.rs`).

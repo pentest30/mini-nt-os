@@ -1,0 +1,25 @@
+# M7 bench: GIMP 2.6.12 (Inno Setup), installed silently by APPBENCH.EXE
+# (tests/native/appbench.c) from C:\APPS, then started and closed.
+# The markers say how far it goes; docs/compat/applications.md has the
+# report.
+features = test-smss, interactive
+requires = userland, native
+initial-command = APPBENCH.EXE
+app = gimp
+cpus = default
+timeout = 1200
+# What works today, a floor: the loader extracts its setup.tmp
+# (SetEndOfFile: FileAllocationInformation), which finds the user an
+# administrator (CheckTokenMembership: NtAccessCheck), creates its
+# temporary directory and runs its script; Inno Setup 5.4 then ends on
+# STATUS_BAD_STACK (RtlUnwind), see docs/compat/applications.md.
+expect = [appbench] installer started
+expect = Setup version: Inno Setup version 5.4.3
+expect = User privileges: Administrative
+expect = Created temporary directory:
+expect = [appbench] installer ended: exit code
+expect = [appbench] GIMP 2.6.12: report done
+forbid = Unable to create a temporary file
+forbid = User privileges: None
+forbid = [appbench] installer still running after
+forbid = *** STOP:

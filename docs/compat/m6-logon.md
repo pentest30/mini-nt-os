@@ -84,7 +84,14 @@ bandes de sa barre (CLSID_RebarBandSite, `{ECD4FC4D-521C-11D0-B792-00A0C90312E1}
 cette liste qui sont sur le disque, avant la réécriture des ruches. `browseui` et `rpcrt4` réussissent (le scénario
 `logon` attend `browseui`) ; `oleaut32`, `shdocvw` et `urlmon` rendent `E_NOINTERFACE`, `shell32` `E_FAIL`, `wininet`
 n'a pas de DllRegisterServer : à diagnostiquer (sans doute le registrar d'ATL, `atl.dll`, en tête de la liste et pas
-sur le disque, et l'enregistrement des bibliothèques de types). La fenêtre d'appartement de COM n'était pas créée non
+sur le disque, et l'enregistrement des bibliothèques de types). Une de ces inscriptions laisse le Finalize de
+syssetup dans `HKLM\...\CurrentVersion\RunOnceEx` (« rundll32 setupapi.dll,InstallHinfSection Finalize ») : une
+installation finie l'a consommé, et `minoinit.exe` l'efface (SHDeleteKeyW de shlwapi, qui emporte le sous-arbre —
+l'advapi32 de ReactOS n'a pas RegDeleteTreeW) — sans cela, le ProcessRunOnceEx
+d'`explorer` lance « rundll32 iernonce.dll RunOnceExProcess » au premier démarrage, et ce rundll32, sans `iernonce.dll`
+sur le disque, s'arrête sur sa boîte « LoadLibrary failed » sans jamais revenir : le démarrage d'`explorer` reste
+suspendu (la race a coûté le scénario `logon`, en attente du bureau jusqu'au délai ; le scénario l'interdit
+désormais). La fenêtre d'appartement de COM n'était pas créée non
 plus (`combase` apartment.c : « CreateWindow failed with error 1400 ») : chaque bureau a maintenant sa fenêtre des
 messages (`win32k::window::create_message_window`, `spwndMessage`, `FNID_MESSAGEWND`), dont les fenêtres créées avec
 `HWND_MESSAGE` sont les enfants (cachées, hors des fenêtres de premier niveau ; scénario `gui`). En chemin, CopyFileW

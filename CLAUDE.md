@@ -43,6 +43,10 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
 
 - **Reprendre une session** : [`docs/passation.md`](docs/passation.md) (tâche en cours, prochaines tâches, comment
   reprendre). Le tenir à jour à chaque commit qui change l'état.
+- **Revues de mergestorm-vortex** : une session qui traite une revue de ce bot sur une PR (remarques collées ou lues
+  sur GitHub) vérifie chaque remarque dans le code. Elle ajoute ensuite la section de la PR à
+  [`docs/revues/mergestorm-vortex.md`](docs/revues/mergestorm-vortex.md) (verdict, preuve, suite donnée, défauts
+  manqués) et met à jour son bilan.
 - Une session traite **un jalon et un composant**, et se termine en faisant passer `cargo xtask lint` et `cargo xtask test`.
 - Commits au format `<composant>: <résumé à l'impératif>`, par exemple `mm: séparer reserve et commit dans la VAD`.
   Déplacements par `git mv`. Une PR traite un seul sujet.
@@ -562,6 +566,15 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   pages de code 936, 949, 950, `dnsapi.dll` sur le disque et le nom DNS dans `mino.inf` : ntdll 44/84,
   kernel32 16/29, **le M5 est terminé**. Ps annonce la fin de chaque thread à son port de fin ou au port d'exception de
   son processus (`LPC_CLIENT_DIED`, `lpc::request_port`) : `csrss` lâche ses clients morts, et leurs threads Ke.
+  M7 commencé : la liste des dix applications et leur banc d'essai
+  ([`docs/compat/applications.md`](docs/compat/applications.md#le-banc-dessai) : `cargo xtask fetch-apps`,
+  `xtask/src/apps.rs`, scénarios `app-<id>`, `tests/native/appbench.c`) ; le bilan de départ désignait ce qui
+  bloquait, une à une. Les quatre Inno Setup passent leur fichier temporaire (FileAllocationInformation,
+  `io_manager::File::set_allocation_size` ; FileAttributeTagInformation) et leur chargeur finit seul (`win32k::queue` :
+  le bit de changement de `QS_SENDMESSAGE` tombe avec le dernier message envoyé). NtAccessCheck (`se::access`) et
+  l'effacement des fichiers (FileDispositionInformation, FILE_DELETE_ON_CLOSE : `io_manager::Volume::cleanup`) :
+  KeePass, Notepad++, AbiWord et Dev-C++ s'installent et leurs programmes démarrent ; le PEB a les champs FLS de
+  Server 2003 (`abi::peb32`, la liste des tas après eux) : KeePass montre sa fenêtre.
   Suite : [`docs/passation.md`](docs/passation.md).
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.
@@ -579,6 +592,7 @@ cargo xtask run [--cpu intel] [--gdb] [--headless]   # démarre dans QEMU, port 
 cargo xtask build [--features trace-syscalls]        # mino-loader et ntoskrnl
 cargo xtask syscall-gen                              # régénère abi/src/services.rs (listes de ReactOS épinglé)
 cargo xtask fetch-userland [--archive FICHIER]       # ReactOS épinglé : archive vérifiée, arborescence dans third_party/
+cargo xtask fetch-apps [--app ID]                    # installeurs du banc du M7, vérifiés, dans third_party/apps/
 cargo xtask help
 ```
 
@@ -617,6 +631,8 @@ cargo build -p mino-loader --target x86_64-unknown-uefi --profile kernel
   charge le chargeur au-dessus de 4 Gio.
 - `disk = system` attache l'image du disque RAM comme disque système ATA (`C:`), `boots = N` démarre QEMU N fois sur
   elle (scénario `persistence`) ; `fsck.vfat` (paquet `dosfstools`) vérifie ensuite l'image.
+- `app = ID` : une application du banc du M7 (`xtask/src/apps.rs`) ; son installeur et `C:\APPS\PROBE.TXT` vont
+  sur un disque système plus grand, avec tout l'arbre de ReactOS (sans `cargo xtask fetch-apps`, sauté).
 - `trace-syscalls` active la trace série des appels système, `heartbeat` le battement du timer (`[alive] tick=N`). Le CPU par défaut de QEMU annonce un fabricant AMD (chemin `int 2Eh`) ;
   `--cpu intel` exerce le chemin SYSENTER.
 - Formatage : `cargo fmt --all` (rustfmt.toml). Un lint justifié à garder se marque `#[expect(clippy::…, reason = "…")]`.

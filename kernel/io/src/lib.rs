@@ -61,7 +61,7 @@ pub use completion::{
 pub use device::{Device, DEVICE_TYPE};
 pub use driver::{DeviceObject, DriverObject};
 pub use fat::{nt_time, BlockDevice, DirEntry, DirEntryInfo, Fat32Bpb, FatError, FatFile, FatVolume};
-pub use file::{check_disposition, check_open, creates, File, FileObject, FILE_TYPE};
+pub use file::{check_disposition, check_open, creates, delete_on_close_allowed, File, FileObject, FILE_TYPE};
 pub use irp::{Irp, IrpMajor};
 pub use npfs::{Npfs, PipeFile};
 pub use volume::{Listed, Node, Space, Volume, VolumeLabel};

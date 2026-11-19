@@ -132,6 +132,10 @@ pub struct Scenario {
     pub shell: bool,
     /// Keys to type once a marker is in the serial log, in order.
     pub keys: Vec<Keys>,
+    /// An application of the M7 bench (`app = ID`, `xtask/src/apps.rs`):
+    /// its installer and the probe's command file go to a larger system
+    /// disk `C:`, which holds the whole ReactOS tree.
+    pub app: Option<String>,
     expect: Vec<Vec<String>>,
     forbid: Vec<String>,
     forbid_line_start: Vec<String>,
@@ -258,6 +262,7 @@ impl Scenario {
             initial_command: None,
             shell: false,
             keys: Vec::new(),
+            app: None,
             expect: Vec::new(),
             forbid: Vec::new(),
             forbid_line_start: Vec::new(),
@@ -306,6 +311,12 @@ impl Scenario {
                     sc.screen_wait = Duration::from_secs(secs);
                 }
                 "keys" => sc.keys.push(Keys::parse(value).map_err(|e| format!("{}: {e}", at()))?),
+                "app" => {
+                    crate::apps::find(value)
+                        .ok_or_else(|| format!("{}: `{value}` is not an application of the bench", at()))?;
+                    sc.app = Some(value.to_string());
+                    sc.system_disk = true;
+                }
                 "disk" => match value {
                     "system" => sc.system_disk = true,
                     "ntfs-data" => sc.ntfs_disk = true,
@@ -521,6 +532,10 @@ requires = userland
         assert!(Scenario::parse("x", "expect = a\nrequires = rostests").is_err(), "a bench without its floor");
         assert!(Scenario::parse("x", "expect = a\napitests-floor = 3").is_err(), "a floor without its bench");
         assert!(Scenario::parse("x", "expect = a\nrequires = rostests\napitests-floor = many").is_err());
+        let app = Scenario::parse("x", "expect = a\napp = keepass").unwrap();
+        assert!(app.app.as_deref() == Some("keepass") && app.system_disk, "an application installs on C:");
+        assert_eq!(sc.app, None);
+        assert!(Scenario::parse("x", "expect = a\napp = word").is_err(), "not an application of the bench");
     }
 
     #[test]

@@ -7,8 +7,9 @@
 //!
 //! Une ruche montée est un arbre de clés en mémoire ([`HiveKey`]), lu du
 //! fichier `regf` à son montage : ses valeurs s'écrivent et s'effacent, des
-//! clés s'y créent ([`Key::set_value`], [`Key::delete_value`],
-//! [`Key::create_subkey`]), chacune sous son verrou. Les sous-clés restent
+//! clés s'y créent et s'en détachent ([`Key::set_value`],
+//! [`Key::delete_value`], [`Key::create_subkey`], [`Key::delete`]), chacune
+//! sous son verrou. Les sous-clés restent
 //! triées par nom en majuscules, comme dans les listes d'un fichier `regf`.
 //! Une clé de sa racine peut être un lien (`CurrentControlSet`), que la
 //! recherche suit en reprenant depuis la racine de l'espace de noms.
@@ -20,8 +21,8 @@
 //! Les noms se comparent sans casse. Pas encore : l'écriture différée (sans
 //! NtFlushKey, rien ne va sur disque), le journal `.LOG` (une coupure
 //! pendant l'écriture abîme la ruche), une ruche de plus de [`MAX_SAVED_DEPTH`]
-//! niveaux sur disque, la suppression de clés, les clés liens, les
-//! notifications, la sécurité des clés (ADR-011 : tout est accordé).
+//! niveaux sur disque, les clés liens, les notifications, la sécurité des
+//! clés (ADR-011 : tout est accordé).
 //!
 //! [`info`] encode les classes d'information des services.
 
@@ -125,6 +126,25 @@ impl HiveKey {
         let at = subkeys.partition_point(|key| upcased(&key.name).lt(upcased(&child.name)));
         subkeys.insert(at, child);
     }
+}
+
+/// Le parent de `key` dans l'arbre de `root`, par son adresse : `None` pour
+/// la racine elle-même ou une clé déjà détachée. La profondeur de `key`
+/// borne la descente ; chaque parent reste verrouillé pendant celle de ses
+/// enfants — l'ordre est toujours du haut vers le bas.
+fn find_parent(root: &Arc<HiveKey>, key: &Arc<HiveKey>) -> Option<Arc<HiveKey>> {
+    let state = root.state.lock();
+    for child in &state.subkeys {
+        if Arc::ptr_eq(child, key) {
+            return Some(root.clone());
+        }
+        if child.depth < key.depth {
+            if let Some(found) = find_parent(child, key) {
+                return Some(found);
+            }
+        }
+    }
+    None
 }
 
 /// La profondeur, au plus, d'une ruche qui s'écrit sur disque : le
@@ -516,6 +536,25 @@ impl Key {
         state.values.remove(index);
         state.last_written = now();
         file.touch();
+        Ok(())
+    }
+
+    /// NtDeleteKey : détache la clé de son parent — son sous-arbre
+    /// disparaît de la ruche, et sa réécriture l'efface du fichier. Les
+    /// handles déjà ouverts la gardent en vie, comme ceux d'une ruche
+    /// démontée, mais sa recherche ne la trouve plus ;
+    /// `STATUS_ACCESS_DENIED` pour une clé virtuelle ou la racine d'une
+    /// ruche. Le parent prend la date de la suppression.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn delete(&self) -> Result<(), NtStatus> {
+        let (file, key) = self.hive_key()?;
+        let parent = find_parent(&file.root, key).ok_or(STATUS_ACCESS_DENIED)?;
+        file.touch();
+        let mut state = parent.state.lock();
+        state.subkeys.retain(|child| !Arc::ptr_eq(child, key));
+        state.last_written = now();
         Ok(())
     }
 
@@ -1031,6 +1070,29 @@ mod tests {
         let found = open(&ns, "\\Registry\\Machine\\System\\CurrentControlSet\\ZETA").unwrap();
         assert_eq!(found.key_name(), "Zeta", "reached by name, through the link");
         assert_eq!(set.facts().unwrap().max_class, 6);
+    }
+
+    #[test]
+    fn keys_are_deleted_with_their_subtree() {
+        let (ns, _) = registry();
+        let set = open(&ns, "\\REGISTRY\\MACHINE\\SYSTEM\\ControlSet001").unwrap();
+        let (zeta, _) = set.create_subkey("Zeta", &[], false).unwrap();
+        zeta.create_subkey("Child", &[], false).unwrap();
+        zeta.set_value(&units("V"), 4, vec![1, 0, 0, 0]).unwrap();
+        zeta.delete().unwrap();
+        let names: Vec<_> =
+            (0..).map_while(|i| set.subkey_at(i).unwrap()).map(|k| String::from(k.key_name())).collect();
+        assert_eq!(names, ["Control", "Services"], "Zeta is gone with its child");
+        assert_eq!(
+            open(&ns, "\\REGISTRY\\MACHINE\\SYSTEM\\ControlSet001\\Zeta").err(),
+            Some(STATUS_OBJECT_NAME_NOT_FOUND)
+        );
+        assert!(zeta.value(&units("V")).unwrap().is_some(), "an open handle keeps the detached key");
+        assert_eq!(
+            open(&ns, "\\REGISTRY\\MACHINE\\SYSTEM").unwrap().delete().err(),
+            Some(STATUS_ACCESS_DENIED),
+            "the root of a mounted hive stays"
+        );
     }
 
     #[test]

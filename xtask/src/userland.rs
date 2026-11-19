@@ -164,6 +164,40 @@ fn files_with(ws: &Workspace, windows_files: &[&str]) -> Option<Vec<(PathBuf, St
     system32.chain(windows).chain(fonts).collect()
 }
 
+/// Every file of the fetched userland's tree, with its path on a system disk
+/// under `WINDOWS`, but those of `files` (compared without case, which keep
+/// their copy: the hives under the Mino layer), of `Fonts` (win32k installs
+/// each font of `\SystemRoot\Fonts` at boot: the boot disk's [`FONTS`]
+/// only) and of `system32/config` (the hives of [`boot_files`]): what a
+/// ReactOS installation holds, for the applications of the M7 bench, which
+/// import DLLs no boot program does. `None` until `fetch-userland` ran.
+pub fn whole_tree(ws: &Workspace, files: &[(PathBuf, String)]) -> Option<Vec<(PathBuf, String)>> {
+    let root = system32_file(ws, "ntdll.dll")?.parent()?.parent()?.to_path_buf();
+    let have: std::collections::BTreeSet<String> = files.iter().map(|(_, fat)| fat.to_ascii_uppercase()).collect();
+    let mut found = Vec::new();
+    let mut pending = vec![root.clone()];
+    while let Some(dir) = pending.pop() {
+        let mut entries: Vec<_> = fs::read_dir(&dir).ok()?.filter_map(|e| e.ok()).map(|e| e.path()).collect();
+        entries.sort();
+        for path in entries {
+            let relative = path.strip_prefix(&root).ok()?.to_string_lossy().replace('\\', "/");
+            let upper = relative.to_ascii_uppercase();
+            if upper == "FONTS" || upper == "SYSTEM32/CONFIG" {
+                continue;
+            }
+            if path.is_dir() {
+                pending.push(path);
+            } else {
+                let fat = format!("{WINDOWS_DIR}/{relative}");
+                if !have.contains(&fat.to_ascii_uppercase()) {
+                    found.push((path, fat));
+                }
+            }
+        }
+    }
+    Some(found)
+}
+
 /// The Windows directory on the boot disk (`%SystemRoot%`).
 const WINDOWS_DIR: &str = "WINDOWS";
 
@@ -345,14 +379,14 @@ pub fn fetch(ws: &Workspace, mut args: Args) -> Result<()> {
     Ok(())
 }
 
-fn digest(data: &[u8]) -> String {
+pub(crate) fn digest(data: &[u8]) -> String {
     let mut h = Sha256::new();
     h.update(data);
     hex(&h.finish())
 }
 
 /// Downloads `url` to `to` with curl, through a `.part` file.
-fn download(url: &str, to: &Path) -> Result<()> {
+pub(crate) fn download(url: &str, to: &Path) -> Result<()> {
     println!("xtask: downloading {url}");
     let part = to.with_extension("part");
     let status = Command::new("curl")

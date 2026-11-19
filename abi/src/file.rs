@@ -99,7 +99,13 @@ pub const FILE_STANDARD_INFORMATION: u32 = 5;
 pub const FILE_EA_INFORMATION: u32 = 7;
 pub const FILE_DISPOSITION_INFORMATION: u32 = 13;
 pub const FILE_POSITION_INFORMATION: u32 = 14;
+/// FileAllocationInformation: the space the file takes on its volume (a
+/// LARGE_INTEGER), which `SetEndOfFile` sets after its end of file.
+pub const FILE_ALLOCATION_INFORMATION: u32 = 19;
 pub const FILE_END_OF_FILE_INFORMATION: u32 = 20;
+/// FileAttributeTagInformation: the attributes and the reparse tag
+/// (`DeleteFileW` asks it before deleting).
+pub const FILE_ATTRIBUTE_TAG_INFORMATION: u32 = 35;
 pub const FILE_NETWORK_OPEN_INFORMATION: u32 = 34;
 /// FileNameInformation: the path of the file from the root of its volume.
 pub const FILE_NAME_INFORMATION: u32 = 9;
@@ -190,6 +196,15 @@ pub struct FilePositionInformation {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct FileEaInformation {
     pub ea_size: u32,
+}
+
+/// FILE_ATTRIBUTE_TAG_INFORMATION: the attributes, and the reparse tag when
+/// they hold FILE_ATTRIBUTE_REPARSE_POINT (0 otherwise).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FileAttributeTagInformation {
+    pub file_attributes: u32,
+    pub reparse_tag: u32,
 }
 
 /// FILE_NETWORK_OPEN_INFORMATION.
@@ -578,6 +593,16 @@ impl FileEaInformation {
     }
 }
 
+impl FileAttributeTagInformation {
+    /// Its bytes, as they go to the caller.
+    pub fn to_bytes(&self) -> [u8; size_of::<Self>()] {
+        Encoder([0; size_of::<Self>()])
+            .u32(offset_of!(Self, file_attributes), self.file_attributes)
+            .u32(offset_of!(Self, reparse_tag), self.reparse_tag)
+            .0
+    }
+}
+
 impl FileNetworkOpenInformation {
     /// Its bytes, as they go to the caller, padding zeroed.
     pub fn to_bytes(&self) -> [u8; size_of::<Self>()] {
@@ -603,6 +628,8 @@ const _: () = {
     assert!(offset_of!(FileStandardInformation, directory) == 21);
     assert!(size_of::<FilePositionInformation>() == 8);
     assert!(size_of::<FileEaInformation>() == 4);
+    assert!(size_of::<FileAttributeTagInformation>() == 8);
+    assert!(offset_of!(FileAttributeTagInformation, reparse_tag) == 4);
     assert!(size_of::<FileNetworkOpenInformation>() == 56);
     assert!(offset_of!(FileNetworkOpenInformation, allocation_size) == 32);
     assert!(offset_of!(FileNetworkOpenInformation, file_attributes) == 48);

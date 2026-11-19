@@ -6,10 +6,10 @@
 //! NtFlushKey réécrit la ruche de la clé dans son fichier (`cm`) ; NtLoadKey
 //! monte la ruche d'un fichier sous `\REGISTRY\USER` ou `\REGISTRY\MACHINE`
 //! (le `NTUSER.DAT` d'un utilisateur qui ouvre sa session), NtUnloadKey la
-//! réécrit et la démonte.
+//! réécrit et la démonte ; NtDeleteKey détache la clé de son parent.
 //!
 //! Pas encore : les clés liens (`REG_OPTION_CREATE_LINK`,
-//! `STATUS_NOT_IMPLEMENTED`, journalisé une fois), NtDeleteKey.
+//! `STATUS_NOT_IMPLEMENTED`, journalisé une fois).
 
 use abi::ntstatus::{
     NtStatus, STATUS_BUFFER_OVERFLOW, STATUS_BUFFER_TOO_SMALL, STATUS_INVALID_PARAMETER, STATUS_NOT_IMPLEMENTED,
@@ -259,6 +259,15 @@ pub(super) fn nt_delete_value_key(arguments: &[u32]) -> NtStatus {
         let name = capture_unicode_string(arguments[1])?;
         key.delete_value(&name)
     }))
+}
+
+/// NtDeleteKey(KeyHandle) : efface la clé et son sous-arbre (`DELETE`,
+/// `cm::Key::delete`) ; `STATUS_ACCESS_DENIED` pour une clé virtuelle ou la
+/// racine d'une ruche. RegDeleteKeyW et SHDeleteKeyW de shlwapi (le
+/// RunOnceEx que minoinit consomme à la fin de l'installation) en viennent
+/// là.
+pub(super) fn nt_delete_key(arguments: &[u32]) -> NtStatus {
+    status(reference_key(arguments[0], AccessMask::DELETE.0).and_then(|key| key.delete()))
 }
 
 /// NtFlushKey(KeyHandle) : réécrit dans son fichier la ruche de la clé, si
