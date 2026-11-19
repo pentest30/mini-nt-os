@@ -10,7 +10,9 @@
 //! ([`set_process_window_station`]), par un handle à lui.
 //!
 //! Une station tient ses bureaux ([`crate::desktop`]) et les nomme (sa
-//! procédure *parse*).
+//! procédure *parse*), et son presse-papiers ([`crate::clipboard`]).
+//! Les stations vivantes sont connues ([`stations`]) : la destruction d'une
+//! fenêtre ou la fin d'un thread y cherche leurs presse-papiers.
 //!
 //! Pas encore : la table des atomes, le nom tiré de la session de logon pour une station sans nom,
 //! le thread du bureau et le thread d'entrée (RIT) qu'ReactOS crée avec la
@@ -26,6 +28,7 @@ use abi::security::Luid32;
 use hal::sync::KSpinLock;
 use ob::{Object, ObjectType};
 
+use crate::clipboard::Clipboard;
 use crate::desktop::Desktop;
 
 /// WINSTA_ENUMDESKTOPS.
@@ -136,6 +139,8 @@ pub struct WindowStation {
     desktops: KSpinLock<Vec<Weak<Object<Desktop>>>>,
     /// La fenêtre du shell et celle de son fond.
     shell: KSpinLock<ShellWindows>,
+    /// Son presse-papiers.
+    clipboard: KSpinLock<Clipboard>,
 }
 
 impl WindowStation {
@@ -147,7 +152,17 @@ impl WindowStation {
             user: KSpinLock::new(StationUser::default()),
             desktops: KSpinLock::new(Vec::new()),
             shell: KSpinLock::new(ShellWindows::default()),
+            clipboard: KSpinLock::new(Clipboard::new()),
         }
+    }
+
+    /// Lit ou change son presse-papiers par `change`, et rend ce qu'il rend.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL ; `change` n'attend pas et ne touche pas la mémoire
+    /// utilisateur.
+    pub fn with_clipboard<R>(&self, change: impl FnOnce(&mut Clipboard) -> R) -> R {
+        change(&mut self.clipboard.lock())
     }
 
     /// Change ses fenêtres du shell par `change`, et rend ce qu'il rend.
@@ -218,13 +233,30 @@ pub const fn becomes_interactive(creator: u32, logon: u32, taken: bool) -> bool 
     !taken && logon != 0 && creator == logon
 }
 
+/// Les stations créées ; celles qui ne sont plus s'oublient à la création
+/// suivante.
+static STATIONS: KSpinLock<Vec<Weak<Object<WindowStation>>>> = KSpinLock::new(Vec::new());
+
 /// Une station neuve, de la session `session`, pas encore nommée, sans
 /// entrée ni sortie jusqu'à [`inserted`].
 ///
 /// # IRQL
 /// PASSIVE_LEVEL.
 pub fn create(session: u32) -> Arc<Object<WindowStation>> {
-    ob::create_object(&WINDOW_STATION_TYPE, WindowStation::new(session))
+    let station = ob::create_object(&WINDOW_STATION_TYPE, WindowStation::new(session));
+    let mut stations = STATIONS.lock();
+    stations.retain(|other| other.strong_count() > 0);
+    stations.push(Arc::downgrade(&station));
+    drop(stations);
+    station
+}
+
+/// Les stations vivantes.
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn stations() -> Vec<Arc<Object<WindowStation>>> {
+    STATIONS.lock().iter().filter_map(Weak::upgrade).collect()
 }
 
 /// IntCreateWindowStation, une fois la station nommée par le processus

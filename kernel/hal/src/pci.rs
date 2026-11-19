@@ -1,7 +1,8 @@
 //! L'espace de configuration PCI, par le mécanisme n° 1 : l'adresse d'un
 //! registre de 32 bits au port 0xCF8, sa valeur au port 0xCFC. Assez pour
 //! trouver une fonction par son fabricant et son modèle, et lire ses barres
-//! d'adresse (BAR). Pas encore : l'écriture, PCIe (ECAM), les interruptions.
+//! d'adresse (BAR), d'entrées-sorties ou de mémoire. Pas encore : l'écriture
+//! (et donc la taille d'une barre), PCIe (ECAM), les interruptions.
 //!
 //! # IRQL
 //! Les deux ports forment une paire : un seul appelant à la fois. Le noyau
@@ -103,6 +104,36 @@ fn io_port_of(bar: u32) -> Option<u16> {
     (bar & 1 == 1).then_some((bar & 0xFFFC) as u16)
 }
 
+/// L'adresse physique de base de la barre `index` (0 à 5) de `f`, si c'est
+/// une barre de mémoire (de 32 ou de 64 bits ; une barre de 64 bits prend
+/// aussi la suivante) ; `None` pour une barre d'entrées-sorties ou vide.
+///
+/// # IRQL
+/// Voir le module.
+pub fn memory_bar(f: Function, index: u8) -> Option<u64> {
+    if index > 5 {
+        return None;
+    }
+    let low = read32(f, BAR0 + 4 * index);
+    memory_base_of(low, || if index < 5 { read32(f, BAR0 + 4 * (index + 1)) } else { 0 })
+}
+
+/// La base d'une barre de mémoire dont le premier mot est `low` ; `high`
+/// donne le mot suivant, lu seulement pour une barre de 64 bits (type 2,
+/// bits 1 et 2). Les 4 bits bas (type, préchargeable) ne sont pas de
+/// l'adresse.
+fn memory_base_of(low: u32, high: impl FnOnce() -> u32) -> Option<u64> {
+    if low & 1 == 1 {
+        return None;
+    }
+    let base = u64::from(low & !0xF);
+    let base = match (low >> 1) & 0b11 {
+        0b10 => base | u64::from(high()) << 32,
+        _ => base,
+    };
+    (base != 0).then_some(base)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -134,5 +165,15 @@ mod tests {
     fn only_an_io_bar_gives_a_port() {
         assert_eq!(io_port_of(0xD021), Some(0xD020));
         assert_eq!(io_port_of(0xF040_0000), None);
+    }
+
+    #[test]
+    fn a_memory_bar_gives_its_base() {
+        // QEMU's standard VGA: a prefetchable 32-bit BAR 0 at 0x80000000.
+        assert_eq!(memory_base_of(0x8000_0008, || panic!("a 32-bit BAR reads one word")), Some(0x8000_0000));
+        // A 64-bit BAR takes the next word as its high half.
+        assert_eq!(memory_base_of(0xFE00_000C, || 0x1), Some(0x1_FE00_0000));
+        assert_eq!(memory_base_of(0xD021, || 0), None, "an I/O BAR");
+        assert_eq!(memory_base_of(0, || 0), None, "an empty BAR");
     }
 }

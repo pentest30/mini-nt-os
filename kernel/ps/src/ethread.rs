@@ -881,7 +881,9 @@ fn abandon(process: &EProcess, thread: &EThread) {
 }
 
 /// MmCreateTeb : réserve et commite la première page libre sous le PEB, et y
-/// écrit le TEB du thread `tid`.
+/// écrit le TEB du thread `tid`, avec les paramètres régionaux des threads
+/// (`CurrentLocale` : PsDefaultThreadLocaleId, `ex::locale::user_locale`),
+/// que lit GetThreadLocale.
 fn create_teb(process: &EProcess, tid: ThreadId, stack: &InitialTeb) -> Result<u32, NtStatus> {
     process.with_space(|space| {
         let mut va = u64::from(FIRST_TEB_VA);
@@ -895,7 +897,7 @@ fn create_teb(process: &EProcess, tid: ThreadId, stack: &InitialTeb) -> Result<u
                 Err(status) => return Err(status),
             }
         };
-        let data = Teb32::new(
+        let mut data = Teb32::new(
             teb,
             process.pid(),
             tid,
@@ -904,6 +906,7 @@ fn create_teb(process: &EProcess, tid: ThreadId, stack: &InitialTeb) -> Result<u
             stack.stack_limit,
             stack.stack_allocation_base,
         );
+        data.current_locale = ex::locale::user_locale();
         if let Err(status) = space.write_bytes(u64::from(teb), data.as_bytes()) {
             space.free(u64::from(teb), 0, FreeType::MEM_RELEASE).expect("the TEB just allocated");
             return Err(status);

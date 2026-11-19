@@ -110,6 +110,22 @@ pub(super) fn nt_user_set_focus(arguments: &[u32]) -> NtStatus {
     NtStatus(win32k::input::set_focus(&thread, window.as_ref()))
 }
 
+/// NtUserSetActiveWindow(hWnd) : HWND, la fenêtre active d'avant dans la
+/// file du thread si elle vit encore (`win32k::input::set_active`) ; 0 et
+/// `ERROR_INVALID_WINDOW_HANDLE` pour une fenêtre inconnue, 0 sans rien
+/// changer pour la fenêtre d'un autre thread.
+pub(super) fn nt_user_set_active_window(arguments: &[u32]) -> NtStatus {
+    let thread = win32k::convert_current_thread().expect("a GUI thread at a win32k service");
+    let window = match arguments[0] {
+        0 => None,
+        hwnd => match win32k::window::get(hwnd) {
+            Some(window) => Some(window),
+            None => return fail(ERROR_INVALID_WINDOW_HANDLE),
+        },
+    };
+    NtStatus(win32k::input::set_active(&thread, window.as_ref()))
+}
+
 /// NtUserRegisterHotKey(hWnd, id, fsModifiers, vk) : BOOL, le raccourci
 /// `fsModifiers` et `vk` posé pour la fenêtre `hWnd` du thread, ou pour le
 /// thread sans fenêtre (`win32k::hotkey::register`). FALSE et

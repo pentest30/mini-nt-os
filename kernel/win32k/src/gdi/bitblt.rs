@@ -567,10 +567,84 @@ pub fn alpha_blend(
     Ok(true)
 }
 
+/// Le pixel de la source `raw` (de l'ordre `layout`) est-il de la couleur
+/// transparente `transparent` (un COLORREF, sans son octet haut) ?
+pub fn is_transparent(raw: u32, layout: PixelLayout, transparent: u32) -> bool {
+    layout.color(raw).0 & 0x00FF_FFFF == transparent & 0x00FF_FFFF
+}
+
+/// NtGdiTransparentBlt (GreTransparentBlt, IntEngTransparentBlt) : le
+/// rectangle (`x_src`, `y_src`, `width_src`, `height_src`) du DC `hdc_src`,
+/// étiré ou réduit au pixel le plus proche, va au rectangle (`x`, `y`,
+/// `width`, `height`) du DC `hdc`, là où il peint, sauf ses pixels de la
+/// couleur `transparent`. `Ok(false)` pour un DC qui n'est pas au
+/// processus ; `Err(ERROR_INVALID_PARAMETER)` pour une étendue négative ou
+/// nulle.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, dans un service système, sans rien tenir.
+pub fn transparent_blt(
+    hdc: u32,
+    (x, y, width, height): (i32, i32, i32, i32),
+    hdc_src: u32,
+    (x_src, y_src, width_src, height_src): (i32, i32, i32, i32),
+    transparent: u32,
+) -> Result<bool, u32> {
+    use abi::winerror::ERROR_INVALID_PARAMETER;
+    if width <= 0 || height <= 0 || width_src <= 0 || height_src <= 0 {
+        return Err(ERROR_INVALID_PARAMETER);
+    }
+    let (Some(dest), Some(source)) = (dc::lock(hdc), dc::lock(hdc_src)) else { return Ok(false) };
+    let (dest_state, source_state) = (dest.state(), source.state());
+    let (source_target, dest_target) = (Target::of(&source_state), Target::of(&dest_state));
+    let (ox, oy) = dc::logical_origin(&dest_state, None);
+    let (sx, sy) = dc::logical_origin(&source_state, None);
+    let (left, top) = (x.saturating_add(ox), y.saturating_add(oy));
+    let rect = Rect::new(left, top, left.saturating_add(width), top.saturating_add(height));
+    let (src_left, src_top) = (x_src.saturating_add(sx), y_src.saturating_add(sy));
+    let area = Rect::new(src_left, src_top, src_left.saturating_add(width_src), src_top.saturating_add(height_src));
+    let Some((pixels, layout, _)) = read_area(&source_target, area) else { return Ok(false) };
+    let convert = conversion(&source, &dest, &source_target, &dest_target);
+    let clip: Vec<Rect> = dest_state.rao().rects().to_vec();
+    let draw = |surface: &mut Bitmap<'_>| {
+        let dest_layout = surface.layout();
+        for visible in &clip {
+            let part = visible.intersect(&rect).intersect(&surface.bounds());
+            for py in part.top..part.bottom {
+                let row = source_of(py - top, height, 0, height_src);
+                for px in part.left..part.right {
+                    let column = source_of(px - left, width, 0, width_src);
+                    let raw = pixels[(row * width_src + column) as usize];
+                    if is_transparent(raw, layout, transparent) {
+                        continue;
+                    }
+                    let color = layout.color(raw);
+                    let color = convert.as_ref().map_or(color, |convert| convert.color(color));
+                    surface.set_pixel(px as u32, py as u32, dest_layout.pixel(color));
+                }
+            }
+        }
+    };
+    match dest_target {
+        Target::Display => crate::display::draw(draw),
+        Target::Bitmap(surface) => surface.draw(draw),
+    };
+    Ok(true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use abi::gdi::rop;
+
+    #[test]
+    fn the_transparent_colour_is_compared_without_its_high_byte() {
+        let magenta = 0x00FF_00FF;
+        assert!(is_transparent(0x00FF_00FF, PixelLayout::Bgrx, magenta), "BGRX magenta");
+        assert!(is_transparent(0x80FF_00FF, PixelLayout::Bgrx, magenta | 0x0100_0000), "high bytes ignored");
+        assert!(!is_transparent(0x00FF_00FE, PixelLayout::Bgrx, magenta));
+        assert!(!is_transparent(0x0000_FF00, PixelLayout::Bgrx, magenta), "green");
+    }
 
     #[test]
     fn alpha_blending_adds_the_premultiplied_source() {

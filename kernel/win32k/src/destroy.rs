@@ -12,13 +12,16 @@
 //! - active, une autre fenêtre devient active
 //!   (`crate::input::activate_other`) ; si elle a le clavier, son parent le
 //!   prend (une fille), sinon personne (WM_KILLFOCUS) ;
+//! - propriétaire du presse-papiers avec des formats différés, elle reçoit
+//!   WM_RENDERALLFORMATS, puis ne l'est plus (`crate::clipboard::release_owner`) ;
 //! - WM_DESTROY à elle, puis à ses enfants, de haut en bas ;
 //! - puis co_UserFreeWindow : ses enfants d'abord, chacun recevant
 //!   WM_NCDESTROY après les siens ; ses minuteries, ses messages dans la file
 //!   (leurs envoyeurs réveillés), sa région à mettre à jour et le compte des
 //!   fenêtres à peindre de son thread, la capture, le menu de sa barre, les
-//!   DC du cache pris pour elle, ses propriétés, sa place dans l'ordre Z, et
-//!   enfin son handle ([`crate::window::release`]).
+//!   DC du cache pris pour elle, ses propriétés, ce que le presse-papiers
+//!   tient d'elle (`crate::clipboard::forget_window`), sa place dans l'ordre
+//!   Z, et enfin son handle ([`crate::window::release`]).
 //!
 //! Une procédure qui détruit sa fenêtre pendant WM_DESTROY ne la détruit pas
 //! deux fois : la seconde demande réussit sans rien faire.
@@ -28,11 +31,13 @@
 //! ne reçoit plus rien) ; ce qu'elles découvrent se repeint, et une fenêtre
 //! d'un autre thread devient active si l'une d'elles l'était. Ses
 //! minuteries partent, sa file est vidée, les messages qu'on lui avait
-//! envoyés reviennent à leurs envoyeurs (`crate::sent::abandon_all`), il
-//! quitte le premier plan et son bureau.
+//! envoyés reviennent à leurs envoyeurs (`crate::sent::abandon_all`), le
+//! presse-papiers qu'il a ouvert se ferme (`crate::clipboard::thread_exit`),
+//! il quitte le premier plan et son bureau.
 //!
 //! À la fin d'un processus GUI ([`process_exit`], rappel de Ps), ce qui
-//! reste de ses objets USER (ses menus ; une fenêtre, s'il en restait) est
+//! reste de ses objets USER (ses menus ; les données confiées au
+//! presse-papiers qu'aucun ne tient ; une fenêtre, s'il en restait) est
 //! détruit, les DC du cache qu'il avait pris y reviennent, ses objets GDI
 //! quittent la table, et son `PROCESSINFO` rend ses classes, ses bureaux et
 //! sa station. Ce qui en resterait encore est journalisé.
@@ -182,6 +187,7 @@ fn send_destroy(window: &Arc<Window>, current: &Arc<ThreadInfo>) {
             crate::input::set_focus(current, parent.filter(|parent| !parent.is_desktop_window()).as_ref());
         }
     }
+    crate::clipboard::release_owner(window.handle);
     let _ = window::send_message(window, WM_DESTROY, 0, LParam::Value(0));
     if !window.is_alive() {
         return;
@@ -247,6 +253,7 @@ fn finish(window: &Arc<Window>, thread: Option<&Arc<ThreadInfo>>) {
     crate::mouse::forget_capture(hwnd);
     crate::shell::forget(hwnd);
     crate::hotkey::forget_window(hwnd);
+    crate::clipboard::forget_window(hwnd);
     let state = window::change(window, |state| {
         state.style &= !WS_VISIBLE;
         state.update = Region::default();
@@ -273,9 +280,11 @@ fn finish(window: &Arc<Window>, thread: Option<&Arc<ThreadInfo>>) {
 /// sont détruites sans message (celles de premier niveau d'abord), puis
 /// celles dont la destruction aurait été interrompue ; ses minuteries
 /// partent, ses raccourcis (`crate::hotkey::thread_exit`), et les crochets
-/// qui l'accrochent ou qu'il a posés (`crate::hook::thread_exit`) ; sa file est vidée, les messages qu'on lui avait envoyés
-/// reviennent à leurs envoyeurs ; il n'est plus au premier plan et quitte
-/// son bureau ; le handle de l'événement de sa file est fermé.
+/// qui l'accrochent ou qu'il a posés (`crate::hook::thread_exit`) ; le
+/// presse-papiers qu'il a ouvert se ferme (`crate::clipboard::thread_exit`) ;
+/// sa file est vidée, les messages qu'on lui avait envoyés reviennent à leurs
+/// envoyeurs ; il n'est plus au premier plan et quitte son bureau ; le handle
+/// de l'événement de sa file est fermé.
 ///
 /// # IRQL
 /// PASSIVE_LEVEL, dans le thread qui se termine (rappel de Ps : ses APC
@@ -304,6 +313,7 @@ pub fn thread_exit(thread: &Arc<Object<EThread>>) {
     crate::timer::destroy_thread_timers(&info);
     let hooks = crate::hook::thread_exit(info.server);
     crate::hotkey::thread_exit(info.server);
+    crate::clipboard::thread_exit(info.server);
     let (sent, _, _) = info.queue.with(crate::queue::QueueState::clear);
     let abandoned = sent.len();
     crate::sent::abandon_all(sent);
@@ -326,7 +336,8 @@ pub fn thread_exit(thread: &Arc<Object<EThread>>) {
 
 /// ExitProcessCallback : `process`, un processus GUI, se termine (son
 /// dernier thread a fini) : ses objets USER qui restent sont détruits (ses
-/// menus, ses tables d'accélérateurs, ses crochets ; une fenêtre qui resterait, sans
+/// menus, ses tables d'accélérateurs, ses crochets, les données confiées au
+/// presse-papiers qu'aucun ne tient ; une fenêtre qui resterait, sans
 /// message), les DC du cache qu'il avait pris y reviennent, ses objets GDI
 /// quittent la table, son `PROCESSINFO` rend ses classes, ses bureaux et sa
 /// station. Ce qui reste ensuite est journalisé.
@@ -361,6 +372,11 @@ pub fn process_exit(process: &Arc<Object<EProcess>>) {
             // Un lot de DeferWindowPos jamais fini : rendu sans rien déplacer.
             TYPE_SETWINDOWPOS => {
                 crate::deferpos::destroy(handle);
+            }
+            // Des données confiées au presse-papiers (NtUserConvertMemHandle)
+            // qu'aucun presse-papiers n'a prises.
+            abi::user::TYPE_CLIPDATA => {
+                crate::clipboard::destroy_data(handle);
             }
             _ => {}
         }

@@ -1,0 +1,31 @@
+# Copy and paste in Notepad (tests/native/npclip1.c): NPCLIP1.EXE takes the
+# place of winlogon.exe, takes WinSta0\Default, makes a window the first
+# clipboard viewer and starts ReactOS's notepad.exe. QEMU types "Mino",
+# Ctrl+A and Ctrl+C (Notepad's accelerators: EM_SETSEL, then WM_COPY to its
+# Edit control, which puts CF_UNICODETEXT on the clipboard); the viewer gets
+# WM_DRAWCLIPBOARD and reads the text as CF_TEXT, synthesized by user32.
+# Then End, Ctrl+V twice (WM_PASTE: the Edit control reads CF_UNICODETEXT),
+# Ctrl+A and Ctrl+C: "MinoMinoMino". Update with docs/compat/m6-fenetres.md,
+# step 45.
+features = test-smss
+requires = userland, native
+initial-command = NPCLIP1.EXE
+cpus = default, intel
+timeout = 180
+
+keys = [npclip] Notepad is up => "Mino" ctrl-a ctrl-c
+keys = [npclip] copied: "Mino" ( => end ctrl-v ctrl-v ctrl-a ctrl-c
+
+expect = [npclip] the clipboard is empty
+expect = [npclip] Notepad is up
+expect = [npclip] copied: "Mino" (4 formats: CF_UNICODETEXT 1, CF_LOCALE 1), owned by Notepad 1
+expect = [npclip] copied: "MinoMinoMino" (4 formats: CF_UNICODETEXT 1, CF_LOCALE 1), owned by Notepad 1
+expect = [npclip] probe done
+
+forbid = *** STOP:
+forbid = [npclip] Notepad ended
+forbid = [npclip] OpenClipboard: error
+forbid = sys: NtUserOpenClipboard (0x11d4) is not implemented
+forbid = sys: NtUserSetClipboardData (0x11fa) is not implemented
+forbid = sys: NtUserGetClipboardData (0x1184) is not implemented
+forbid = sys: NtUserIsClipboardFormatAvailable (0x11c3) is not implemented

@@ -19,6 +19,7 @@ members = [
     "drivers/input/i8042",
     "drivers/input/vboxmouse",
     "drivers/video/gopfb",
+    "drivers/video/bochs-dispi",
     "libs/fatfs",
     "libs/ntfs",
     "libs/gpt",
