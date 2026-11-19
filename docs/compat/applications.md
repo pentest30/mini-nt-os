@@ -139,31 +139,54 @@ s'ouvre, mais son texte et sa liste sont des carrés. Inno Setup 5.3 est un prog
 de CALLPROCDATA (« the procedure of class 0xc009 asked in the other character set », voir
 [`m6-fenetres.md`](m6-fenetres.md), étape 33) ; le banc, silencieux, ne montre pas cette boîte.
 
-**Ce qu'une session écrit ne survit pas à l'arrêt de la machine.** Le noyau garde la FAT de `C:` en mémoire et ne
-l'écrit qu'à un vidage explicite (NtFlushBuffersFile, ou l'écriture d'une ruche) ; les ruches ne s'écrivent qu'à
-NtFlushKey et NtUnloadKey ; NtShutdownSystem ne fait que le redémarrage, sans rien vider, et l'arrêt n'existe pas.
-Ce que le second démarrage écrit dans la ruche SOFTWARE (la clé du profil d'`Administrator` sous `ProfileList`) et
-ce qu'un installeur copie restent en mémoire : la machine éteinte, ils sont perdus et le volume est incohérent. Au
-troisième démarrage du même disque, sous QEMU, la session ne s'ouvre plus (« ReactOS could not load the locally
-stored user profile » : IncrementRefCount de `userenv` ne trouve pas cette clé, Error 2 ; une boîte qui ne répond ni
-au clavier ni à son délai), et trois fichiers écrits pendant les sessions (le `.tmp` de KeePass sous `Local Settings\Temp`, `RECYCLED\INFO2`…) ont
-dans la FAT du disque une chaîne qui finit sur 0. Le premier démarrage, lui, vide tout avant de redémarrer : après
-lui, la FAT relue sur l'hôte n'a aucune chaîne coupée (1 095 fichiers).
+**Ce qu'une session écrit survit à l'arrêt de la machine** (depuis le 2026-11-19). Avant, le noyau gardait la FAT
+de `C:` en mémoire et ne l'écrivait qu'à un vidage explicite (NtFlushBuffersFile, ou l'écriture d'une ruche) ; les
+ruches ne s'écrivaient qu'à NtFlushKey et NtUnloadKey ; NtShutdownSystem ne faisait que le redémarrage, sans rien
+vider. Ce que le second démarrage écrivait dans la ruche SOFTWARE (la clé du profil d'`Administrator` sous
+`ProfileList`) et ce qu'un installeur copiait restaient en mémoire : au troisième démarrage du même disque, la
+session ne s'ouvrait plus (« ReactOS could not load the locally stored user profile » : IncrementRefCount de
+`userenv` ne trouvait pas cette clé, Error 2 ; une boîte qui ne répondait ni au clavier ni à son délai), et trois
+fichiers écrits pendant les sessions (le `.tmp` de KeePass sous `Local Settings\Temp`, `RECYCLED\INFO2`…) avaient
+dans la FAT du disque une chaîne qui finissait sur un cluster libre.
 
-D'où la marche à suivre : démarrer l'image une fois, jusqu'au redémarrage de l'installation, puis repartir de cet
-état à chaque essai. QEMU s'arrête de lui-même à ce redémarrage (`-no-reboot`) ; ensuite, la convertir et la rendre
-immuable sous VirtualBox, qui jette alors les écritures de chaque session à la mise en marche suivante :
+Maintenant, un thread système du noyau, l'écrivain paresseux (`kernel/ntoskrnl/src/lazy_writer.rs`), fait chaque
+seconde ce que font l'écrivain paresseux du cache et l'écriture différée des ruches de NT (CcLazyWriteScan,
+CmpLazyFlush de ReactOS, comme spécification) : il réécrit les ruches qui n'ont pas changé depuis 5 s
+(CmpLazyFlushIntervalInSeconds), ou qui attendent depuis 30 s sans cesser de changer (`cm::lazy_flush`), puis vide
+les volumes dont quelque chose attend : les secteurs modifiés de la FAT, le cache du disque
+(`io_manager::lazy_writer`). Le vidage d'un volume se fait sous son verrou, entre deux opérations : la FAT écrite
+est celle d'un volume cohérent. NtShutdownSystem demande SeShutdownPrivilege, comme ReactOS, puis réécrit tout avant
+le redémarrage, l'arrêt (ShutdownNoReboot : le processeur s'arrête, « It is now safe to turn off your computer » sur
+le port série) ou l'extinction (ShutdownPowerOff : l'état S5 de l'ACPI, `hal::acpi` ; essayé sous QEMU, qui
+s'arrête ; pas encore sous VirtualBox ; sans `\_S5_`, le processeur s'arrête). Couper le courant perd au plus les dernières secondes ;
+quelques secondes sans écriture, et le disque est cohérent. La FAT n'a pas de journal, ni les ruches de `.LOG` : une
+coupure pendant une écriture peut encore laisser une chaîne ou une ruche à moitié écrite.
+
+Le scénario `power-cut` le vérifie sur le disque de `logon` : l'installation, puis une session ouverte dont xtask
+coupe le courant (QEMU tué) une fois qu'`explorer` a listé son bureau et qu'un passage de l'écrivain paresseux n'a
+rien laissé en attente (`power-cut = 2 => …`, la feature `trace-lazy-writer`), puis un troisième démarrage du même
+disque, où la session s'ouvre (`expect-last`) ; la FAT relue après lui n'a aucune chaîne coupée. Sous QEMU (le
+2026-11-19), les trois démarrages prennent 137 s (AMD) et 122 s (Intel) ; sans l'écriture différée des ruches (une
+mutation), le troisième s'arrête sur « IncrementRefCount() failed (Error 2) » ; une ruche se réécrit sur le disque ATA en 10 à 210 ms.
+
+Le disque n'a donc plus à être immuable. Démarrer l'image une fois, jusqu'au redémarrage de l'installation (QEMU
+s'arrête de lui-même, `-no-reboot`), puis la convertir pour VirtualBox ; un disque `immutable` reste le moyen de
+repartir à chaque essai de l'état d'après l'installation :
 
 ```bash
 cargo xtask run --image mino-apps.img --memory 768 --headless   # l'installation (1 min 40 s), puis QEMU s'arrête
 VBoxManage convertfromraw --format VDI mino-apps.img mino-apps.vdi
-VBoxManage storageattach Mino --storagectl IDE --port 0 --device 0 --type hdd --medium mino-apps.vdi --mtype immutable
+VBoxManage storageattach Mino --storagectl IDE --port 0 --device 0 --type hdd --medium mino-apps.vdi
 ```
 
+(avec `--mtype immutable` en plus, VirtualBox jette les écritures de chaque session à la mise en marche suivante.)
 La VM est celle de [`vbox.md`](vbox.md) (EFI, IDE PIIX4 en maître primaire, profil de CPU Intel), avec la mémoire
 ci-dessus. Le VDI est dynamique : les secteurs à zéro de la place libre n'y sont pas écrits (520 Mio pour l'image des
-dix, convertie en 2 s par VirtualBox 7.2.22). Sous QEMU seul, relancer `cargo xtask run --image` sur une copie de
-l'image prise après l'installation. Le parcours sous VirtualBox n'est pas encore essayé.
+dix, convertie en 2 s par VirtualBox 7.2.22). Pour éteindre, attendre quelques secondes après la dernière écriture,
+puis couper la machine : le bouton ACPI de VirtualBox n'est pas encore entendu (pas de SCI), et l'arrêt par le menu
+Démarrer (`ExitWindowsEx`, puis `winlogon` et NtShutdownSystem) n'est pas encore essayé. Sous QEMU seul, relancer
+`cargo xtask run --image` sur l'image elle-même, ou sur une copie prise après l'installation. Le parcours sous
+VirtualBox n'est pas encore essayé.
 
 ### Bilan du 2026-11-17
 
