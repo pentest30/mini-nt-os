@@ -102,6 +102,8 @@ pub struct Fat32Bpb {
 /// local time, a date of 0 when unknown.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct DirEntry {
+    /// Its 8.3 name, as the entry holds it (padded, upper case).
+    pub name: [u8; 11],
     pub attr: u8,
     pub first_cluster: u32,
     pub file_size: u32,
@@ -120,7 +122,10 @@ impl DirEntry {
         let u16_at = |at: usize| u16::from_le_bytes([ent[at], ent[at + 1]]);
         let hi = u16_at(20) as u32;
         let lo = u16_at(26) as u32;
+        let mut name = [0u8; 11];
+        name.copy_from_slice(&ent[..11]);
         Self {
+            name,
             attr: ent[11],
             first_cluster: (hi << 16) | lo,
             file_size: u32::from_le_bytes([ent[28], ent[29], ent[30], ent[31]]),

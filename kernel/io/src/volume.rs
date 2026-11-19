@@ -2,13 +2,20 @@
 //! NTFS performs allocation and I/O at PASSIVE_LEVEL, without a volume spinlock.
 //!
 //! A volume also keeps what the FCB of an open file keeps of its opens
-//! ([`Volume::handle_opened`], [`Volume::cleanup`]): how many file objects
-//! on it still have a handle (OpenHandleCount), and whether its deletion is
+//! ([`Volume::begin_open`], [`Volume::cleanup`]): how many file objects on it
+//! still have a handle (OpenHandleCount), and whether its deletion is
 //! pending (FileDispositionInformation, FILE_DELETE_ON_CLOSE). The file is
 //! deleted when the last of them closes its last handle, as vfatfs does at
 //! IRP_MJ_CLEANUP; an open of a file whose deletion is pending fails with
 //! `STATUS_DELETE_PENDING`. File objects the kernel opens for itself, without
 //! a handle, do not count.
+//!
+//! A lock that can wait (`fcb`, a KGUARDED_MUTEX, as the FCB resource of a
+//! file system driver) puts in order the opens, each checked and counted at
+//! once, and the last cleanups, each with its deletion: an open looked up
+//! before a deletion finds its entry gone, and fails. The deletion writes
+//! the volume under it, never under the spinlock of the table (`opened`),
+//! which only keeps the counts.
 pub use crate::fat_volume::{Listed, Node, SharedBlockDevice, Space, VolumeLabel};
 use crate::{fat_volume::FatMount, ntfs_volume::NtfsMount};
 use abi::{
@@ -17,10 +24,13 @@ use abi::{
 };
 use alloc::{collections::BTreeMap, string::String, vec::Vec};
 use hal::sync::KSpinLock;
+use ke::KGuardedMutex;
 
 /// A mounted FAT32 or read-only NTFS filesystem.
 pub struct Volume {
     backend: Backend,
+    /// Puts in order the opens and the last cleanups (see the module).
+    fcb: KGuardedMutex<()>,
     /// What the FCB of each open file keeps, by its identity on the volume.
     opened: KSpinLock<BTreeMap<u64, Opened>>,
 }
@@ -36,7 +46,7 @@ struct Opened {
 
 impl Volume {
     fn new(backend: Backend) -> Self {
-        Self { backend, opened: KSpinLock::new(BTreeMap::new()) }
+        Self { backend, fcb: KGuardedMutex::new(()), opened: KSpinLock::new(BTreeMap::new()) }
     }
 
     /// The content of `node` changes: before the change, and after it (even
@@ -86,7 +96,7 @@ impl Volume {
             Backend::Fat(v) => Backend::Fat(v.with_clock(clock)),
             other => other,
         };
-        Self { backend, opened: self.opened }
+        Self { backend, fcb: self.fcb, opened: self.opened }
     }
     /// Whether all mutations are refused by this filesystem driver.
     pub fn is_read_only(&self) -> bool {
@@ -253,14 +263,41 @@ impl Volume {
 }
 
 impl Volume {
-    /// A file object on `node` gets its first handle: one more open of the
-    /// file to wait for before deleting it.
+    /// An open of `node` (NtCreateFile, NtOpenFile), before its file object
+    /// gets a handle: under the FCB lock, the entry found by the lookup must
+    /// still name the file (`STATUS_OBJECT_NAME_NOT_FOUND` if the last close
+    /// of an earlier open deleted it since), its deletion must not be
+    /// pending (`STATUS_DELETE_PENDING`), and the open then counts until
+    /// [`Volume::cleanup`].
     ///
     /// # IRQL
-    /// <= DISPATCH_LEVEL.
-    pub fn handle_opened(&self, node: &Node) {
-        if let Some(identity) = node.identity() {
-            self.opened.lock().entry(identity).or_default().handles += 1;
+    /// PASSIVE_LEVEL; may read the device.
+    pub fn begin_open(&self, node: &Node) -> Result<(), NtStatus> {
+        let _fcb = self.fcb.lock();
+        if !self.still_exists(node)? {
+            return Err(STATUS_OBJECT_NAME_NOT_FOUND);
+        }
+        let Some(identity) = node.identity() else { return Ok(()) };
+        let mut opened = self.opened.lock();
+        let opens = opened.entry(identity).or_default();
+        if opens.delete_pending {
+            if opens.handles == 0 {
+                opened.remove(&identity);
+            }
+            return Err(STATUS_DELETE_PENDING);
+        }
+        opens.handles += 1;
+        Ok(())
+    }
+
+    /// The entry of `node` still names it (FAT: neither deleted nor taken
+    /// by another name; NTFS, read-only: always).
+    /// # IRQL
+    /// PASSIVE_LEVEL; may read the device.
+    pub fn still_exists(&self, node: &Node) -> Result<bool, NtStatus> {
+        match &self.backend {
+            Backend::Fat(v) => v.still_names(node),
+            Backend::Ntfs(_) => Ok(true),
         }
     }
 
@@ -286,6 +323,7 @@ impl Volume {
         let Some(identity) = node.identity() else {
             return if delete { Err(STATUS_ACCESS_DENIED) } else { Ok(()) };
         };
+        let _fcb = self.fcb.lock();
         if delete && !self.delete_pending(node) {
             if self.is_read_only() {
                 return Err(STATUS_MEDIA_WRITE_PROTECTED);
@@ -310,7 +348,8 @@ impl Volume {
     }
 
     /// The last handle of a file object on `node` is closed
-    /// (IRP_MJ_CLEANUP): with `delete_on_close` (FILE_DELETE_ON_CLOSE), the
+    /// (IRP_MJ_CLEANUP), or an open counted by [`Volume::begin_open`] fails
+    /// before its handle: with `delete_on_close` (FILE_DELETE_ON_CLOSE), the
     /// deletion of the file becomes pending; with the last of its file
     /// objects, a pending deletion is done. A directory that holds something
     /// then stays, as with vfatfs (`STATUS_DIRECTORY_NOT_EMPTY`).
@@ -319,17 +358,21 @@ impl Volume {
     /// PASSIVE_LEVEL; may write the device.
     pub fn cleanup(&self, node: &Node, delete_on_close: bool) -> Result<(), NtStatus> {
         let Some(identity) = node.identity() else { return Ok(()) };
-        // The deletion is done under the lock, so that no open finds the
-        // file between its last close and its deletion.
-        let mut opened = self.opened.lock();
-        let Some(opens) = opened.get_mut(&identity) else { return Ok(()) };
-        opens.handles = opens.handles.saturating_sub(1);
-        opens.delete_pending |= delete_on_close;
-        if opens.handles > 0 {
-            return Ok(());
-        }
-        let delete = opens.delete_pending;
-        opened.remove(&identity);
+        // Under the FCB lock, so that no open counts itself between the last
+        // close and the deletion; the spinlock only while the counts change.
+        let _fcb = self.fcb.lock();
+        let delete = {
+            let mut opened = self.opened.lock();
+            let Some(opens) = opened.get_mut(&identity) else { return Ok(()) };
+            opens.handles = opens.handles.saturating_sub(1);
+            opens.delete_pending |= delete_on_close;
+            if opens.handles > 0 {
+                return Ok(());
+            }
+            let delete = opens.delete_pending;
+            opened.remove(&identity);
+            delete
+        };
         if !delete {
             return Ok(());
         }

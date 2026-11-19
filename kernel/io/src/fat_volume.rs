@@ -114,6 +114,9 @@ pub struct Node {
     pub(crate) first_cluster: u32,
     /// Son entrée ; `None` pour la racine, qui n'en a pas.
     pub(crate) entry: Option<EntryRef>,
+    /// Le nom 8.3 de son entrée (FAT) : de quoi la reconnaître
+    /// ([`FatMount::still_names`]).
+    pub(crate) short_name: [u8; 11],
     /// Sequenced NTFS identity, absent on FAT nodes.
     pub(crate) reference: Option<ntfs::FileReference>,
 }
@@ -146,6 +149,7 @@ impl Node {
             last_write_time: nt_time(entry.write_date, entry.write_time, 0),
             first_cluster: entry.first_cluster,
             entry: at,
+            short_name: entry.name,
             reference: None,
         }
     }
@@ -445,6 +449,20 @@ impl FatMount {
             return Err(STATUS_DIRECTORY_NOT_EMPTY);
         }
         self.fat.delete_entry(at, node.first_cluster).map_err(device_error)
+    }
+
+    /// L'entrée de `node` le désigne toujours : ni effacée, ni reprise par un
+    /// autre nom ou un fichier d'un autre type depuis que `node` a été lu (la
+    /// racine, sans entrée, toujours).
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn still_names(&self, node: &Node) -> Result<bool, NtStatus> {
+        let Some(at) = node.entry else { return Ok(true) };
+        let _guard = self.lock.lock();
+        let entry = self.fat.read_entry(at).map_err(device_error)?;
+        let directory = entry[11] & 0x10 != 0;
+        Ok(entry[0] != 0x00 && entry[0] != 0xE5 && entry[..11] == node.short_name && directory == node.directory)
     }
 
     /// Le répertoire `node` ne tient rien (ses entrées `.` et `..` seules).

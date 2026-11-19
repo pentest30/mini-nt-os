@@ -19,8 +19,8 @@
 //! ([`File::query_directory`], NtQueryDirectoryFile) : l'expression de sa
 //! première requête et la place de la prochaine entrée.
 //!
-//! L'effacement : un objet fichier qui reçoit son premier handle compte
-//! parmi les ouvertures du fichier ([`File::handle_opened`]) ; à la
+//! L'effacement : un objet fichier qui va recevoir son premier handle compte
+//! parmi les ouvertures du fichier ([`File::begin_open`]) ; à la
 //! fermeture de son dernier handle (la procédure de fermeture du type), il
 //! n'y compte plus, et le fichier dont l'effacement est en attente
 //! (FileDispositionInformation, [`File::set_delete_pending`], ou
@@ -304,16 +304,34 @@ impl File {
         })
     }
 
-    /// Il reçoit un handle (NtCreateFile, NtOpenFile), ouvert avec les
-    /// options `options` : la première fois, il compte parmi les ouvertures
-    /// du fichier, et FILE_DELETE_ON_CLOSE est noté.
+    /// Il va recevoir un handle (NtCreateFile, NtOpenFile), ouvert avec les
+    /// options `options` : il compte parmi les ouvertures du fichier, et
+    /// FILE_DELETE_ON_CLOSE est noté. Erreurs : celles de
+    /// `Volume::begin_open` (le fichier effacé depuis sa recherche, son
+    /// effacement en attente). Une ouverture qui échoue ensuite, avant son
+    /// handle, se défait par [`File::abandon_open`].
     ///
     /// # IRQL
-    /// <= DISPATCH_LEVEL.
-    pub fn handle_opened(&self, options: u32) {
-        if !self.counted.swap(true, Ordering::AcqRel) {
-            self.delete_on_close.store(options & FILE_DELETE_ON_CLOSE != 0, Ordering::Relaxed);
-            self.volume.handle_opened(&self.opened);
+    /// PASSIVE_LEVEL; may read the device.
+    pub fn begin_open(&self, options: u32) -> Result<(), NtStatus> {
+        if self.counted.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        self.volume.begin_open(&self.opened)?;
+        self.delete_on_close.store(options & FILE_DELETE_ON_CLOSE != 0, Ordering::Relaxed);
+        self.counted.store(true, Ordering::Release);
+        Ok(())
+    }
+
+    /// L'ouverture comptée par [`File::begin_open`] échoue avant son handle :
+    /// elle ne compte plus, sans FILE_DELETE_ON_CLOSE ; si elle retenait un
+    /// effacement en attente, il se fait.
+    ///
+    /// # IRQL
+    /// PASSIVE_LEVEL; may write the device.
+    pub fn abandon_open(&self) {
+        if self.counted.swap(false, Ordering::AcqRel) {
+            let _ = self.volume.cleanup(&self.opened, false);
         }
     }
 
@@ -650,11 +668,9 @@ pub fn check_open(file: &File, disposition: u32, options: u32, granted: AccessMa
     if writes && file.node()?.attributes & FILE_ATTRIBUTE_READONLY != 0 {
         return Err(STATUS_ACCESS_DENIED);
     }
-    if options & FILE_DELETE_ON_CLOSE != 0
-        && (file.opened.identity().is_none() || file.node()?.attributes & FILE_ATTRIBUTE_READONLY != 0)
-    {
-        // The root, a read-only file: vfatfs refuses them so.
-        return Err(STATUS_CANNOT_DELETE);
+    if options & FILE_DELETE_ON_CLOSE != 0 {
+        let root = file.opened.identity().is_none();
+        delete_on_close_allowed(file.volume.is_read_only(), root, file.node()?.attributes)?;
     }
     match disposition {
         FILE_OPEN | FILE_OPEN_IF => Ok(FILE_OPENED),
@@ -663,6 +679,20 @@ pub fn check_open(file: &File, disposition: u32, options: u32, granted: AccessMa
             Ok(if disposition == FILE_SUPERSEDE { FILE_SUPERSEDED } else { FILE_OVERWRITTEN })
         }
     }
+}
+
+/// FILE_DELETE_ON_CLOSE sur un fichier : `STATUS_MEDIA_WRITE_PROTECTED` sur
+/// un volume en lecture seule (NtCreateFile n'y arrive pas : DELETE y est
+/// refusé avant), `STATUS_CANNOT_DELETE` pour la racine ou un fichier en
+/// lecture seule, comme vfatfs.
+pub fn delete_on_close_allowed(read_only_volume: bool, root: bool, attributes: u32) -> Result<(), NtStatus> {
+    if read_only_volume {
+        return Err(abi::ntstatus::STATUS_MEDIA_WRITE_PROTECTED);
+    }
+    if root || attributes & FILE_ATTRIBUTE_READONLY != 0 {
+        return Err(STATUS_CANNOT_DELETE);
+    }
+    Ok(())
 }
 
 /// Le fichier ouvert de l'ancien chargeur (`syscall.rs`).

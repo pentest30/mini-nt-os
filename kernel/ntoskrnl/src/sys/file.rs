@@ -113,7 +113,9 @@ fn split_last(name: &str) -> (&str, &str) {
 /// d'état en `iosb`.
 fn create_file(out: u32, attributes: u32, iosb: u32, open: Open) -> Result<(), NtStatus> {
     let both = FILE_DIRECTORY_FILE | FILE_NON_DIRECTORY_FILE;
-    // As IopCreateFile: FILE_DELETE_ON_CLOSE asks for DELETE too.
+    // FILE_DELETE_ON_CLOSE needs DELETE in the desired access, else
+    // STATUS_INVALID_PARAMETER, as IopCreateFile (ZwCreateFile documents it):
+    // CreateFileW of kernel32 adds DELETE for FILE_FLAG_DELETE_ON_CLOSE.
     if open.options & !FILE_VALID_OPTION_FLAGS != 0
         || open.share & !FILE_SHARE_VALID_FLAGS != 0
         || open.disposition > FILE_MAXIMUM_DISPOSITION
@@ -140,7 +142,11 @@ fn create_file(out: u32, attributes: u32, iosb: u32, open: Open) -> Result<(), N
             }
             let file = ob::downcast::<File>(&object).ok_or(STATUS_OBJECT_TYPE_MISMATCH)?;
             let granted = file.granted_access(AccessMask(open.desired))?;
-            let information = io_manager::check_open(&file, open.disposition, open.options, granted)?;
+            // Counted before the disposition is applied: a last close that
+            // deletes the file waits for it, or it finds the file gone.
+            file.begin_open(open.options)?;
+            let information = io_manager::check_open(&file, open.disposition, open.options, granted)
+                .inspect_err(|_| file.abandon_open())?;
             (file, information, granted)
         }
         Err(STATUS_OBJECT_NAME_NOT_FOUND) if io_manager::creates(open.disposition) => {
@@ -156,6 +162,7 @@ fn create_file(out: u32, attributes: u32, iosb: u32, open: Open) -> Result<(), N
             let as_directory = open.options & FILE_DIRECTORY_FILE != 0;
             let file = directory.create_child(last, as_directory, open.file_attributes)?;
             let granted = file.granted_access(AccessMask(open.desired))?;
+            file.begin_open(open.options)?;
             (file, FILE_CREATED, granted)
         }
         Err(status) => return Err(status),
@@ -163,8 +170,8 @@ fn create_file(out: u32, attributes: u32, iosb: u32, open: Open) -> Result<(), N
     file.set_mode(open.options);
     let process = super::current_process();
     let handle_attributes = HandleAttributes { inherit: attributes & OBJ_INHERIT != 0, protect_from_close: false };
-    let handle = process.handle_table.insert(file.clone(), granted, handle_attributes)?;
-    file.handle_opened(open.options);
+    let handle =
+        process.handle_table.insert(file.clone(), granted, handle_attributes).inspect_err(|_| file.abandon_open())?;
     give_handle(&out, handle)?;
     let block = IoStatusBlock32 { status: STATUS_SUCCESS.0, information };
     if let Err(fault) = ke::usermem::copy_to_user(u64::from(iosb), &block.to_bytes()) {

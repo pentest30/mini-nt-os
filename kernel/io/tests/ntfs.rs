@@ -111,6 +111,10 @@ fn real_ntfs_partition_uses_file_api_and_never_writes() {
     assert_eq!(file.write(0, b"changed"), Err(STATUS_MEDIA_WRITE_PROTECTED));
     assert_eq!(file.set_size(0), Err(STATUS_MEDIA_WRITE_PROTECTED));
     assert_eq!(file.set_allocation_size(4096), Err(STATUS_MEDIA_WRITE_PROTECTED));
+    assert_eq!(
+        io_manager::check_open(&file, FILE_OPEN, FILE_DELETE_ON_CLOSE, AccessMask(FILE_READ_DATA)),
+        Err(STATUS_MEDIA_WRITE_PROTECTED)
+    );
     assert_eq!(file.attribute_tag_information().unwrap().reparse_tag, 0);
     assert_eq!(file.set_basic_information(&FileBasicInformation::default()), Err(STATUS_MEDIA_WRITE_PROTECTED));
     assert!(matches!(root.create_child("new.txt", false, 0), Err(STATUS_MEDIA_WRITE_PROTECTED)));

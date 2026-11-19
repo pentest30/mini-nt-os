@@ -888,8 +888,8 @@ fn a_file_goes_with_the_last_handle_once_its_deletion_is_pending() {
     let table = HandleTable::new();
     let open = |path: &str, options: u32| {
         let file = File::open(&volume, path).unwrap();
+        file.begin_open(options).unwrap();
         let handle = table.insert(file.clone(), AccessMask(0x001F_01FF), HandleAttributes::default()).unwrap();
-        file.handle_opened(options);
         (file, handle)
     };
     let root = File::open(&volume, "\\").unwrap();
@@ -952,4 +952,58 @@ fn a_file_goes_with_the_last_handle_once_its_deletion_is_pending() {
         Some(result) => result.unwrap_or_else(|report| panic!("fsck.vfat: {report}")),
         None => std::eprintln!("fsck.vfat not found: the volume is not checked (dosfstools)"),
     }
+}
+
+#[test]
+fn an_open_looked_up_before_the_deletion_finds_the_file_gone() {
+    // NtCreateFile looks the name up, then counts the open: between the
+    // two, another thread could close the last handle of the file whose
+    // deletion was pending, and the open counted itself on a deleted entry.
+    use crate::File;
+    use abi::ntstatus::*;
+    use ob::{AccessMask, HandleAttributes, HandleTable};
+
+    let (volume, _disk) = mounted(FSCK_CLUSTERS);
+    let table = HandleTable::new();
+    let root = File::open(&volume, "\\").unwrap();
+    root.create_child("GONE.TMP", false, 0).unwrap().write(0, b"bytes").unwrap();
+    let looked_up = File::open(&volume, "\\GONE.TMP").unwrap();
+    let holder = File::open(&volume, "\\GONE.TMP").unwrap();
+    holder.begin_open(0).unwrap();
+    let handle = table.insert(holder.clone(), AccessMask(0x001F_01FF), HandleAttributes::default()).unwrap();
+    holder.set_delete_pending(true).unwrap();
+    table.close(handle).unwrap();
+    assert_eq!(File::open(&volume, "\\GONE.TMP").err(), Some(STATUS_OBJECT_NAME_NOT_FOUND), "deleted");
+    assert_eq!(looked_up.begin_open(0), Err(STATUS_OBJECT_NAME_NOT_FOUND), "its entry is gone");
+    // Its slot taken by another name: still not the file looked up.
+    root.create_child("OTHER.TMP", false, 0).unwrap();
+    assert_eq!(looked_up.begin_open(0), Err(STATUS_OBJECT_NAME_NOT_FOUND), "another file's entry");
+
+    // While the deletion is pending, an open fails; one counted before it
+    // holds the file, and its failure before the handle lets it go.
+    root.create_child("HELD.TMP", false, 0).unwrap();
+    let early = File::open(&volume, "\\HELD.TMP").unwrap();
+    early.begin_open(0).unwrap();
+    let marker = File::open(&volume, "\\HELD.TMP").unwrap();
+    marker.begin_open(0).unwrap();
+    let marker_handle = table.insert(marker.clone(), AccessMask(0x001F_01FF), HandleAttributes::default()).unwrap();
+    marker.set_delete_pending(true).unwrap();
+    table.close(marker_handle).unwrap();
+    let late = File::open(&volume, "\\HELD.TMP").unwrap();
+    assert_eq!(late.begin_open(0), Err(STATUS_DELETE_PENDING));
+    assert!(File::open(&volume, "\\HELD.TMP").is_ok(), "the early open holds it");
+    early.abandon_open();
+    assert_eq!(File::open(&volume, "\\HELD.TMP").err(), Some(STATUS_OBJECT_NAME_NOT_FOUND), "then it goes");
+}
+
+#[test]
+fn delete_on_close_is_refused_where_nothing_can_be_deleted() {
+    use abi::file::{FILE_ATTRIBUTE_ARCHIVE, FILE_ATTRIBUTE_READONLY};
+    use abi::ntstatus::{STATUS_CANNOT_DELETE, STATUS_MEDIA_WRITE_PROTECTED};
+
+    let allowed = crate::delete_on_close_allowed;
+    assert_eq!(allowed(true, false, FILE_ATTRIBUTE_ARCHIVE), Err(STATUS_MEDIA_WRITE_PROTECTED), "NTFS, read-only");
+    assert_eq!(allowed(false, true, 0), Err(STATUS_CANNOT_DELETE), "the root");
+    assert_eq!(allowed(false, false, FILE_ATTRIBUTE_READONLY), Err(STATUS_CANNOT_DELETE), "a read-only file");
+    assert_eq!(allowed(false, false, FILE_ATTRIBUTE_ARCHIVE), Ok(()));
 }
