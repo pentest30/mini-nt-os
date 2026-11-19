@@ -1,5 +1,18 @@
 # Notes de passation
 
+- **Revue de la PR 149 : l'ouverture et l'effacement mis en ordre** (`claude/inspiring-allen-8bb1b7`, M7 ; demandé
+  le 2026-11-19). Ke : `ke::KGuardedMutex` (`guarded_mutex`), un verrou qui peut attendre (région gardée, événement
+  de synchronisation du dispatcher ; il tourne sur place sans thread de Ke, avant `ke::init` et dans les tests
+  hôte). Io : le FCB de `Volume` (`fcb`, ce verrou) met en ordre les ouvertures, vérifiées et comptées d'un coup
+  (`Volume::begin_open`, `File::begin_open` avant `check_open` dans NtCreateFile, `File::abandon_open` si la suite
+  échoue avant le handle), et les derniers cleanups avec leur effacement : une ouverture trouvée avant un
+  effacement trouve l'entrée partie (`FatMount::still_names` : le nom 8.3 de l'entrée, que garde le `Node`) et rend
+  `STATUS_OBJECT_NAME_NOT_FOUND`. L'effacement écrit le volume sous ce verrou, plus sous le verrou tournant de la
+  table (`opened`). FILE_DELETE_ON_CLOSE : `delete_on_close_allowed` (volume en lecture seule, racine, fichier en
+  lecture seule) ; le commentaire de NtCreateFile dit pourquoi DELETE est exigé (CreateFileW l'ajoute). Le banc
+  demande le bouton par défaut par SendMessageTimeoutW (2 s, IDOK sinon). Tests hôte : `guarded_mutex::tests`,
+  `an_open_looked_up_before_the_deletion_finds_the_file_gone`, `delete_on_close_is_refused_where_nothing_can_be_deleted`.
+
 - **Le plantage des programmes installés : le PEB de ReactOS** (`claude/inspiring-allen-8bb1b7`, M7,
   [`compat/applications.md`](compat/applications.md#le-plantage-des-programmes-installés-le-2026-11-19) ;
   demandé le 2026-11-18, suite de l'entrée suivante). KeePass finissait sur 0xC0000005 dans FlsAlloc (tracé) : la
