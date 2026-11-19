@@ -251,6 +251,27 @@ impl Volume {
             Backend::Ntfs(_) => Ok(()),
         }
     }
+    /// The lazy writer's pass (`crate::lazy_writer`): flushes what a flush
+    /// would write, if anything waits; returns whether something did. NTFS
+    /// has nothing waiting.
+    /// # IRQL
+    /// PASSIVE_LEVEL.
+    pub fn write_behind(&self) -> Result<bool, NtStatus> {
+        match &self.backend {
+            Backend::Fat(v) => v.write_behind(),
+            Backend::Ntfs(_) => Ok(false),
+        }
+    }
+    /// What was written has not all reached the medium (see
+    /// [`write_behind`](Self::write_behind)).
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn is_dirty(&self) -> bool {
+        match &self.backend {
+            Backend::Fat(v) => v.is_dirty(),
+            Backend::Ntfs(_) => false,
+        }
+    }
     /// Create a FAT entry; NTFS is write protected.
     /// # IRQL
     /// PASSIVE_LEVEL.

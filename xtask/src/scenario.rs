@@ -61,6 +61,14 @@
 //!   must end with QEMU (the kernel resets the machine, and `-no-reboot`
 //!   makes QEMU exit); the `expect` markers are looked for in all the serial
 //!   logs, the last boot's included.
+//! - `power-cut = BOOT => MARKER => …` (BOOT before the last): that boot ends
+//!   with a power cut instead of a reset: once the markers are in its serial
+//!   log, in this order, QEMU is killed, and what the guest had not written
+//!   to the disk is lost, as when the machine is switched off. The boot
+//!   fails if QEMU exits before.
+//! - `expect-last = MARKER => …`: the markers must appear in the serial log
+//!   of the last boot itself, in this order (an `expect` marker may come
+//!   from any boot).
 //! - `screen = X Y RRGGBB`: once the markers are found, the screen of the
 //!   last boot is dumped (`screen.ppm` in the run directory) and the pixel
 //!   at column X, row Y must have this colour (`xtask/src/screen.rs`).
@@ -136,9 +144,47 @@ pub struct Scenario {
     /// its installer and the probe's command file go to a larger system
     /// disk `C:`, which holds the whole ReactOS tree.
     pub app: Option<String>,
+    /// The boot that ends with a power cut, and the markers after which it
+    /// is cut.
+    pub power_cut: Option<(u32, Sequence)>,
+    /// Markers of the last boot's own serial log, each list in its order.
+    expect_last: Vec<Sequence>,
     expect: Vec<Vec<String>>,
     forbid: Vec<String>,
     forbid_line_start: Vec<String>,
+}
+
+/// Markers that must appear in a serial log in this order.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Sequence(Vec<String>);
+
+impl Sequence {
+    /// `MARKER => MARKER…`.
+    fn parse(value: &str) -> std::result::Result<Self, String> {
+        let markers: Vec<String> = value.split("=>").map(|marker| marker.trim().to_string()).collect();
+        if markers.iter().any(String::is_empty) {
+            return Err("expected `MARKER => MARKER…`".into());
+        }
+        Ok(Self(markers))
+    }
+
+    /// The markers are in `log`, each after the end of the one before.
+    pub fn found_in(&self, log: &str) -> bool {
+        let mut rest = log;
+        for marker in &self.0 {
+            match rest.find(marker.as_str()) {
+                Some(at) => rest = &rest[at + marker.len()..],
+                None => return false,
+            }
+        }
+        true
+    }
+}
+
+impl std::fmt::Display for Sequence {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0.join(" => "))
+    }
 }
 
 /// Keys that QEMU's monitor types once `after` is in the serial log.
@@ -263,6 +309,8 @@ impl Scenario {
             shell: false,
             keys: Vec::new(),
             app: None,
+            power_cut: None,
+            expect_last: Vec::new(),
             expect: Vec::new(),
             forbid: Vec::new(),
             forbid_line_start: Vec::new(),
@@ -286,6 +334,17 @@ impl Scenario {
                     sc.timeout = Duration::from_secs(secs);
                 }
                 "expect" => sc.expect.push(value.split('|').map(|m| m.trim().to_string()).collect()),
+                "expect-last" => sc.expect_last.push(Sequence::parse(value).map_err(|e| format!("{}: {e}", at()))?),
+                "power-cut" => {
+                    let (boot, after) = value
+                        .split_once("=>")
+                        .ok_or_else(|| format!("{}: expected `power-cut = BOOT => MARKER…`", at()))?;
+                    let boot =
+                        boot.trim().parse().ok().filter(|&boot| boot >= 1).ok_or_else(|| {
+                            format!("{}: power-cut boot `{}` is not a number from 1", at(), boot.trim())
+                        })?;
+                    sc.power_cut = Some((boot, Sequence::parse(after).map_err(|e| format!("{}: {e}", at()))?));
+                }
                 "forbid" => sc.forbid.push(value.to_string()),
                 "forbid-line-start" => sc.forbid_line_start.push(value.to_string()),
                 "initial-command" => sc.initial_command = Some(value.to_string()),
@@ -396,6 +455,9 @@ impl Scenario {
         if sc.system_disk && sc.target_disk && !sc.installed_disk {
             return Err(format!("{name}/{SCENARIO_FILE}: a disk cannot be both system and target"));
         }
+        if sc.power_cut.as_ref().is_some_and(|(boot, _)| *boot >= sc.boots) {
+            return Err(format!("{name}/{SCENARIO_FILE}: `power-cut` names a boot before the last one"));
+        }
         if sc.reboot_target && !(sc.installed_disk && sc.target_disk && sc.boots >= 2) {
             return Err(format!(
                 "{name}/{SCENARIO_FILE}: `reboot = target` needs `disk = installed`, `disk = target` and `boots` from 2"
@@ -409,6 +471,29 @@ impl Scenario {
         match self.check(log) {
             Verdict::Fail(why) => Some(why),
             _ => None,
+        }
+    }
+
+    /// The verdict of the last boot: [`check`](Self::check) on every serial
+    /// log (`earlier`, then `this_boot`), and the `expect-last` markers in
+    /// `this_boot` alone.
+    pub fn check_last(&self, earlier: &str, this_boot: &str) -> Verdict {
+        let missing_last = || {
+            self.expect_last
+                .iter()
+                .filter(|sequence| !sequence.found_in(this_boot))
+                .map(|sequence| format!("{sequence} (in the last boot)"))
+        };
+        match self.check(&format!("{earlier}{this_boot}")) {
+            Verdict::Pass => match missing_last().collect::<Vec<_>>() {
+                missing if missing.is_empty() => Verdict::Pass,
+                missing => Verdict::Pending(missing),
+            },
+            Verdict::Pending(mut missing) => {
+                missing.extend(missing_last());
+                Verdict::Pending(missing)
+            }
+            failed => failed,
         }
     }
 
@@ -553,6 +638,42 @@ requires = userland
         assert!(matches!(sc.check("ready\n[sys] NtWriteFile\nhit"), Verdict::Fail(_)));
         // Only at the start of a line.
         assert_eq!(sc.check("ready x [sys] hit"), Verdict::Pass);
+    }
+
+    #[test]
+    fn a_boot_can_end_with_a_power_cut_and_the_last_one_show_its_own_markers() {
+        let text = "expect = a\ndisk = system\nboots = 3\npower-cut = 2 => logged on => everything written\n\
+                    expect-last = logged on => explorer";
+        let sc = Scenario::parse("x", text).unwrap();
+        let (boot, after) = sc.power_cut.clone().unwrap();
+        assert_eq!((boot, after.to_string()), (2, "logged on => everything written".to_string()));
+        assert!(!after.found_in("everything written\nlogged on"), "in this order");
+        assert!(after.found_in("[lazy] everything written\nlogged on\n[lazy] more waits\n[lazy] everything written"));
+        assert!(!after.found_in("logged on"));
+        // The markers of earlier boots do not count for `expect-last`.
+        let earlier = "a\nlogged on\nexplorer\n";
+        assert_eq!(
+            sc.check_last(earlier, "booting"),
+            Verdict::Pending(vec!["logged on => explorer (in the last boot)".into()])
+        );
+        assert_eq!(
+            sc.check_last(earlier, "explorer, then logged on"),
+            Verdict::Pending(vec!["logged on => explorer (in the last boot)".into()])
+        );
+        assert_eq!(sc.check_last(earlier, "logged on\nexplorer"), Verdict::Pass);
+        assert_eq!(
+            sc.check_last("", "logged on\nexplorer"),
+            Verdict::Pending(vec!["a".into()]),
+            "`expect` still counts"
+        );
+        assert_eq!(Scenario::parse("x", "expect = a").unwrap().power_cut, None);
+        let cut = |line: &str| Scenario::parse("x", &format!("expect = a\ndisk = system\nboots = 3\n{line}"));
+        assert!(cut("power-cut = 3 => b").is_err(), "the last boot ends with its markers");
+        assert!(cut("power-cut = 0 => b").is_err());
+        assert!(cut("power-cut = two => b").is_err());
+        assert!(cut("power-cut = 1").is_err(), "no marker");
+        assert!(cut("power-cut = 1 => b =>").is_err(), "an empty marker");
+        assert!(cut("expect-last = => b").is_err());
     }
 
     #[test]

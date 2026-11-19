@@ -90,6 +90,104 @@ Il ne juge rien : le noyau journalise chaque service sans handler à son premier
 un processus. Les marqueurs d'un scénario sont un plancher, ce qui marche aujourd'hui : l'installeur démarre ; pour
 Dev-C++, ses fichiers sont copiés et son programme démarre.
 
+### Les essayer à la main : `cargo xtask image --apps`
+
+```bash
+cargo xtask fetch-apps
+cargo xtask image --apps --output mino-apps.img                    # les dix
+cargo xtask image --app keepass --app notepadpp --output mino.img   # ou quelques-unes
+```
+
+L'image est celle de `cargo xtask image` (GPT : ESP, puis le volume système), avec le vrai `winlogon` de ReactOS
+(`--initial-command system`, la seule commande permise avec `--apps`) et le shell (`explorer.exe` et ses imports sur
+le disque RAM, comme `shell = explorer`). `C:` y est un volume à part, fait comme celui d'un scénario `app = ID`
+(`apps_disk`) : les fichiers du disque RAM, tout l'arbre de ReactOS, les installeurs choisis dans `C:\APPS` sous
+leur nom publié, et la place libre de leurs installations, la somme de leurs `free_mib` (`xtask/src/apps.rs`). Le
+disque RAM de l'ESP reste celui d'une image ordinaire (64 Mio au plus) ; le noyau prend `C:` sur la partition
+système. Un installeur que `fetch-apps` n'a pas vérifié est signalé et sauté ; un identifiant inconnu est une
+erreur. `install::create` copie le volume système par flux : il ne passe plus par la mémoire.
+
+| Application | Installeur | Place libre prévue |
+|---|---:|---:|
+| 7-Zip, Notepad++, KeePass, WinMerge, SumatraPDF | 1 à 4 Mo chacun | 64 Mio chacune |
+| AbiWord, PeaZip | 5 et 6 Mo | 96 Mio chacune |
+| Dev-C++ | 9 Mo | 192 Mio |
+| GIMP | 21 Mo | 320 Mio |
+| Apache OpenOffice | 143 Mo | 1 024 Mio |
+| **Les dix** | **199 Mo** | **2 048 Mio** |
+
+Avec les dix (mesuré le 2026-11-19) : `C:` a 1 075 fichiers et fait 2 541 Mio (l'arbre de ReactOS, les
+installeurs, 2 048 Mio libres), l'ESP 59 Mio (dont le disque RAM, 53 Mio), l'image 2 602 Mio ; tout tient,
+OpenOffice compris. Le noyau garde en mémoire la première FAT entière (clusters de 512 octets : 20 Mio pour ce
+volume), et `mkfat` construit le volume en mémoire sur l'hôte (2,5 Go). Mémoire de la machine : celle de
+l'application la plus lourde (`memory_mb` : 768 Mio avec OpenOffice, 512 avec GIMP, 256 sinon) ; `xtask`
+l'imprime.
+
+Le premier démarrage est celui de l'installation (`minoinit` : profils, enregistrement COM, ruches vidées sur le
+disque, puis redémarrage), le second ouvre la session d'`Administrator` (AutoAdminLogon) et montre le bureau
+d'`explorer`. Un installeur se lance par Win+R (`C:\APPS\KeePass-1.18-Setup.exe` ; pour 7-Zip, `msiexec /i
+C:\APPS\7z920.msi`) ou depuis le Poste de travail. Ce qu'on peut en attendre est le bilan du banc (plus bas, le
+2026-11-19) : KeePass s'installe et ouvre sa fenêtre, Notepad++ s'arrête sur son avertissement Authenticode, AbiWord
+et Dev-C++ s'installent mais leurs programmes plantent, les autres ne s'installent pas. Une différence avec le banc :
+ici l'installeur tourne sous le jeton d'`Administrator`, dans sa session, pas sous celui de System ; le profil
+introuvable de SumatraPDF peut changer.
+
+**Essai sous QEMU** (2026-11-19, AMD, 768 Mio, l'image des dix) : le premier démarrage va jusqu'au redémarrage en
+133 s ; au second, la session s'ouvre et le bureau s'affiche (ses quatre icônes, la barre des tâches, l'horloge).
+Win+R complète `C:\APPS\KeePass-1.18-Setup.exe` et le lance dans la session : sa boîte « Select Setup Language »
+s'ouvre, mais son texte et sa liste sont des carrés. Inno Setup 5.3 est un programme ANSI, et win32k n'a pas encore
+de CALLPROCDATA (« the procedure of class 0xc009 asked in the other character set », voir
+[`m6-fenetres.md`](m6-fenetres.md), étape 33) ; le banc, silencieux, ne montre pas cette boîte.
+
+**Ce qu'une session écrit survit à l'arrêt de la machine** (depuis le 2026-11-19). Avant, le noyau gardait la FAT
+de `C:` en mémoire et ne l'écrivait qu'à un vidage explicite (NtFlushBuffersFile, ou l'écriture d'une ruche) ; les
+ruches ne s'écrivaient qu'à NtFlushKey et NtUnloadKey ; NtShutdownSystem ne faisait que le redémarrage, sans rien
+vider. Ce que le second démarrage écrivait dans la ruche SOFTWARE (la clé du profil d'`Administrator` sous
+`ProfileList`) et ce qu'un installeur copiait restaient en mémoire : au troisième démarrage du même disque, la
+session ne s'ouvrait plus (« ReactOS could not load the locally stored user profile » : IncrementRefCount de
+`userenv` ne trouvait pas cette clé, Error 2 ; une boîte qui ne répondait ni au clavier ni à son délai), et trois
+fichiers écrits pendant les sessions (le `.tmp` de KeePass sous `Local Settings\Temp`, `RECYCLED\INFO2`…) avaient
+dans la FAT du disque une chaîne qui finissait sur un cluster libre.
+
+Maintenant, un thread système du noyau, l'écrivain paresseux (`kernel/ntoskrnl/src/lazy_writer.rs`), fait chaque
+seconde ce que font l'écrivain paresseux du cache et l'écriture différée des ruches de NT (CcLazyWriteScan,
+CmpLazyFlush de ReactOS, comme spécification) : il réécrit les ruches qui n'ont pas changé depuis 5 s
+(CmpLazyFlushIntervalInSeconds), ou qui attendent depuis 30 s sans cesser de changer (`cm::lazy_flush`), puis vide
+les volumes dont quelque chose attend : les secteurs modifiés de la FAT, le cache du disque
+(`io_manager::lazy_writer`). Le vidage d'un volume se fait sous son verrou, entre deux opérations : la FAT écrite
+est celle d'un volume cohérent. NtShutdownSystem demande SeShutdownPrivilege, comme ReactOS, puis réécrit tout avant
+le redémarrage, l'arrêt (ShutdownNoReboot : le processeur s'arrête, « It is now safe to turn off your computer » sur
+le port série) ou l'extinction (ShutdownPowerOff : l'état S5 de l'ACPI, `hal::acpi` ; essayé sous QEMU, qui
+s'arrête ; pas encore sous VirtualBox ; sans `\_S5_`, le processeur s'arrête). Couper le courant perd au plus les dernières secondes ;
+quelques secondes sans écriture, et le disque est cohérent. La FAT n'a pas de journal, ni les ruches de `.LOG` : une
+coupure pendant une écriture peut encore laisser une chaîne ou une ruche à moitié écrite.
+
+Le scénario `power-cut` le vérifie sur le disque de `logon` : l'installation, puis une session ouverte dont xtask
+coupe le courant (QEMU tué) une fois qu'`explorer` a listé son bureau et qu'un passage de l'écrivain paresseux n'a
+rien laissé en attente (`power-cut = 2 => …`, la feature `trace-lazy-writer`), puis un troisième démarrage du même
+disque, où la session s'ouvre (`expect-last`) ; la FAT relue après lui n'a aucune chaîne coupée. Sous QEMU (le
+2026-11-19), les trois démarrages prennent 137 s (AMD) et 122 s (Intel) ; sans l'écriture différée des ruches (une
+mutation), le troisième s'arrête sur « IncrementRefCount() failed (Error 2) » ; une ruche se réécrit sur le disque ATA en 10 à 210 ms.
+
+Le disque n'a donc plus à être immuable. Démarrer l'image une fois, jusqu'au redémarrage de l'installation (QEMU
+s'arrête de lui-même, `-no-reboot`), puis la convertir pour VirtualBox ; un disque `immutable` reste le moyen de
+repartir à chaque essai de l'état d'après l'installation :
+
+```bash
+cargo xtask run --image mino-apps.img --memory 768 --headless   # l'installation (1 min 40 s), puis QEMU s'arrête
+VBoxManage convertfromraw --format VDI mino-apps.img mino-apps.vdi
+VBoxManage storageattach Mino --storagectl IDE --port 0 --device 0 --type hdd --medium mino-apps.vdi
+```
+
+(avec `--mtype immutable` en plus, VirtualBox jette les écritures de chaque session à la mise en marche suivante.)
+La VM est celle de [`vbox.md`](vbox.md) (EFI, IDE PIIX4 en maître primaire, profil de CPU Intel), avec la mémoire
+ci-dessus. Le VDI est dynamique : les secteurs à zéro de la place libre n'y sont pas écrits (520 Mio pour l'image des
+dix, convertie en 2 s par VirtualBox 7.2.22). Pour éteindre, attendre quelques secondes après la dernière écriture,
+puis couper la machine : le bouton ACPI de VirtualBox n'est pas encore entendu (pas de SCI), et l'arrêt par le menu
+Démarrer (`ExitWindowsEx`, puis `winlogon` et NtShutdownSystem) n'est pas encore essayé. Sous QEMU seul, relancer
+`cargo xtask run --image` sur l'image elle-même, ou sur une copie prise après l'installation. Le parcours sous
+VirtualBox n'est pas encore essayé.
+
 ### Bilan du 2026-11-17
 
 Sur `main` `5ca4cab`, AMD (`int 2Eh`), un passage par application (`cargo xtask test --boot --scenario app-<id>`).

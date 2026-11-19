@@ -11,6 +11,7 @@
 // The host tests' stand-in for CR8, one per thread (`irql`).
 #![cfg_attr(not(target_os = "none"), feature(thread_local))]
 
+pub mod acpi;
 pub mod ata;
 pub mod bochs;
 pub mod bugcheck;

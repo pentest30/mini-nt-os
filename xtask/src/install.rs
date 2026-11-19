@@ -2,8 +2,8 @@
 //! The layout planner has no I/O and can later drive a console or GUI review.
 //! This is image construction, not an in-guest installer or a raw-disk tool.
 
-use std::fs::{self, OpenOptions};
-use std::io::{Seek, SeekFrom, Write};
+use std::fs::{self, File, OpenOptions};
+use std::io::{BufReader, Seek, SeekFrom, Write};
 use std::path::Path;
 
 use crate::partition::Disk;
@@ -70,18 +70,22 @@ impl Plan {
     }
 }
 
-/// Builds the ESP using the existing FAT writer and places it alongside the
-/// system FAT image in a GPT disk. Refuses existing destinations, including
-/// device paths. All source files and the plan are checked before creation.
-pub fn create(esp_dir: &Path, output: &Path) -> Result<Plan> {
+/// Builds the ESP using the existing FAT writer, with the loader, the kernel
+/// and the ramdisk of `esp_dir`, and places it alongside the system FAT
+/// image `system` in a GPT disk. The system image is copied as a stream, not
+/// read whole: with the installers of the M7 bench it passes 2 GiB.
+/// Refuses existing destinations, including device paths. All source files
+/// and the plan are checked before creation.
+pub fn create(esp_dir: &Path, system: &Path, output: &Path) -> Result<Plan> {
     let read = |path: &Path| fs::read(path).map_err(|e| format!("{}: {e}", path.display()));
-    let system = read(&esp_dir.join("fat.img"))?;
     let esp = fatfs::build(&[
         (fatfs::path("EFI/BOOT/BOOTX64.EFI")?, read(&esp_dir.join("EFI/BOOT/BOOTX64.EFI"))?),
         (fatfs::path("kernel.elf")?, read(&esp_dir.join("kernel.elf"))?),
-        (fatfs::path("fat.img")?, system.clone()),
+        (fatfs::path("fat.img")?, read(&esp_dir.join("fat.img"))?),
     ])?;
-    let plan = Plan::new(esp.len() as u64, system.len() as u64)?;
+    let system_file = File::open(system).map_err(|e| format!("{}: {e}", system.display()))?;
+    let system_bytes = system_file.metadata().map_err(|e| format!("{}: {e}", system.display()))?.len();
+    let plan = Plan::new(esp.len() as u64, system_bytes)?;
     let layout = plan.layout()?;
     println!(
         "Install plan: EFI {} MiB at LBA {}; system {} MiB at LBA {}; disk {} MiB",
@@ -101,9 +105,13 @@ pub fn create(esp_dir: &Path, output: &Path) -> Result<Plan> {
         let mut disk = Disk(file);
         disk.0.set_len(plan.total_sectors * 512).map_err(|e| e.to_string())?;
         gpt::write(&mut disk, &layout).map_err(|e| format!("GPT: {e:?}"))?;
-        for (first, bytes) in [(plan.esp_first, &esp), (plan.system_first, &system)] {
-            disk.0.seek(SeekFrom::Start(first * 512)).map_err(|e| e.to_string())?;
-            disk.0.write_all(bytes).map_err(|e| e.to_string())?;
+        disk.0.seek(SeekFrom::Start(plan.esp_first * 512)).map_err(|e| e.to_string())?;
+        disk.0.write_all(&esp).map_err(|e| e.to_string())?;
+        disk.0.seek(SeekFrom::Start(plan.system_first * 512)).map_err(|e| e.to_string())?;
+        let copied = std::io::copy(&mut BufReader::with_capacity(1 << 20, &system_file), &mut disk.0)
+            .map_err(|e| format!("{}: {e}", system.display()))?;
+        if copied != system_bytes {
+            return Err(format!("{}: {copied} bytes copied, {system_bytes} expected", system.display()));
         }
         disk.0.sync_all().map_err(|e| e.to_string())?;
         let (actual, source) = gpt::read(&disk, plan.total_sectors).map_err(|e| format!("GPT verification: {e:?}"))?;
@@ -141,7 +149,8 @@ mod tests {
     fn missing_sources_do_not_create_destination() {
         let path = std::env::temp_dir().join(format!("mino-missing-source-{}.img", std::process::id()));
         assert!(!path.exists());
-        assert!(create(Path::new("missing-installer-source"), &path).is_err());
+        let source = Path::new("missing-installer-source");
+        assert!(create(source, &source.join("fat.img"), &path).is_err());
         assert!(!path.exists());
     }
 }

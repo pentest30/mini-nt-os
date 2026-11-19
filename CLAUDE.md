@@ -590,6 +590,8 @@ cargo xtask test                                     # tests hôte, puis scénar
 cargo xtask test --boot --scenario smoke --cpu intel # un scénario, un CPU
 cargo xtask run [--cpu intel] [--gdb] [--headless]   # démarre dans QEMU, port série sur stdio
 cargo xtask build [--features trace-syscalls]        # mino-loader et ntoskrnl
+cargo xtask image [--output F] [--initial-command P] # image GPT (ESP + système) à démarrer, VirtualBox compris
+cargo xtask image --apps [--app ID]                  # avec les installeurs du banc du M7 dans C:\APPS, logon, explorer
 cargo xtask syscall-gen                              # régénère abi/src/services.rs (listes de ReactOS épinglé)
 cargo xtask fetch-userland [--archive FICHIER]       # ReactOS épinglé : archive vérifiée, arborescence dans third_party/
 cargo xtask fetch-apps [--app ID]                    # installeurs du banc du M7, vérifiés, dans third_party/apps/
@@ -631,9 +633,19 @@ cargo build -p mino-loader --target x86_64-unknown-uefi --profile kernel
   charge le chargeur au-dessus de 4 Gio.
 - `disk = system` attache l'image du disque RAM comme disque système ATA (`C:`), `boots = N` démarre QEMU N fois sur
   elle (scénario `persistence`) ; `fsck.vfat` (paquet `dosfstools`) vérifie ensuite l'image.
+- `power-cut = N => MARQUEUR => …` : le démarrage N finit par une coupure de courant (QEMU tué) une fois ces
+  marqueurs parus dans son journal, dans cet ordre, au lieu d'un redémarrage ; `expect-last = MARQUEUR => …` : ces
+  marqueurs doivent paraître, dans cet ordre, dans le journal du dernier démarrage lui-même (scénario `power-cut`).
 - `app = ID` : une application du banc du M7 (`xtask/src/apps.rs`) ; son installeur et `C:\APPS\PROBE.TXT` vont
   sur un disque système plus grand, avec tout l'arbre de ReactOS (sans `cargo xtask fetch-apps`, sauté).
-- `trace-syscalls` active la trace série des appels système, `heartbeat` le battement du timer (`[alive] tick=N`). Le CPU par défaut de QEMU annonce un fabricant AMD (chemin `int 2Eh`) ;
+- `cargo xtask image --apps` (toutes) ou `--app ID` (répétable) : les installeurs du banc vont dans `C:\APPS` d'une
+  image au vrai `winlogon` (logon d'Administrator, `explorer`), pour les lancer à la main ; `C:` est un disque à
+  part, avec tout l'arbre de ReactOS et la place libre de chaque installation (2 Gio pour les dix, image de 2,5 Gio) ;
+  un installeur absent de `third_party/apps` est signalé et sauté. Pour VirtualBox :
+  `VBoxManage convertfromraw --format VDI mino.img mino.vdi`. Démarrer l'image une fois (l'installation) ; ce
+  qu'une session écrit survit ensuite à l'arrêt (l'écrivain paresseux, voir `docs/compat/applications.md`).
+- `trace-syscalls` active la trace série des appels système, `heartbeat` le battement du timer (`[alive] tick=N`),
+  `trace-lazy-writer` chaque passage de l'écrivain paresseux qui écrit (« everything written » quand rien n'attend). Le CPU par défaut de QEMU annonce un fabricant AMD (chemin `int 2Eh`) ;
   `--cpu intel` exerce le chemin SYSENTER.
 - Formatage : `cargo fmt --all` (rustfmt.toml). Un lint justifié à garder se marque `#[expect(clippy::…, reason = "…")]`.
 - La CI (`.github/workflows/ci.yml`) exécute `cargo xtask lint` et `cargo xtask test`, avec les builds bare-metal sans warning.

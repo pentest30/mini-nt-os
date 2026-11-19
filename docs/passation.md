@@ -1,5 +1,63 @@
 # Notes de passation
 
+- **Ce qu'une session écrit survit à l'arrêt : l'écrivain paresseux** (`claude/lazy-writer`, sur
+  `claude/relaxed-wilson-e4616f` et `claude/inspiring-allen-8bb1b7`, M7,
+  [`compat/applications.md`](compat/applications.md#les-essayer-à-la-main--cargo-xtask-image---apps) ; demandé le
+  2026-11-19, suite de l'entrée suivante). Ntoskrnl : un thread système (`lazy_writer`, priorité 12) fait un passage
+  par seconde : les ruches dues, puis les volumes. Cm : chaque ruche date ses changements (`HiveFile::touch`, après le
+  changement : NtSetValueKey et NtDeleteKey marquaient la ruche avant, et une réécriture prise entre les deux pouvait
+  laisser le changement en mémoire, la ruche propre ; une course, sans test) ; `cm::lazy_flush` réécrit celles qui
+  n'ont pas changé depuis 5 s (CmpLazyFlushIntervalInSeconds) ou attendent depuis 30 s, `cm::flush_all` toutes,
+  `hives_waiting` ; une réécriture à la fois par ruche (`HiveFile::writing`, `ke::KGuardedMutex`). Io :
+  `lazy_writer::MOUNTED` (les volumes montés au démarrage), `Volume::write_behind`, `FatVolume::is_dirty` (secteurs de
+  la FAT en mémoire, ou écritures depuis le dernier vidage du disque, `written`) ; `flush_fats` remet enfin les
+  marques à zéro (chaque vidage réécrivait tout secteur jamais changé) et le vidage du disque ne se fait que s'il a
+  reçu quelque chose. NtShutdownSystem : ShutdownNoReboot (le processeur s'arrête), ShutdownReboot, ShutdownPowerOff
+  (`hal::power::power_off` : l'état S5 de `hal::acpi`, RSDP du chargeur, FADT, `\_S5_` de la DSDT sans interpréteur
+  AML ; sous QEMU, PM1a_CNT 0xB004 : essayé par un `minoinit` modifié pour l'occasion, QEMU s'arrête ; pas encore
+  essayé sous VirtualBox), SeShutdownPrivilege exigé (`minoinit`, `setup1.c` l'activent par RtlAdjustPrivilege, comme
+  `winlogon`), ruches puis volumes vidés avant. Le système installé réécrit désormais ses ruches (l'environnement de
+  `smss` dans SYSTEM) : la vérification de la cible de l'installeur (`xtask/src/partition.rs`,
+  `rewritten_by_the_system`) n'exige plus les octets de la source pour les ruches de `CONFIG`, seulement leur présence
+  (la marche vérifie leur `regf`) ; `installer-finish` échouait sur `CONFIG/SYSTEM`. xtask : `power-cut = N => …` (le
+  démarrage N finit par une coupure de courant, QEMU tué) et `expect-last` (des marqueurs du dernier démarrage
+  lui-même, dans leur ordre). Scénario `power-cut` (trois démarrages sur le disque de `logon`, feature
+  `trace-lazy-writer`) : AMD 137 s, Intel 122 s ; sans l'écriture différée des ruches (une mutation), le troisième
+  démarrage s'arrête sur « IncrementRefCount() failed (Error 2) » ; la FAT du disque après lui n'a aucune chaîne
+  coupée (vérifiée par un script de l'hôte : pas de `fsck.vfat` sur cette machine Windows), celle de l'ancien `logon`
+  en avait trois (`RECYCLED`, `RECYCLED\DESKTOP.INI`, `RECYCLED\INFO2`). Tests hôte :
+  `a_flush_writes_each_dirty_fat_sector_once`, `after_a_pass_of_the_lazy_writer_a_power_cut_loses_nothing`,
+  `the_shutdown_flushes_every_volume_past_an_error` (io), `a_hive_is_due_once_quiet_or_after_waiting_long_enough`,
+  `the_lazy_flush_writes_back_the_due_hives_and_the_shutdown_every_changed_one` (cm, par Ob et Io sur une image FAT de
+  `fatfs`), `the_s5_package_of_qemu_and_virtualbox_is_found`, `what_cannot_power_off_is_none` (hal),
+  `a_boot_can_end_with_a_power_cut_and_the_last_one_show_its_own_markers`, `only_the_hives_may_differ_from_the_source`
+  (xtask). Passent aussi (AMD) : `smoke`, `persistence`, `registry-persistence`, `logon`, `folder-view`,
+  `display-desktop`, `installed-boot`, `installer-finish` (et Intel) ; pas la suite complète. **Suite** : le bouton
+  ACPI (SCI, l'arrêt demandé par VirtualBox), l'arrêt par le menu Démarrer (`ExitWindowsEx`) à essayer, le journal
+  `.LOG` des ruches ; une ruche se réécrit en entier sous le verrou tournant du volume (10 à 210 ms sur le disque ATA
+  de QEMU, à `DISPATCH_LEVEL`) : un verrou qui peut attendre pour les volumes.
+
+- **Une image pour essayer à la main les applications du banc** (`claude/relaxed-wilson-e4616f`, sur
+  `claude/inspiring-allen-8bb1b7`, M7, [`compat/applications.md`](compat/applications.md#les-essayer-à-la-main--cargo-xtask-image---apps) ;
+  demandé le 2026-11-19 : utiliser les applications dans une image sous VirtualBox). `cargo xtask image --apps`
+  (les dix) ou `--app ID` (répétable) : le vrai `winlogon` (`system`, seule commande initiale permise), `explorer`
+  et ses imports sur le disque RAM, et `C:` à part (`apps_disk`, que les scénarios `app = ID` partagent) : l'arbre
+  de ReactOS, les installeurs dans `C:\APPS`, la somme de leurs `free_mib` libres (2 048 Mio pour les dix, image de
+  2 602 Mio). Un installeur absent de `third_party/apps` est signalé et sauté (`apps::fetched`). `install::create`
+  prend le volume système à part et le copie par flux. Tests hôte : `an_image_with_the_bench_has_each_fetched_installer_in_apps`
+  (le disque GPT relu : `C:\APPS\<fichier>` octet pour octet, l'absent sauté), `an_image_with_the_bench_keeps_the_real_winlogon`,
+  `the_applications_are_selected_by_id_in_the_order_of_the_bench`. VirtualBox : `VBoxManage convertfromraw --format VDI`
+  (VDI dynamique de 520 Mio). Essai QEMU (AMD, 768 Mio) : l'installation en 133 s, puis la session et le bureau
+  d'`explorer` ; Win+R lance l'installeur de KeePass, dont la boîte de langue montre des carrés (Inno Setup 5.3 est
+  ANSI : pas encore de CALLPROCDATA). Trouvé en passant : **ce qu'une session écrit est perdu à l'arrêt de la
+  machine** (FAT de `C:` en mémoire, écrite seulement par NtFlushBuffersFile ou l'écriture d'une ruche ; ruches
+  seulement par NtFlushKey et NtUnloadKey ; NtShutdownSystem ne fait que le redémarrage, sans rien vider) : au troisième démarrage du même disque,
+  le profil d'`Administrator` du second ne se charge plus (sa clé de `ProfileList`, dans la ruche SOFTWARE jamais
+  réécrite : Error 2 de `userenv`) et trois fichiers ont une chaîne qui
+  finit sur 0 dans la FAT. D'où la marche à suivre documentée : un démarrage pour l'installation, puis un disque
+  immuable sous VirtualBox (l'entrée précédente, l'écrivain paresseux, l'a rendu inutile). **Suite** :
+  CALLPROCDATA pour les programmes ANSI ; essayer le parcours sous VirtualBox.
+
 - **Revue de la PR 149 : l'ouverture et l'effacement mis en ordre** (`claude/inspiring-allen-8bb1b7`, M7 ; demandé
   le 2026-11-19). Ke : `ke::KGuardedMutex` (`guarded_mutex`), un verrou qui peut attendre (région gardée, événement
   de synchronisation du dispatcher ; il tourne sur place sans thread de Ke, avant `ke::init` et dans les tests

@@ -1007,3 +1007,131 @@ fn delete_on_close_is_refused_where_nothing_can_be_deleted() {
     assert_eq!(allowed(false, false, FILE_ATTRIBUTE_READONLY), Err(STATUS_CANNOT_DELETE), "a read-only file");
     assert_eq!(allowed(false, false, FILE_ATTRIBUTE_ARCHIVE), Ok(()));
 }
+
+#[test]
+fn a_flush_writes_each_dirty_fat_sector_once() {
+    let volume = stale(64, u32::MAX);
+    let writes = |volume: &FatVolume<Counting>| volume.device().writes.load(core::sync::atomic::Ordering::Relaxed);
+    assert!(!volume.is_dirty(), "as mounted");
+    let (mut first, mut size) = (0, 0);
+    volume.write_file(&mut first, &mut size, 0, &[7u8; 2048], 3).unwrap();
+    assert!(volume.is_dirty(), "a chain in the cached FAT");
+    let before = writes(&volume);
+    volume.flush().unwrap();
+    // The four clusters' entries lie in the first FAT sector: once to each
+    // of the two copies.
+    assert_eq!(writes(&volume) - before, 2);
+    assert!(!volume.is_dirty());
+    // The marks were never cleared: every flush wrote again each sector
+    // ever changed, and the lazy writer would have, every second.
+    volume.flush().unwrap();
+    assert_eq!(writes(&volume) - before, 2, "nothing left to write");
+    // A write in place, without a new cluster: the device has it, its
+    // cache may too.
+    volume.write_file(&mut first, &mut size, 0, &[8u8; 512], 3).unwrap();
+    assert!(volume.is_dirty(), "the device not flushed since");
+}
+
+/// A disk the test keeps, to take its bytes as a power cut leaves them; it
+/// counts its flushes, and with `fail_flush` refuses them.
+struct Watched {
+    disk: alloc::sync::Arc<RwDisk>,
+    flushes: alloc::sync::Arc<core::sync::atomic::AtomicU32>,
+    fail_flush: bool,
+}
+
+impl BlockDevice for Watched {
+    fn sector_size(&self) -> u32 {
+        512
+    }
+    fn read_sector(&self, lba: u64, out: &mut [u8]) -> Result<(), FatError> {
+        self.disk.read_sector(lba, out)
+    }
+    fn write_sector(&self, lba: u64, data: &[u8]) -> Result<(), FatError> {
+        self.disk.write_sector(lba, data)
+    }
+    fn flush(&self) -> Result<(), FatError> {
+        if self.fail_flush {
+            return Err(FatError::Io);
+        }
+        self.flushes.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        Ok(())
+    }
+}
+
+/// A volume of `clusters` clusters on a [`Watched`] disk: the volume, its
+/// disk, its count of flushes.
+fn watched(
+    clusters: u32,
+    fail_flush: bool,
+) -> (alloc::sync::Arc<crate::Volume>, alloc::sync::Arc<RwDisk>, alloc::sync::Arc<core::sync::atomic::AtomicU32>) {
+    let disk = alloc::sync::Arc::new(fat32(clusters));
+    let flushes = alloc::sync::Arc::new(core::sync::atomic::AtomicU32::new(0));
+    let device = Watched { disk: disk.clone(), flushes: flushes.clone(), fail_flush };
+    let volume = crate::Volume::mount(alloc::boxed::Box::new(device)).unwrap();
+    (alloc::sync::Arc::new(volume), disk, flushes)
+}
+
+#[test]
+fn after_a_pass_of_the_lazy_writer_a_power_cut_loses_nothing() {
+    use crate::lazy_writer::{MountedVolumes, WrittenBehind};
+    use crate::File;
+    use core::sync::atomic::Ordering;
+
+    let (volume, disk, flushes) = watched(FSCK_CLUSTERS, false);
+    let mounted = MountedVolumes::new();
+    mounted.register(&volume);
+    mounted.register(&volume);
+    assert_eq!(mounted.write_behind(), WrittenBehind::default(), "nothing waits after the mount");
+    let data = pattern(5000, 3);
+    let file = File::open(&volume, "\\").unwrap().create_child("Session.log", false, 0).unwrap();
+    file.write(0, &data).unwrap();
+
+    // A power cut now: the entry and the data are on the disk, the chain
+    // only in the cached FAT. What a third boot found of the second's files.
+    let cut = FatVolume::mount(RwDisk(KSpinLock::new(disk.0.lock().clone()))).unwrap();
+    let (entry, _) = cut.find_entry(cut.root_cluster(), "Session.log").unwrap();
+    assert_eq!((entry.file_size, cut.fat_entry(entry.first_cluster)), (5000, Ok(0)), "a chain that ends on 0");
+
+    assert!(mounted.is_dirty());
+    assert_eq!(mounted.write_behind(), WrittenBehind { volumes: 1, error: None });
+    assert_eq!(flushes.load(Ordering::Relaxed), 1, "the device's cache flushed too");
+    assert!(!mounted.is_dirty());
+    assert_eq!(mounted.write_behind(), WrittenBehind::default(), "nothing left, no device flush");
+    assert_eq!(flushes.load(Ordering::Relaxed), 1);
+
+    // A power cut now: the file is whole.
+    let bytes = disk.0.lock().clone();
+    let cut = FatVolume::mount(RwDisk(KSpinLock::new(bytes.clone()))).unwrap();
+    let (entry, _) = cut.find_entry(cut.root_cluster(), "SESSION.LOG").unwrap();
+    assert_eq!(read_all(&cut, entry.first_cluster, entry.file_size), data);
+    drop(cut);
+    match fsck(&bytes) {
+        Some(result) => result.unwrap_or_else(|report| panic!("fsck.vfat: {report}")),
+        None => std::eprintln!("fsck.vfat not found: the volume is not checked (dosfstools)"),
+    }
+}
+
+#[test]
+fn the_shutdown_flushes_every_volume_past_an_error() {
+    use crate::lazy_writer::MountedVolumes;
+    use crate::File;
+    use abi::ntstatus::STATUS_IO_DEVICE_ERROR;
+    use core::sync::atomic::Ordering;
+
+    let (broken, _, _) = watched(64, true);
+    let (sound, disk, flushes) = watched(64, false);
+    let mounted = MountedVolumes::new();
+    for volume in [&broken, &sound] {
+        mounted.register(volume);
+        File::open(volume, "\\").unwrap().create_child("A.TXT", false, 0).unwrap().write(0, &[1u8; 1024]).unwrap();
+    }
+    assert_eq!(mounted.flush(), Err(STATUS_IO_DEVICE_ERROR), "the first error");
+    assert_eq!(flushes.load(Ordering::Relaxed), 1, "the volume after it flushed all the same");
+    assert!(!sound.is_dirty() && broken.is_dirty(), "a device that refused keeps what waits");
+    let cut = FatVolume::mount(RwDisk(KSpinLock::new(disk.0.lock().clone()))).unwrap();
+    let (entry, _) = cut.find_entry(cut.root_cluster(), "A.TXT").unwrap();
+    assert_eq!(read_all(&cut, entry.first_cluster, entry.file_size), vec![1u8; 1024]);
+    let pass = mounted.write_behind();
+    assert_eq!((pass.volumes, pass.error), (0, Some(STATUS_IO_DEVICE_ERROR)), "tried again, refused again");
+}

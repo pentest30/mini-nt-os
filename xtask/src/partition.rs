@@ -101,6 +101,7 @@ pub fn extract(image: &Path) -> Result<PathBuf> {
 /// from a real GPT disk), they are the three boot files of the run's ESP,
 /// `ramdisk`'s directory, byte for byte, plus `MINO.TAG`, which makes the
 /// loader prefer the installed ESP while the installation medium is attached.
+/// The hives are only required to be there ([`rewritten_by_the_system`]).
 pub fn verify_setup_target(image: &Path, ramdisk: &Path) -> Result<()> {
     let verify = || -> std::io::Result<()> {
         const EXPECTED_BYTES: u64 = 128 * 1024 * 1024;
@@ -218,6 +219,7 @@ pub fn verify_setup_target(image: &Path, ramdisk: &Path) -> Result<()> {
             let installed_path = path;
             match stats.contents.get(installed_path) {
                 None => return Err(std::io::Error::other(format!("{installed_path} did not persist"))),
+                Some(_) if rewritten_by_the_system(installed_path) => {}
                 Some(&(copied, _)) if copied != size => {
                     return Err(std::io::Error::other(format!(
                         "{installed_path}: {copied} bytes copied, {size} in the source"
@@ -255,9 +257,28 @@ pub fn verify_setup_target(image: &Path, ramdisk: &Path) -> Result<()> {
     verify().map_err(|e| format!("{}: {e}", image.display()))
 }
 
+/// The files the system writes back as it runs, which an installed volume
+/// need not hold as the source had them: the hives of `CONFIG` (`smss`
+/// writes its environment in SYSTEM at each boot, and the lazy writer of the
+/// kernel writes the hive back, as NT does). The walk has checked their
+/// `regf` and their chains.
+fn rewritten_by_the_system(path: &str) -> bool {
+    path.starts_with("WINDOWS/SYSTEM32/CONFIG/")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_the_hives_may_differ_from_the_source() {
+        for hive in ["SYSTEM", "SOFTWARE", "SAM", "SECURITY", "DEFAULT"] {
+            assert!(rewritten_by_the_system(&format!("WINDOWS/SYSTEM32/CONFIG/{hive}")));
+        }
+        assert!(!rewritten_by_the_system("WINDOWS/SYSTEM32/NTDLL.DLL"));
+        assert!(!rewritten_by_the_system("WINDOWS/SYSTEM32/CONFIG"), "the directory itself");
+        assert!(!rewritten_by_the_system("CONFIG/SYSTEM"));
+    }
     #[test]
     fn wrapping_and_extracting_preserves_the_volume() {
         let root = std::env::temp_dir().join(format!("mino-gpt-{}", std::process::id()));

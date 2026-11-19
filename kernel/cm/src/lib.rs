@@ -18,11 +18,19 @@
 //! ([`HiveFile::flush`], NtFlushKey) : en entier, sans ses clés volatiles,
 //! par `regf::builder`, puis par Io, et le cache du disque est vidé.
 //!
-//! Les noms se comparent sans casse. Pas encore : l'écriture différée (sans
-//! NtFlushKey, rien ne va sur disque), le journal `.LOG` (une coupure
-//! pendant l'écriture abîme la ruche), une ruche de plus de [`MAX_SAVED_DEPTH`]
-//! niveaux sur disque, les clés liens, les notifications, la sécurité des
-//! clés (ADR-011 : tout est accordé).
+//! L'écriture différée (CmpLazyFlush de ReactOS, comme spécification) :
+//! l'écrivain paresseux du noyau (`ntoskrnl::lazy_writer`) réécrit chaque
+//! seconde les ruches dues ([`lazy_flush`]) : celles qui n'ont pas changé
+//! depuis [`LAZY_FLUSH_QUIET`] (CmpLazyFlushIntervalInSeconds), ou qui
+//! attendent depuis [`LAZY_FLUSH_LONGEST`] sans cesser de changer. L'arrêt
+//! les réécrit toutes ([`flush_all`]). Avant elle, ce qu'une session écrivait
+//! sans NtFlushKey (la clé de son profil sous `ProfileList`) était perdu à
+//! l'arrêt de la machine.
+//!
+//! Les noms se comparent sans casse. Pas encore : le journal `.LOG` (une
+//! coupure pendant l'écriture abîme la ruche), une ruche de plus de
+//! [`MAX_SAVED_DEPTH`] niveaux sur disque, les clés liens, les notifications,
+//! la sécurité des clés (ADR-011 : tout est accordé).
 //!
 //! [`info`] encode les classes d'information des services.
 
@@ -43,8 +51,9 @@ use abi::ntstatus::{
     STATUS_OBJECT_PATH_NOT_FOUND, STATUS_OBJECT_TYPE_MISMATCH, STATUS_REGISTRY_CORRUPT, STATUS_REGISTRY_IO_FAILED,
 };
 use abi::registry::{KEY_ALL_ACCESS, KEY_ENUMERATE_SUB_KEYS, KEY_NOTIFY, KEY_QUERY_VALUE};
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use hal::sync::{KSpinLock, Once};
+use ke::KGuardedMutex;
 use ob::{create_object, downcast, AccessMask, GenericMapping, Object, ObjectRef, ObjectType, Parsed};
 use regf::Hive;
 
@@ -151,6 +160,16 @@ fn find_parent(root: &Arc<HiveKey>, key: &Arc<HiveKey>) -> Option<Arc<HiveKey>> 
 /// constructeur de `regf` est récursif, et la pile du noyau est petite.
 pub const MAX_SAVED_DEPTH: usize = 64;
 
+/// Une seconde, en unités de 100 ns.
+const SECOND: u64 = 10_000_000;
+/// L'écriture différée réécrit une ruche qui n'a pas changé depuis 5 s
+/// (CmpLazyFlushIntervalInSeconds)…
+pub const LAZY_FLUSH_QUIET: u64 = 5 * SECOND;
+/// … ou qui attend depuis 30 s : ReactOS repousse sa minuterie à chaque
+/// changement, et une ruche qui ne cesse pas de changer n'y est jamais
+/// réécrite avant l'arrêt.
+pub const LAZY_FLUSH_LONGEST: u64 = 30 * SECOND;
+
 /// Une ruche montée : l'arbre de ses clés, les liens de sa racine, et le
 /// fichier où elle s'écrit.
 pub struct HiveFile {
@@ -162,6 +181,17 @@ pub struct HiveFile {
     file: Option<String>,
     /// Elle a changé depuis sa lecture ou son dernier écrit.
     dirty: AtomicBool,
+    /// Quand elle a changé la dernière fois (en 100 ns, de `clock`).
+    changed: AtomicU64,
+    /// Quand elle a changé la première fois depuis son dernier écrit.
+    dirty_since: AtomicU64,
+    /// L'horloge de ces dates : le temps d'interruption ; une autre dans les
+    /// tests.
+    clock: fn() -> u64,
+    /// Une réécriture à la fois (l'écrivain paresseux, NtFlushKey, l'arrêt) :
+    /// deux réécritures entremêlées laisseraient la taille de l'une sur les
+    /// octets de l'autre.
+    writing: KGuardedMutex<()>,
 }
 
 impl HiveFile {
@@ -170,7 +200,22 @@ impl HiveFile {
     /// [`MAX_DEPTH`] niveaux (une boucle de cellules aussi).
     pub fn new(data: Arc<[u8]>) -> Result<Self, NtStatus> {
         let hive = Hive::parse(&data).map_err(corrupt)?;
-        Ok(Self { root: load(&hive).map_err(corrupt)?, links: Vec::new(), file: None, dirty: AtomicBool::new(false) })
+        Ok(Self {
+            root: load(&hive).map_err(corrupt)?,
+            links: Vec::new(),
+            file: None,
+            dirty: AtomicBool::new(false),
+            changed: AtomicU64::new(0),
+            dirty_since: AtomicU64::new(0),
+            clock: now,
+            writing: KGuardedMutex::new(()),
+        })
+    }
+
+    /// La même ruche, dont `clock` date les changements (des tests).
+    pub fn with_clock(mut self, clock: fn() -> u64) -> Self {
+        self.clock = clock;
+        self
     }
 
     /// Fait du fichier `path` (un nom NT, comme
@@ -190,8 +235,29 @@ impl HiveFile {
         self.dirty.load(Ordering::Acquire)
     }
 
+    /// Elle a un fichier, et des changements qu'il n'a pas.
+    pub fn is_waiting(&self) -> bool {
+        self.file.is_some() && self.is_dirty()
+    }
+
+    /// L'écriture différée la réécrit à `now` (en 100 ns, de son horloge) :
+    /// elle attend ([`is_waiting`](Self::is_waiting)), et n'a pas changé
+    /// depuis [`LAZY_FLUSH_QUIET`] ou attend depuis [`LAZY_FLUSH_LONGEST`].
+    pub fn is_due(&self, now: u64) -> bool {
+        self.is_waiting()
+            && (now.saturating_sub(self.changed.load(Ordering::Acquire)) >= LAZY_FLUSH_QUIET
+                || now.saturating_sub(self.dirty_since.load(Ordering::Acquire)) >= LAZY_FLUSH_LONGEST)
+    }
+
+    /// Elle vient de changer : appelé après le changement, qu'une
+    /// réécriture qui commence ensuite voit (une réécriture déjà commencée
+    /// qui l'a manqué la laisse à réécrire).
     fn touch(&self) {
-        self.dirty.store(true, Ordering::Release);
+        let now = (self.clock)();
+        self.changed.store(now, Ordering::Release);
+        if !self.dirty.swap(true, Ordering::AcqRel) {
+            self.dirty_since.store(now, Ordering::Release);
+        }
     }
 
     /// La ruche au format `regf`, sans ses clés volatiles, nommée `name` dans
@@ -216,13 +282,15 @@ impl HiveFile {
     /// NtFlushKey : réécrit la ruche dans son fichier si elle a changé
     /// ([`to_regf`](Self::to_regf), puis Io : le fichier est récrit en
     /// entier, et le cache du disque vidé). Sans fichier, rien à faire.
-    /// Erreurs : celles d'Io ; celles de `to_regf`. Elle reste à écrire si
-    /// l'écriture échoue.
+    /// Une réécriture à la fois : la suivante attend la fin de celle en
+    /// cours. Erreurs : celles d'Io ; celles de `to_regf`. Elle reste à
+    /// écrire si l'écriture échoue.
     ///
     /// # IRQL
     /// PASSIVE_LEVEL.
     pub fn flush(&self) -> Result<(), NtStatus> {
         let Some(path) = &self.file else { return Ok(()) };
+        let _writing = self.writing.lock();
         if !self.dirty.swap(false, Ordering::AcqRel) {
             return Ok(());
         }
@@ -507,7 +575,6 @@ impl Key {
     /// <= DISPATCH_LEVEL.
     pub fn set_value(&self, name: &[u16], data_type: u32, data: Vec<u8>) -> Result<(), NtStatus> {
         let (file, key) = self.hive_key()?;
-        file.touch();
         let mut state = key.state.lock();
         match state.values.iter_mut().find(|v| units_eq_ignore_case(&v.name, name)) {
             Some(value) => {
@@ -517,6 +584,9 @@ impl Key {
             None => state.values.push(ValueFacts { name: name.to_vec(), data_type, data }),
         }
         state.last_written = now();
+        // After the change: touched first, a write-back that took the mark
+        // in between could miss the change and leave the hive clean.
+        file.touch();
         Ok(())
     }
 
@@ -551,10 +621,10 @@ impl Key {
     pub fn delete(&self) -> Result<(), NtStatus> {
         let (file, key) = self.hive_key()?;
         let parent = find_parent(&file.root, key).ok_or(STATUS_ACCESS_DENIED)?;
-        file.touch();
         let mut state = parent.state.lock();
         state.subkeys.retain(|child| !Arc::ptr_eq(child, key));
         state.last_written = now();
+        file.touch();
         Ok(())
     }
 
@@ -690,6 +760,82 @@ impl Fnv {
             self.bytes(&unit.to_le_bytes());
         }
     }
+}
+
+/// Ce qu'un passage de l'écriture différée ([`lazy_flush`]) a fait.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LazyFlush {
+    /// Les ruches réécrites.
+    pub hives: u32,
+    /// La première erreur ; les autres ruches ont été réécrites quand même.
+    pub error: Option<NtStatus>,
+}
+
+/// Les ruches montées sous la clé virtuelle `key`, chacune une fois.
+fn mounted_hives(key: &VirtualKey, out: &mut Vec<Arc<HiveFile>>) {
+    let children: Vec<Child> = key.children.lock().iter().map(|(_, child)| child.clone()).collect();
+    for child in children {
+        match child {
+            Child::Virtual(child) => mounted_hives(&child, out),
+            Child::Hive(file) => {
+                if !out.iter().any(|known| Arc::ptr_eq(known, &file)) {
+                    out.push(file);
+                }
+            }
+        }
+    }
+}
+
+/// Les ruches montées sous `registry` (une clé virtuelle, la racine
+/// `\REGISTRY`) ; aucune sous une clé d'une ruche.
+fn hives_of(registry: &Key) -> Vec<Arc<HiveFile>> {
+    let mut hives = Vec::new();
+    if let Node::Virtual(key) = &registry.node {
+        mounted_hives(key, &mut hives);
+    }
+    hives
+}
+
+/// L'écriture différée (CmpLazyFlush, CmpDoFlushAll) : chaque ruche montée
+/// sous `registry` qui est due à `now` ([`HiveFile::is_due`]) est réécrite.
+///
+/// # IRQL
+/// PASSIVE_LEVEL.
+pub fn lazy_flush(registry: &Key, now: u64) -> LazyFlush {
+    let mut done = LazyFlush::default();
+    for hive in hives_of(registry).iter().filter(|hive| hive.is_due(now)) {
+        match hive.flush() {
+            Ok(()) => done.hives += 1,
+            Err(status) => {
+                done.error.get_or_insert(status);
+            }
+        }
+    }
+    done
+}
+
+/// L'arrêt (CmShutdownSystem) : chaque ruche montée sous `registry` qui a
+/// changé est réécrite ; la première erreur, après avoir essayé les autres.
+///
+/// # IRQL
+/// PASSIVE_LEVEL.
+pub fn flush_all(registry: &Key) -> Result<(), NtStatus> {
+    let mut first = Ok(());
+    for hive in hives_of(registry) {
+        if let Err(status) = hive.flush() {
+            first = first.and(Err(status));
+        }
+    }
+    first
+}
+
+/// Une ruche montée sous `registry` a des changements que son fichier n'a
+/// pas.
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn hives_waiting(registry: &Key) -> bool {
+    hives_of(registry).iter().any(|hive| hive.is_waiting())
 }
 
 /// Réécrit chaque ruche montée sous la clé virtuelle `key`.
@@ -1230,5 +1376,151 @@ mod tests {
         assert_eq!(a.digest(&[]), b.digest(&[]));
         let known = "\\REGISTRY\\MACHINE\\SAVED\\ControlSet001\\Control\\Session Manager\\KnownDLLs";
         assert_eq!(open(&ns, known).unwrap().value(&units("kernel32")).unwrap().unwrap().data, sz("kernel32.dll"));
+    }
+
+    /// The time of [`a_hive_is_due_once_quiet_or_after_waiting_long_enough`].
+    static DUE_CLOCK: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn a_hive_is_due_once_quiet_or_after_waiting_long_enough() {
+        let at = |seconds: u64| DUE_CLOCK.store(seconds * SECOND, Ordering::Relaxed);
+        let hive = || {
+            let mut root = KeyNode::new("SOFTWARE");
+            root.key_mut("Microsoft\\Windows NT\\CurrentVersion\\ProfileList");
+            HiveFile::new(Arc::from(build(&root, "SOFTWARE"))).unwrap().with_clock(|| DUE_CLOCK.load(Ordering::Relaxed))
+        };
+        system_namespace();
+        let (ns, registry) = registry();
+        mount(&registry, "MACHINE", "SOFTWARE", hive().with_file("\\Device\\Nowhere\\SOFTWARE")).unwrap();
+        mount(&registry, "MACHINE", "VOLATILE", hive()).unwrap();
+        let profiles =
+            open(&ns, "\\REGISTRY\\MACHINE\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList").unwrap();
+        let file = profiles.hive_file().unwrap();
+        let s = SECOND;
+        assert!(!file.is_due(100 * s) && !hives_waiting(&registry), "as read");
+
+        at(10);
+        profiles.create_subkey("S-1-5-21-1-2-3-500", &[], false).unwrap();
+        assert!(file.is_waiting() && hives_waiting(&registry));
+        assert!(!file.is_due(14 * s), "changed 4 s ago");
+        assert!(file.is_due(15 * s), "5 s without a change (CmpLazyFlushIntervalInSeconds)");
+        // A hive that keeps changing: due 30 s after its first change.
+        for second in (14..40).step_by(4) {
+            at(second);
+            profiles.set_value(&units("RefCount"), 4, vec![1, 0, 0, 0]).unwrap();
+            assert!(!file.is_due(second * s + 4 * s) || second + 4 >= 40, "{second} s: still changing");
+        }
+        assert!(file.is_due(40 * s), "30 s after the first change, though it changed 2 s ago");
+        assert_eq!(lazy_flush(&registry, 39 * s).hives, 0, "not yet");
+        // Due, but its file is not there: an error, and it still waits.
+        let done = lazy_flush(&registry, 45 * s);
+        assert_eq!((done.hives, done.error.is_some()), (0, true));
+        assert!(file.is_waiting(), "a write-back that failed leaves it to write");
+
+        // A hive without a file never goes to disk, and is never due.
+        let volatile = open(&ns, "\\REGISTRY\\MACHINE\\VOLATILE").unwrap();
+        volatile.set_value(&units("V"), 4, vec![1, 0, 0, 0]).unwrap();
+        let without = volatile.hive_file().unwrap();
+        assert!(without.is_dirty() && !without.is_waiting() && !without.is_due(u64::MAX));
+    }
+
+    /// A disk in memory, for the volume the tests' hives go to.
+    struct MemDisk(KSpinLock<Vec<u8>>);
+
+    impl io_manager::BlockDevice for MemDisk {
+        fn sector_size(&self) -> u32 {
+            512
+        }
+        fn read_sector(&self, lba: u64, out: &mut [u8]) -> Result<(), io_manager::FatError> {
+            let at = lba as usize * 512;
+            out.copy_from_slice(self.0.lock().get(at..at + 512).ok_or(io_manager::FatError::Io)?);
+            Ok(())
+        }
+        fn write_sector(&self, lba: u64, data: &[u8]) -> Result<(), io_manager::FatError> {
+            let at = lba as usize * 512;
+            self.0.lock().get_mut(at..at + 512).ok_or(io_manager::FatError::Io)?.copy_from_slice(data);
+            Ok(())
+        }
+    }
+
+    /// Ob's namespace, made once for the tests of this binary.
+    fn system_namespace() -> &'static Namespace {
+        static INIT: std::sync::Once = std::sync::Once::new();
+        INIT.call_once(ob::init);
+        ob::namespace()
+    }
+
+    /// The file `name` of the volume of device `device`, as NtFlushKey wrote it.
+    fn file_bytes(device: &str, name: &str) -> Vec<u8> {
+        let path = format!("{device}\\{name}");
+        let object = system_namespace().open(&path, None, Some(&io_manager::FILE_TYPE), 0).unwrap();
+        downcast::<io_manager::File>(&object).unwrap().read_all().unwrap()
+    }
+
+    #[test]
+    fn the_lazy_flush_writes_back_the_due_hives_and_the_shutdown_every_changed_one() {
+        const DEVICE: &str = "\\Device\\CmLazyFlush";
+        let mut root = KeyNode::new("SOFTWARE");
+        root.key_mut("Microsoft\\Windows NT\\CurrentVersion\\ProfileList");
+        let software = build(&root, "SOFTWARE");
+        let mut user = KeyNode::new("NTUSER");
+        user.key_mut("Control Panel");
+        let ntuser = build(&user, "NTUSER");
+        let files = [
+            (fatfs::image::path("SOFTWARE").unwrap(), software.clone()),
+            (fatfs::image::path("NTUSER.DAT").unwrap(), ntuser.clone()),
+        ];
+        let image = fatfs::image::build(&files).unwrap();
+        let volume = io_manager::Volume::mount(alloc::boxed::Box::new(MemDisk(KSpinLock::new(image)))).unwrap();
+        let device: ObjectRef = io_manager::Device::with_volume(volume);
+        system_namespace().insert(&device, DEVICE, None, 0).unwrap();
+
+        let (ns, registry) = registry();
+        let at = |name: &str| format!("{DEVICE}\\{name}");
+        mount(
+            &registry,
+            "MACHINE",
+            "SOFTWARE",
+            HiveFile::new(Arc::from(software.clone())).unwrap().with_file(&at("SOFTWARE")),
+        )
+        .unwrap();
+        let users = open(&ns, "\\REGISTRY\\USER").unwrap();
+        load_hive(
+            &users,
+            "S-1-5-21-1-2-3-500",
+            HiveFile::new(Arc::from(ntuser.clone())).unwrap().with_file(&at("NTUSER.DAT")),
+        )
+        .unwrap();
+        assert_eq!(lazy_flush(&registry, u64::MAX), LazyFlush::default(), "nothing changed");
+
+        // What the second boot wrote and lost: the profile's key, in SOFTWARE.
+        let profiles =
+            open(&ns, "\\REGISTRY\\MACHINE\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList").unwrap();
+        let (profile, _) = profiles.create_subkey("S-1-5-21-1-2-3-500", &[], false).unwrap();
+        profile
+            .set_value(&units("ProfileImagePath"), REG_SZ, sz("%SystemDrive%\\Documents and Settings\\Administrator"))
+            .unwrap();
+        let changed = profiles.hive_file().unwrap().changed.load(Ordering::Relaxed);
+        assert_eq!(lazy_flush(&registry, changed + LAZY_FLUSH_QUIET - 1), LazyFlush::default(), "not quiet yet");
+        assert_eq!(file_bytes(DEVICE, "SOFTWARE"), software, "the file as it was");
+        assert_eq!(lazy_flush(&registry, changed + LAZY_FLUSH_QUIET), LazyFlush { hives: 1, error: None });
+        assert!(!hives_waiting(&registry));
+
+        // A fresh mount of the file, as the next boot's: the key is there.
+        let reread = HiveFile::new(Arc::from(file_bytes(DEVICE, "SOFTWARE"))).unwrap();
+        mount(&registry, "MACHINE", "REREAD", reread).unwrap();
+        let path =
+            "\\REGISTRY\\MACHINE\\REREAD\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList\\S-1-5-21-1-2-3-500";
+        let value = open(&ns, path).unwrap().value(&units("ProfileImagePath")).unwrap().unwrap();
+        assert_eq!(value.data, sz("%SystemDrive%\\Documents and Settings\\Administrator"));
+
+        // The shutdown: every hive that changed, due or not.
+        let session = open(&ns, "\\REGISTRY\\USER\\S-1-5-21-1-2-3-500\\Control Panel").unwrap();
+        session.set_value(&units("Wallpaper"), REG_SZ, sz("")).unwrap();
+        assert!(hives_waiting(&registry));
+        assert_eq!(flush_all(&registry), Ok(()));
+        assert!(!hives_waiting(&registry));
+        assert_ne!(file_bytes(DEVICE, "NTUSER.DAT"), ntuser, "written back");
+        assert_eq!(flush_all(&registry), Ok(()), "nothing left");
     }
 }

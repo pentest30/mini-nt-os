@@ -1,0 +1,63 @@
+# M7, what a session writes on C: survives a power cut: the lazy writer
+# (kernel/ntoskrnl/src/lazy_writer.rs) writes back the hives (cm::lazy_flush:
+# 5 s without a change, or 30 s of waiting) and the mounted volumes (the
+# FAT kept in memory, io_manager::lazy_writer) every second. Three boots on
+# the system disk of `logon` (docs/compat/applications.md, « Les essayer à
+# la main »).
+#
+# First boot: setup, as in `logon`: MINOINIT.EXE makes the profiles, writes
+# the hives back (NtFlushKey), then enables SeShutdownPrivilege and calls
+# NtShutdownSystem(ShutdownReboot), which now asks for that privilege and
+# writes back the hives and the volumes before the reset.
+#
+# Second boot: winlogon logs Administrator on. userenv makes the profile
+# (C:\Documents and Settings\Administrator, NTUSER.DAT copied from Default
+# User) and its key in the SOFTWARE hive, under ProfileList, then counts its
+# loads there (IncrementRefCount); userinit starts explorer, which lists
+# its desktop. Nothing calls NtFlushKey on SOFTWARE: before the lazy writer,
+# the key stayed in memory, and so did the chains of the files written in
+# the session (the FAT of C:). Once explorer has listed its desktop, xtask
+# waits for a pass of the lazy writer that leaves nothing to write
+# (`trace-lazy-writer`: « everything written »), then cuts the power: QEMU
+# is killed, as when the machine is switched off.
+#
+# Third boot, on the same disk: userenv finds the profile's key (before,
+# « IncrementRefCount() failed (Error 2) » and a box « could not load the
+# locally stored user profile » that the keyboard did not close), the
+# session opens and explorer lists its desktop again. Once the lazy writer
+# has written what this boot wrote, QEMU is stopped and fsck.vfat -n checks
+# the disk: no chain that ends on a free cluster (three files had one).
+#
+# The ACPI tables of QEMU's firmware give the soft-off state (\_S5_) that
+# NtShutdownSystem(ShutdownPowerOff) uses (hal::acpi).
+features = test-smss, interactive, trace-lazy-writer
+requires = userland, native
+shell = explorer
+disk = system
+boots = 3
+cpus = default, intel
+timeout = 420
+power-cut = 2 => Documents and Settings\Administrator\Desktop\*.* => everything written
+
+expect = [boot] ACPI: power off through PM1a_CNT
+expect = [boot] lazy writer: the hives and the mounted volumes written back every second
+expect = [minoinit] done; rebooting
+expect = [power] NtShutdownSystem: reboot requested
+expect = [power] the hives and the volumes written back
+expect-last = IncrementRefCount(S-1-5-21- => We are logged on => of explorer.exe => Documents and Settings\Administrator\Desktop\*.* => everything written
+
+forbid = IncrementRefCount() failed
+forbid = WL: LoadUserProfileW() failed
+forbid = [minoinit] stopped:
+forbid = [minoinit] SeShutdownPrivilege not enabled
+forbid = [minoinit] NtShutdownSystem:
+forbid = [lazy writer] the hives not written back
+forbid = [lazy writer] the mounted volumes not written back
+forbid = [power] not everything written back
+forbid = *** STOP:
+forbid = NtCreateToken failed
+forbid = LsaLogonUser failed
+forbid = CreateUserProfileW() failed
+forbid = RegLoadKeyW() failed
+forbid = Failed to start default shell
+forbid = (explorer.exe) ended

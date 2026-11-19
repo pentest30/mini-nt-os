@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use crate::scenario::{Scenario, Verdict};
+use crate::scenario::{Scenario, Sequence, Verdict};
 use crate::{cargo, Args, Artifacts, Result, Workspace};
 
 pub const DEFAULT_MEMORY_MB: u32 = 256;
@@ -287,21 +287,42 @@ pub fn boot_and_watch(
     let machine_of = |boot: u32| if boot > 1 { later.unwrap_or(machine) } else { machine };
     for boot in 1..scenario.boots {
         let serial_log = run_dir.join(format!("serial-{boot}.log"));
-        let outcome = boot_once(machine_of(boot), opts, scenario, timeout, run_dir, &serial_log, &earlier, true)?;
+        let end = match &scenario.power_cut {
+            Some((cut, after)) if *cut == boot => End::PowerCut(after),
+            _ => End::Reset,
+        };
+        let outcome = boot_once(machine_of(boot), opts, scenario, timeout, run_dir, &serial_log, &earlier, end)?;
         if !outcome.passed {
             return Ok(Outcome { reason: format!("boot {boot}: {}", outcome.reason), ..outcome });
+        }
+        if let End::PowerCut(after) = end {
+            println!("xtask: {}: boot {boot}: power cut after `{after}`", scenario.name);
         }
         earlier.push_str(&read_lossy(&serial_log));
     }
     let serial_log = run_dir.join("serial.log");
     let outcome =
-        boot_once(machine_of(scenario.boots), opts, scenario, timeout, run_dir, &serial_log, &earlier, false)?;
+        boot_once(machine_of(scenario.boots), opts, scenario, timeout, run_dir, &serial_log, &earlier, End::Markers)?;
     Ok(Outcome { elapsed: start.elapsed(), ..outcome })
 }
 
-/// One boot. With `until_exit`, it passes when QEMU exits (the kernel reset
-/// the machine) without a forbidden marker; otherwise when the scenario's
-/// markers are all in `earlier` and this boot's serial log.
+/// How a boot ends.
+#[derive(Clone, Copy)]
+enum End<'a> {
+    /// The kernel resets the machine, and QEMU exits (`-no-reboot`).
+    Reset,
+    /// The power is cut (QEMU killed) once these markers are in this boot's
+    /// serial log.
+    PowerCut(&'a Sequence),
+    /// The scenario's markers are found (the last boot).
+    Markers,
+}
+
+/// One boot. Ending with a reset, it passes when QEMU exits without a
+/// forbidden marker; with a power cut, when the markers of the cut are in
+/// this boot's serial log, before QEMU exits; otherwise when the scenario's
+/// markers are all in `earlier` and this boot's serial log, and those of
+/// `expect-last` in this boot's.
 #[expect(clippy::too_many_arguments, reason = "the parts of one boot, used once")]
 fn boot_once(
     machine: &Machine,
@@ -311,7 +332,7 @@ fn boot_once(
     run_dir: &Path,
     serial_log: &Path,
     earlier: &str,
-    until_exit: bool,
+    end: End<'_>,
 ) -> Result<Outcome> {
     let qemu_log = run_dir.join("qemu.log");
     let stdout = fs::File::create(&qemu_log).map_err(io_error(&qemu_log))?;
@@ -360,22 +381,32 @@ fn boot_once(
         let log = format!("{earlier}{this_boot}");
         let ended_from_outside =
             exited.and_then(|status| outside_end(cfg!(windows), status.code(), &read_lossy(&qemu_log)));
-        if until_exit {
+        if let End::Reset | End::PowerCut(_) = end {
             if let Some(why) = scenario.forbidden(&log) {
                 break (false, why);
             }
             if let Some(why) = ended_from_outside {
                 break (false, why);
             }
-            if exited.is_some() {
-                break (true, String::new());
+            match (end, exited) {
+                (End::PowerCut(after), Some(status)) => {
+                    break (false, format!("QEMU exited ({status}) before the power cut after `{after}`"))
+                }
+                // Killed below, as the power goes.
+                (End::PowerCut(after), None) if after.found_in(&this_boot) => break (true, String::new()),
+                (_, Some(_)) => break (true, String::new()),
+                _ => {}
             }
             if start.elapsed() >= timeout {
-                break (false, format!("timeout ({} s) before the machine reset", timeout.as_secs()));
+                let what = match end {
+                    End::PowerCut(after) => format!("`{after}`"),
+                    _ => "the machine reset".to_string(),
+                };
+                break (false, format!("timeout ({} s) before {what}", timeout.as_secs()));
             }
             continue;
         }
-        match scenario.check(&log) {
+        match scenario.check_last(earlier, &this_boot) {
             // The screen, once the markers are found (the last boot): captured
             // again until it shows the pixels, for `screen-wait` at most.
             Verdict::Pass if !scenario.screen.is_empty() => {
