@@ -258,12 +258,14 @@ static BOOL CALLBACK find_dialog_window(HWND window, LPARAM argument)
 }
 
 /* The default button of a dialog (DM_GETDEFID): Yes in a question box, OK,
-   Next or I Agree elsewhere; IDOK without one. */
+   Next or I Agree elsewhere; IDOK without one, or when the dialog's thread
+   does not answer within 2 s (a hung installer must not hang the bench). */
 #define APPBENCH_DM_GETDEFID 0x0400
 #define APPBENCH_DC_HASDEFID 0x534B
 static WORD default_button(HWND dialog)
 {
-    LRESULT id = SendMessageW(dialog, APPBENCH_DM_GETDEFID, 0, 0);
+    DWORD_PTR id = 0;
+    if (!SendMessageTimeoutW(dialog, APPBENCH_DM_GETDEFID, 0, 0, SMTO_ABORTIFHUNG, 2000, &id)) return IDOK;
     return HIWORD(id) == APPBENCH_DC_HASDEFID ? LOWORD(id) : IDOK;
 }
 
