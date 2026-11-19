@@ -10,6 +10,7 @@ name = "ps"
 abi      = { path = "../../abi" }
 hal      = { path = "../hal" }
 ob       = { path = "../ob" }
+ex       = { path = "../ex" }
 mm       = { path = "../mm" }
 pe       = { path = "../../libs/pe" }
 ke       = { path = "../ke" }

@@ -1,0 +1,11 @@
+[package]
+name    = "bochs-dispi"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "bochs_dispi"
+
+[dependencies]
+hal      = { path = "../../../kernel/hal" }
+win32k   = { path = "../../../kernel/win32k" }

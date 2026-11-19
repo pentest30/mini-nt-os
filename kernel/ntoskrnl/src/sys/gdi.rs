@@ -1013,6 +1013,21 @@ pub(super) fn nt_gdi_alpha_blend(arguments: &[u32]) -> NtStatus {
     }
 }
 
+/// NtGdiTransparentBlt(hdcDst, xDst, yDst, cxDst, cyDst, hdcSrc, xSrc, ySrc,
+/// cxSrc, cySrc, TransColor) : BOOL (`win32k::gdi::bitblt::transparent_blt`),
+/// GdiTransparentBlt de `gdi32` (l'aperçu du moniteur du panneau Affichage).
+pub(super) fn nt_gdi_transparent_blt(arguments: &[u32]) -> NtStatus {
+    let [hdc, x, y, width, height, hdc_src, x_src, y_src, width_src, height_src, transparent] = arguments[..11] else {
+        unreachable!("11 arguments")
+    };
+    let dst = (x as i32, y as i32, width as i32, height as i32);
+    let src = (x_src as i32, y_src as i32, width_src as i32, height_src as i32);
+    match win32k::gdi::bitblt::transparent_blt(hdc, dst, hdc_src, src, transparent) {
+        Ok(done) => NtStatus(u32::from(done)),
+        Err(error) => fail(error, 0),
+    }
+}
+
 /// NtGdiStretchBlt(hdcDst, xDst, yDst, cxDst, cyDst, hdcSrc, xSrc, ySrc,
 /// cxSrc, cySrc, dwRop, dwBackColor) : BOOL (`win32k::gdi::bitblt::stretch_blt`).
 /// `dwBackColor` ne sert qu'à une source monochrome (pas encore).

@@ -1,0 +1,39 @@
+# EnableWindow and SetActiveWindow, as a modal dialog box does them to its
+# owner (win32k::window::enable_window, win32k::input::set_active;
+# tests/native/enable1.c, MinGW, linked to ReactOS's kernel32 and user32):
+# ENABLE1.EXE takes the place of winlogon.exe and switches to
+# WinSta0\Default, with B (100, 100, 300 x 200) and O (450, 100), whose
+# child C has the keyboard. O's messages in order: C WM_CANCELMODE, E0 and
+# E1 WM_ENABLE, A0 and A1 WM_ACTIVATE, S WM_SETFOCUS, K WM_KILLFOCUS.
+# Update with docs/compat/m6-fenetres.md, step 46.
+# 1. O active, C with the keyboard.
+# 2. EnableWindow(O, FALSE): FALSE, WM_CANCELMODE then WM_ENABLE; again:
+#    TRUE, WM_CANCELMODE alone; C keeps the keyboard, SetFocus(O) fails.
+# 3. D, a popup owned by O; EnableWindow(O, TRUE): TRUE and WM_ENABLE;
+#    SetActiveWindow(O) returns D: O active, in the foreground, with the
+#    keyboard (DefWindowProc of WM_ACTIVATE); D deactivated.
+# 4. SetActiveWindow(C), a child: O returned, nothing changes.
+# 5. O, with the keyboard, disabled: WM_KILLFOCUS before WM_ENABLE.
+# 6. SetActiveWindow(NULL): another window, B, active.
+# 7. An unknown window: ERROR_INVALID_WINDOW_HANDLE (1400) for both.
+# 8. SetActiveWindow(X), the window of another thread: NULL, nothing changes.
+features = test-smss
+requires = userland, native
+initial-command = ENABLE1.EXE
+cpus     = default, intel
+timeout  = 120
+
+expect = [enable] step 1: active O 1, focus C 1
+expect = [enable] step 2: EnableWindow(O, FALSE) 0 then 1; O got "C E0 C"
+expect = [enable] step 2: enabled 0, focus C 1; SetFocus(O) 00000000, focus C 1
+expect = [enable] step 3: D active 1, focus D 1
+expect = [enable] step 3: EnableWindow(O, TRUE) 1, SetActiveWindow(O) D 1; O got "E1 A1 S"
+expect = [enable] step 3: active O 1, foreground O 1, focus O 1, enabled 1; D WM_ACTIVATE 0 1
+expect = [enable] step 4: SetActiveWindow(C) O 1; active O 1, focus O 1; O got ""
+expect = [enable] step 5: EnableWindow(O, FALSE) 0; O got "C K E0"; focus nobody 1
+expect = [enable] step 5: EnableWindow(O, TRUE) 1; O got "E1"
+expect = [enable] step 6: SetActiveWindow(NULL) O 1; active B 1, foreground B 1, focus B 1; O got "A0"
+expect = [enable] step 7: EnableWindow 0, error 1400; SetActiveWindow 00000000, error 1400
+expect = [enable] step 8: SetActiveWindow(X) 00000000; active B 1, foreground B 1
+expect = [enable] done
+forbid = *** STOP:

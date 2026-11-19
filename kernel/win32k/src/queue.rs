@@ -265,7 +265,9 @@ impl QueueState {
     /// Les bits de ce qui est posté, et des touches, s'il y a quelque
     /// chose. Sans message envoyé, le bit de changement de
     /// `QS_SENDMESSAGE` tombe avec son bit de réveil, comme ClearMsgBitsMask
-    /// les efface ensemble.
+    /// les efface ensemble : resté levé, MsgWaitForMultipleObjects de
+    /// `user32` rendait aussitôt, sans jamais attendre, chez tout thread
+    /// qui avait reçu un message d'un autre.
     fn refresh(&mut self) {
         let posted = QS_POSTMESSAGE | QS_ALLPOSTMESSAGE;
         if self.posted.is_empty() && self.quit.is_none() {

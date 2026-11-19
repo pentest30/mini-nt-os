@@ -35,10 +35,12 @@ mod atom;
 mod callback;
 mod caret;
 mod class;
+mod clipboard;
 mod completion;
 mod console;
 mod cursor;
 mod desktop;
+pub(crate) mod display;
 mod event;
 pub mod exceptions;
 mod file;
@@ -148,6 +150,7 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtCreateToken, Handler::Status(security::nt_create_token)),
     (services::NtDelayExecution, Handler::Status(wait::nt_delay_execution)),
     (services::NtDeleteAtom, Handler::Status(atom::nt_delete_atom)),
+    (services::NtDeleteKey, Handler::Status(registry::nt_delete_key)),
     (services::NtDeleteValueKey, Handler::Status(registry::nt_delete_value_key)),
     (services::NtDeviceIoControlFile, Handler::Status(file::nt_device_io_control_file)),
     (services::NtDuplicateObject, Handler::Status(object::nt_duplicate_object)),
@@ -192,6 +195,7 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtGdiLineTo, Handler::Status(gdi::nt_gdi_line_to)),
     (services::NtGdiMoveTo, Handler::Status(gdi::nt_gdi_move_to)),
     (services::NtGdiOpenDCW, Handler::Status(gdi::nt_gdi_open_dc_w)),
+    (services::NtGdiTransparentBlt, Handler::Status(gdi::nt_gdi_transparent_blt)),
     (services::NtGdiPatBlt, Handler::Status(gdi::nt_gdi_pat_blt)),
     (services::NtGdiRectVisible, Handler::Status(gdi::nt_gdi_rect_visible)),
     (services::NtGdiGetDIBitsInternal, Handler::Status(gdi::nt_gdi_get_dibits_internal)),
@@ -294,6 +298,23 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtUserCallNoParam, Handler::Status(mouse::nt_user_call_no_param)),
     (services::NtUserCallOneParam, Handler::Status(message::nt_user_call_one_param)),
     (services::NtUserCallTwoParam, Handler::Status(user::nt_user_call_two_param)),
+    (services::NtUserChangeClipboardChain, Handler::Status(clipboard::nt_user_change_clipboard_chain)),
+    (services::NtUserCloseClipboard, Handler::Status(clipboard::nt_user_close_clipboard)),
+    (services::NtUserConvertMemHandle, Handler::Status(clipboard::nt_user_convert_mem_handle)),
+    (services::NtUserCountClipboardFormats, Handler::Status(clipboard::nt_user_count_clipboard_formats)),
+    (services::NtUserCreateLocalMemHandle, Handler::Status(clipboard::nt_user_create_local_mem_handle)),
+    (services::NtUserEmptyClipboard, Handler::Status(clipboard::nt_user_empty_clipboard)),
+    (services::NtUserGetClipboardData, Handler::Status(clipboard::nt_user_get_clipboard_data)),
+    (services::NtUserGetClipboardFormatName, Handler::Status(clipboard::nt_user_get_clipboard_format_name)),
+    (services::NtUserGetClipboardOwner, Handler::Status(clipboard::nt_user_get_clipboard_owner)),
+    (services::NtUserGetClipboardSequenceNumber, Handler::Status(clipboard::nt_user_get_clipboard_sequence_number)),
+    (services::NtUserGetClipboardViewer, Handler::Status(clipboard::nt_user_get_clipboard_viewer)),
+    (services::NtUserGetOpenClipboardWindow, Handler::Status(clipboard::nt_user_get_open_clipboard_window)),
+    (services::NtUserGetPriorityClipboardFormat, Handler::Status(clipboard::nt_user_get_priority_clipboard_format)),
+    (services::NtUserIsClipboardFormatAvailable, Handler::Status(clipboard::nt_user_is_clipboard_format_available)),
+    (services::NtUserOpenClipboard, Handler::Status(clipboard::nt_user_open_clipboard)),
+    (services::NtUserSetClipboardData, Handler::Status(clipboard::nt_user_set_clipboard_data)),
+    (services::NtUserSetClipboardViewer, Handler::Status(clipboard::nt_user_set_clipboard_viewer)),
     (services::NtUserCloseDesktop, Handler::Status(desktop::nt_user_close_desktop)),
     (services::NtUserCloseWindowStation, Handler::Status(winsta::nt_user_close_window_station)),
     (services::NtUserConsoleControl, Handler::Status(console::nt_user_console_control)),
@@ -337,7 +358,9 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtUserShowScrollBar, Handler::Status(scroll::nt_user_show_scroll_bar)),
     (services::NtUserDispatchMessage, Handler::Status(message::nt_user_dispatch_message)),
     (services::NtUserEndPaint, Handler::Status(window::nt_user_end_paint)),
-    (services::NtUserEnumDisplaySettings, Handler::Status(user::nt_user_enum_display_settings)),
+    (services::NtUserEnumDisplaySettings, Handler::Status(display::nt_user_enum_display_settings)),
+    (services::NtUserEnumDisplayDevices, Handler::Status(display::nt_user_enum_display_devices)),
+    (services::NtUserChangeDisplaySettings, Handler::Status(display::nt_user_change_display_settings)),
     (services::NtUserEnableMenuItem, Handler::Status(menu::nt_user_enable_menu_item)),
     (services::NtUserFindExistingCursorIcon, Handler::Status(cursor::nt_user_find_existing_cursor_icon)),
     (services::NtUserGetAsyncKeyState, Handler::Status(input::nt_user_get_async_key_state)),
@@ -392,6 +415,7 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtUserRegisterWindowMessage, Handler::Status(user::nt_user_register_window_message)),
     (services::NtUserResolveDesktop, Handler::Status(console::nt_user_resolve_desktop)),
     (services::NtUserRemoveMenu, Handler::Status(menu::nt_user_remove_menu)),
+    (services::NtUserSetActiveWindow, Handler::Status(input::nt_user_set_active_window)),
     (services::NtUserSetCapture, Handler::Status(mouse::nt_user_set_capture)),
     (services::NtUserSetCursor, Handler::Status(cursor::nt_user_set_cursor)),
     (services::NtUserSetCursorIconData, Handler::Status(cursor::nt_user_set_cursor_icon_data)),

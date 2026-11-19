@@ -29,6 +29,7 @@
 
 pub mod bugcheck;
 pub mod context;
+pub mod display;
 pub mod exception;
 pub mod file;
 pub mod fpu;

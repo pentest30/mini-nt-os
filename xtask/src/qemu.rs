@@ -382,7 +382,9 @@ fn boot_once(
                 let dump = run_dir.join("screen.ppm");
                 let monitor = monitor.as_ref().expect("built when the screen is checked");
                 let found = *markers_found.get_or_insert_with(Instant::now);
-                match crate::screen::capture(monitor, &dump).and_then(|image| image.check(&scenario.screen)) {
+                let checked = crate::screen::capture(monitor, &dump)
+                    .and_then(|image| image.check_all(scenario.screen_size, &scenario.screen));
+                match checked {
                     Ok(()) => break (true, String::new()),
                     Err(why) if found.elapsed() >= scenario.screen_wait || start.elapsed() >= timeout => {
                         break (false, why)

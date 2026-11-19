@@ -1,14 +1,37 @@
 {
   "schemaVersion": "mimosa-hook-status/v1",
-  "recordedAt": "2026-11-09T16:46:38.435Z",
+  "recordedAt": "2026-11-19T11:25:09.311Z",
   "sessionId": "sess_4c376608-d924-4de2-8e22-55663f95beef",
-  "event": "PostToolUse",
-  "toolName": "Write",
-  "file": "C:/Users/ibaouche/AppData/Local/Temp/rostests3-msg.txt",
-  "outcome": "clear",
-  "coverage": "complete",
+  "event": "PreToolUse",
+  "toolName": "Edit",
+  "file": "kernel/win32k/src/queue.rs",
+  "outcome": "inconclusive",
+  "coverage": "partial",
   "findingCount": 0,
-  "durationMs": 5,
-  "hostState": "hook_complete",
+  "durationMs": 1071,
+  "telemetry": {
+    "schemaVersion": "mimosa-gate-telemetry/v1",
+    "profile": "gate",
+    "operation": "PreToolUse",
+    "outcome": "partial/INCONCLUSIVE",
+    "latencyMs": 1071,
+    "peakMemoryBytes": 114589696,
+    "memoryMeasurement": "max-observed-process-rss",
+    "scannedFiles": 1,
+    "cache": {
+      "hits": 0,
+      "misses": 1,
+      "measurement": "not-applicable"
+    },
+    "denyCount": 0,
+    "tokens": {
+      "input": 0,
+      "output": 0,
+      "total": 0,
+      "modelCalls": 0,
+      "measurement": "known-zero"
+    }
+  },
+  "hostState": "hook_complete_waiting_host_tool_decision",
   "reportHint": ".mimosa/reports/"
 }

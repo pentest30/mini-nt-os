@@ -9,6 +9,7 @@ CombineRgn@16
 CreateBitmap@20
 CreateCompatibleBitmap@12
 CreateCompatibleDC@4
+CreateDCW@16
 CreateDIBitmap@24
 CreateDIBSection@24
 CreateFontW@56
