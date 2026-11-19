@@ -568,8 +568,8 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   son processus (`LPC_CLIENT_DIED`, `lpc::request_port`) : `csrss` lâche ses clients morts, et leurs threads Ke.
   M7 commencé : la liste des dix applications et leur banc d'essai
   ([`docs/compat/applications.md`](docs/compat/applications.md#le-banc-dessai) : `cargo xtask fetch-apps`,
-  `xtask/src/apps.rs`, scénarios `app-<id>`, `tests/native/appbench.c`) ; aucune ne s'installe encore, le bilan
-  désigne ce qui bloque. Les quatre Inno Setup passent leur fichier temporaire (FileAllocationInformation,
+  `xtask/src/apps.rs`, scénarios `app-<id>`, `tests/native/appbench.c`) ; le bilan de départ désignait ce qui
+  bloquait, une à une. Les quatre Inno Setup passent leur fichier temporaire (FileAllocationInformation,
   `io_manager::File::set_allocation_size` ; FileAttributeTagInformation) et leur chargeur finit seul (`win32k::queue` :
   le bit de changement de `QS_SENDMESSAGE` tombe avec le dernier message envoyé). NtAccessCheck (`se::access`) et
   l'effacement des fichiers (FileDispositionInformation, FILE_DELETE_ON_CLOSE : `io_manager::Volume::cleanup`) :
