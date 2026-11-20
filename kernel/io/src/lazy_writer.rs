@@ -8,12 +8,15 @@
 //! ([`MountedVolumes::write_behind`]) ; l'arrêt les vide tous
 //! ([`MountedVolumes::flush`]).
 //!
-//! Sur un volume FAT, ce qui attend est la première FAT, gardée en mémoire
-//! (ses secteurs modifiés, `fat::FatVolume`), et le cache du disque : les
-//! données et les entrées des répertoires vont au disque dès qu'elles sont
-//! écrites. Le vidage se fait sous le verrou du volume, entre deux
-//! opérations : la FAT écrite est celle d'un volume cohérent. Une coupure
-//! de courant perd au plus ce qui a été écrit depuis le dernier passage.
+//! Sur un volume FAT, ce qui attend est le cache du disque, et les secteurs
+//! de la première FAT gardée en mémoire (`fat::FatVolume`) qu'aucune entrée
+//! n'a encore fait écrire : les données et les entrées des répertoires vont
+//! au disque dès qu'elles sont écrites, et la FAT avant chaque entrée qui
+//! la désigne, puis après la chaîne libérée d'une entrée effacée. Une
+//! coupure de courant laisse ainsi un volume que fsck trouve propre ; elle
+//! ne perd que ce que le cache du disque tenait encore. (Avant cet ordre,
+//! une entrée écrite moins d'une seconde avant la coupure désignait une
+//! chaîne restée en mémoire : `C:\RECYCLED` du scénario `logon`.)
 //!
 //! Avant lui, la FAT de `C:` n'allait sur le disque qu'à un vidage explicite
 //! (NtFlushBuffersFile, la réécriture d'une ruche) : ce qu'une session
