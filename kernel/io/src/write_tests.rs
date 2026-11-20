@@ -1072,6 +1072,84 @@ fn watched(
     (alloc::sync::Arc::new(volume), disk, flushes)
 }
 
+/// `fsck.vfat -n` finds `bytes` clean, when it is there.
+fn assert_fsck_clean(bytes: &[u8], after: &str) {
+    match fsck(bytes) {
+        Some(result) => result.unwrap_or_else(|report| panic!("fsck.vfat after {after}: {report}")),
+        None => std::eprintln!("fsck.vfat not found: the volume is not checked (dosfstools)"),
+    }
+}
+
+#[test]
+fn a_power_cut_between_two_passes_of_the_lazy_writer_leaves_a_clean_volume() {
+    // The `logon` scenario ends by killing QEMU. When explorer had just
+    // written its recycle bin, the entries of C:\RECYCLED were on the disk
+    // and their chains still in the cached FAT, until the lazy writer's
+    // next pass: fsck found an incomplete chain there. The FAT now goes to
+    // the disk before the entry that names it, and after a freed chain.
+    use crate::File;
+    use ob::{AccessMask, HandleAttributes, HandleTable};
+
+    let (volume, disk) = mounted(FSCK_CLUSTERS);
+    let cut = || {
+        let bytes = disk.0.lock().clone();
+        (FatVolume::mount(RwDisk(KSpinLock::new(bytes.clone()))).unwrap(), bytes)
+    };
+    let root = File::open(&volume, "\\").unwrap();
+
+    // A new directory, and a file in it grown by two writes.
+    let bin = root.create_child("RECYCLED", true, 0).unwrap();
+    let info = bin.create_child("INFO2", false, 0).unwrap();
+    let data = pattern(5000, 7);
+    info.write(0, &data[..20]).unwrap();
+    info.write(20, &data[20..]).unwrap();
+    let (after, bytes) = cut();
+    let (dir, _) = after.find_entry(after.root_cluster(), "RECYCLED").unwrap();
+    let (entry, _) = after.find_entry(dir.first_cluster, "INFO2").unwrap();
+    assert_eq!(read_all(&after, entry.first_cluster, entry.file_size), data, "a file grown");
+    drop(after);
+    assert_fsck_clean(&bytes, "a file grown");
+
+    // The directory grows by clusters (16 entries in each).
+    let names: Vec<String> = (0..40).map(|i| std::format!("F{i}.TXT")).collect();
+    for name in &names {
+        bin.create_child(name, false, 0).unwrap().write(0, name.as_bytes()).unwrap();
+    }
+    let (after, bytes) = cut();
+    let (dir, _) = after.find_entry(after.root_cluster(), "RECYCLED").unwrap();
+    for name in &names {
+        let (entry, _) = after.find_entry(dir.first_cluster, name).unwrap();
+        assert_eq!(read_all(&after, entry.first_cluster, entry.file_size), name.as_bytes(), "{name}");
+    }
+    drop(after);
+    assert_fsck_clean(&bytes, "a directory grown");
+
+    // A file truncated: its entry, then its freed clusters.
+    info.set_size(100).unwrap();
+    let (after, bytes) = cut();
+    let (dir, _) = after.find_entry(after.root_cluster(), "RECYCLED").unwrap();
+    let (entry, _) = after.find_entry(dir.first_cluster, "INFO2").unwrap();
+    assert_eq!(read_all(&after, entry.first_cluster, entry.file_size), &data[..100], "a file truncated");
+    drop(after);
+    assert_fsck_clean(&bytes, "a file truncated");
+
+    // A file deleted with its last handle (DeleteFileW).
+    let free = volume.space().unwrap().free_clusters;
+    let table = HandleTable::new();
+    let doomed = File::open(&volume, "\\RECYCLED\\F0.TXT").unwrap();
+    doomed.begin_open(0).unwrap();
+    let handle = table.insert(doomed.clone(), AccessMask(0x001F_01FF), HandleAttributes::default()).unwrap();
+    doomed.set_delete_pending(true).unwrap();
+    table.close(handle).unwrap();
+    assert_eq!(volume.space().unwrap().free_clusters, free + 1, "its cluster given back");
+    let (after, bytes) = cut();
+    let (dir, _) = after.find_entry(after.root_cluster(), "RECYCLED").unwrap();
+    assert!(after.find_entry(dir.first_cluster, "F0.TXT").is_err(), "a file deleted");
+    assert_eq!(after.free_clusters().map(u64::from), Ok(free + 1), "and its cluster free on the disk");
+    drop(after);
+    assert_fsck_clean(&bytes, "a file deleted");
+}
+
 #[test]
 fn after_a_pass_of_the_lazy_writer_a_power_cut_loses_nothing() {
     use crate::lazy_writer::{MountedVolumes, WrittenBehind};
@@ -1087,11 +1165,16 @@ fn after_a_pass_of_the_lazy_writer_a_power_cut_loses_nothing() {
     let file = File::open(&volume, "\\").unwrap().create_child("Session.log", false, 0).unwrap();
     file.write(0, &data).unwrap();
 
-    // A power cut now: the entry and the data are on the disk, the chain
-    // only in the cached FAT. What a third boot found of the second's files.
-    let cut = FatVolume::mount(RwDisk(KSpinLock::new(disk.0.lock().clone()))).unwrap();
+    // A power cut now, before the pass: the chain went to the disk before
+    // the entry that names it. (It used to stay in the cached FAT: the
+    // entry's chain ended on a free cluster.) Only the device's own cache
+    // waits for the lazy writer.
+    let bytes = disk.0.lock().clone();
+    let cut = FatVolume::mount(RwDisk(KSpinLock::new(bytes.clone()))).unwrap();
     let (entry, _) = cut.find_entry(cut.root_cluster(), "Session.log").unwrap();
-    assert_eq!((entry.file_size, cut.fat_entry(entry.first_cluster)), (5000, Ok(0)), "a chain that ends on 0");
+    assert_eq!(read_all(&cut, entry.first_cluster, entry.file_size), data, "the chain is on the disk");
+    drop(cut);
+    assert_fsck_clean(&bytes, "a write, before the pass");
 
     assert!(mounted.is_dirty());
     assert_eq!(mounted.write_behind(), WrittenBehind { volumes: 1, error: None });
@@ -1106,10 +1189,7 @@ fn after_a_pass_of_the_lazy_writer_a_power_cut_loses_nothing() {
     let (entry, _) = cut.find_entry(cut.root_cluster(), "SESSION.LOG").unwrap();
     assert_eq!(read_all(&cut, entry.first_cluster, entry.file_size), data);
     drop(cut);
-    match fsck(&bytes) {
-        Some(result) => result.unwrap_or_else(|report| panic!("fsck.vfat: {report}")),
-        None => std::eprintln!("fsck.vfat not found: the volume is not checked (dosfstools)"),
-    }
+    assert_fsck_clean(&bytes, "the pass");
 }
 
 #[test]

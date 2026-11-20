@@ -318,9 +318,13 @@ pub struct FatVolume<D: BlockDevice> {
     /// volume is then read only).
     clusters: u32,
     /// The first FAT copy, cached whole: the allocations and the chain walks
-    /// read it in memory, the updates mark the dirty sectors and the flush
-    /// writes them back to every copy (one device write per dirty sector
-    /// instead of per entry).
+    /// read it in memory, the updates mark the dirty sectors, written back
+    /// to every copy (one device write per dirty sector instead of per
+    /// entry) before the next directory entry is written, after a deleted
+    /// entry's chain is freed, and by the flush. The disk thus never holds
+    /// an entry whose chain is only in memory: a power cut leaves a volume
+    /// that fsck finds clean (but in the instant between a FAT sector and
+    /// an entry's sector).
     fat_cache: KSpinLock<FatCache>,
     /// Something went to the device since its last flush: its own cache
     /// (an ATA disk's) may still hold it.
@@ -1179,8 +1183,13 @@ impl<D: BlockDevice> FatVolume<D> {
         Ok(entry)
     }
 
-    /// Writes the entry at `at`.
+    /// Writes the entry at `at`, after the dirty FAT sectors: the chain the
+    /// entry names, and that of its directory, are on the disk before it
+    /// (careful write ordering; a power cut between a write and the next
+    /// pass of the lazy writer used to leave an entry whose chain ended on a
+    /// free cluster, which fsck truncates).
     pub fn write_entry(&self, at: EntryRef, entry: &[u8; 32]) -> Result<(), FatError> {
+        self.flush_fats()?;
         let (lba, within) = self.entry_place(at)?;
         let mut sector = vec![0u8; self.bytes_per_sector()];
         self.device.read_sector(lba, &mut sector)?;
@@ -1407,6 +1416,9 @@ impl<D: BlockDevice> FatVolume<D> {
         }
         if first != 0 {
             self.free_chain(first)?;
+            // The entry is gone from the disk: its chain goes free there too
+            // at once, or a power cut would leave clusters taken by nothing.
+            self.flush_fats()?;
         }
         Ok(())
     }
