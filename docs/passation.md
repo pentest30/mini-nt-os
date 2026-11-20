@@ -1,5 +1,23 @@
 # Notes de passation
 
+- **L'ordre d'écriture de la FAT** (`claude/fat-write-order`, 2026-11-20 ; vu sur la PR 153). Le scénario
+  `logon` finissait parfois avec une chaîne FAT incomplète dans `C:\RECYCLED` (fsck.vfat) : QEMU est tué dès les
+  marqueurs, et `explorer` venait d'écrire sa corbeille. Depuis l'écrivain paresseux (PR 151), les entrées des
+  répertoires allaient au disque tout de suite et la FAT restait en mémoire jusqu'au passage suivant, une seconde
+  plus tard : une coupure entre les deux laissait une entrée dont la chaîne finissait sur un cluster libre (le test
+  de la PR 151 l'admettait). Ce n'est pas lié à ProcessDebugPort : `logon` passe propre avec son gestionnaire, et
+  l'échec dépend du moment de la coupure (la comparaison sans le gestionnaire n'a pas été faite : sur une course,
+  un run de plus ne prouve rien). Corrigé (`io::fat`) : les secteurs modifiés de la FAT sont écrits avant chaque
+  entrée (`write_entry`), et après la chaîne libérée d'une entrée effacée (`delete_entry`) ; l'écrivain paresseux
+  ne vide plus que le cache du disque et ce qu'aucune entrée n'a fait écrire. Test hôte
+  `a_power_cut_between_two_passes_of_the_lazy_writer_leaves_a_clean_volume` (un fichier et un répertoire qui
+  grandissent, une troncature, un effacement), qui échoue sans le correctif. Vérifié sur la PR 153 plus ce
+  correctif : lint, 1 239 tests hôte ; `logon`, `power-cut` (AMD, Intel), `persistence`, `registry-persistence`,
+  `installer-finish` (AMD, Intel), `cmd` et `notepad-save` (AMD, Intel) passent. `fsck.vfat` manque sur l'hôte
+  Windows : leurs disques ont été vérifiés par un script (taille et chaîne de chaque entrée, les deux FAT, les
+  clusters perdus), tous propres. Reste : l'instant entre un secteur de la FAT et celui de l'entrée (un
+  raccourcissement libère les clusters avant d'écrire la nouvelle taille).
+
 - **Les métriques des polices de GDI** (`claude/font-metrics`, M7, premier point du bilan ;
   [`compat/applications.md`](compat/applications.md#les-métriques-des-polices-le-2026-11-20) ; demandé le
   2026-11-20). NtGdiGetCharWidthW (les largeurs de caractères, l'avance de chaque glyphe arrondie au pixel :
