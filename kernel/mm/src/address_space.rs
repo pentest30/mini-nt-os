@@ -706,10 +706,10 @@ impl AddressSpace {
         // une pile pleine n'en a plus — mais sa limite suit toujours la
         // page touchée (une pile utilisable sous StackLimit, et RtlUnwind
         // la refuse : STATUS_BAD_STACK chez l'installeur d'Inno Setup 5.4).
-        if guard > bottom {
-            if self.allocate(guard, PAGE, AllocType::MEM_COMMIT, PageProtect::READWRITE | PageProtect::GUARD).is_err() {
-                return STATUS_STACK_OVERFLOW;
-            }
+        if guard > bottom
+            && self.allocate(guard, PAGE, AllocType::MEM_COMMIT, PageProtect::READWRITE | PageProtect::GUARD).is_err()
+        {
+            return STATUS_STACK_OVERFLOW;
         }
         match self.write_bytes(tib + offset_of!(NtTib32, stack_limit) as u64, &(limit as u32).to_le_bytes()) {
             Ok(()) => STATUS_SUCCESS,
