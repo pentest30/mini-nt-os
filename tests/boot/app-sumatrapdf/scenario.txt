@@ -12,3 +12,4 @@ timeout = 600
 expect = [appbench] installer started
 expect = [appbench] SumatraPDF 2.5.2: report done
 forbid = *** STOP:
+forbid = sys: NtQueryInformationProcess class 0x7 is not implemented

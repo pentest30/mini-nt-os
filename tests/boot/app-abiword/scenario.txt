@@ -12,9 +12,10 @@ timeout = 600
 # temporary file deleted, FileDispositionInformation, then a directory of
 # its name) and installs; the program starts. The font metrics it asks
 # (GetCharWidth32W, GetOutlineTextMetricsW) are answered: it passes
-# libAbiWord.dll. Not yet: it ends on an access violation of its own
-# (0xC0000005), at the ProcessDebugPort it asks the kernel
-# (NtQueryInformationProcess class 7).
+# libAbiWord.dll's missing services. ProcessDebugPort now reports no debugger;
+# the exception reporter prints the original fault in libAbiWord.dll
+# (0x102b119f, reading 0x3c). The application still exits with 0xC0000005:
+# this floor does not certify a usable editor.
 expect = [appbench] installer started
 expect = [appbench] installer ended: exit code 0
 expect = [appbench] installed: C:\Program Files\AbiSuite2\AbiWord\bin\AbiWord.exe
@@ -24,4 +25,5 @@ forbid = Can't initialize plug-ins directory
 forbid = [appbench] installer still running after
 forbid = NtGdiGetCharWidthW (0x10a2) is not implemented
 forbid = NtGdiGetOutlineTextMetricsInternalW (0x10bc) is not implemented
+forbid = sys: NtQueryInformationProcess class 0x7 is not implemented
 forbid = *** STOP:

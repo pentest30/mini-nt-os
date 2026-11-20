@@ -385,6 +385,27 @@ non faits ; tests hôtes `fontobj::tests::char_widths_are_the_advances_of_the_gl
 
 ### La suite
 
+**Mise à jour du 2026-11-20 : ProcessDebugPort** (`fix/ps-process-debug-port`).
+La classe 7 de NtQueryInformationProcess est maintenant servie : un HANDLE i386 nul,
+aucun processus de Mino ne pouvant encore avoir de débogueur utilisateur attaché.
+Le scénario `process-debug-port` vérifie le contrat mémoire, les handles, les droits
+et CheckRemoteDebuggerPresent sur AMD et Intel ; retirer le handler le fait échouer.
+
+Mesure sur le banc après le correctif (AMD) :
+
+- AbiWord s'installe (code 0), démarre, puis finit encore sur 0xC0000005. Le journal
+  donne maintenant le diagnostic de la faute : lecture de `0x3c`, EIP `0x102b119f`
+  (`libAbiWord.dll+0x2b119f`), avec EAX et ESI nuls. Les cadres suivants sont dans
+  `libAbiWord.dll` (`+0x2b5d3a`, `+0x2b522d`, …). **La correction du contrat n'a
+  donc pas débloqué l'éditeur** : l'attribution précédente du plantage au seul
+  ProcessDebugPort était insuffisante. Suite : retrouver l'objet nul et l'API qui
+  devait le produire, à partir de cette instruction et de ses appelants.
+- SumatraPDF : l'installeur rend toujours 1 ; `userenv/profile.c:1841` signale
+  Error 2. Suite : tester sous une vraie session avec un profil utilisateur, au
+  lieu du jeton System du banc. ProcessDebugPort n'est plus un service manquant.
+- Les deux scénarios passent leurs planchers actuels et fsck.vfat déclare leurs
+  volumes propres. Cela ne valide ni l'utilisation ni la fermeture des applications.
+
 Corriger les blocages dans cet ordre, chacun avec un test, et remonter le plancher du scénario de chaque
 application débloquée. Une fois une application installée : les DLL qu'elle importe (`userland::import_closure`), et
 son parcours (`docs/compat/applications.md`, colonne « Parcours »), sur AMD et Intel.

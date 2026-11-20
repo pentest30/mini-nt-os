@@ -10,8 +10,14 @@
   Scénario `process-debug-port` (`debugport1.c`) : AMD et Intel passent ; sans le handler,
   le scénario échoue sur le premier appel. Il vérifie aussi CheckRemoteDebuggerPresent de kernel32,
   les tailles, pointeurs, alignements, handles et droits. Lint propre.
-  **Suite de cette étape** : tests hôte et mesure de l'effet sur AbiWord/SumatraPDF ; ne pas
-  confondre la réussite du test du contrat avec celle du parcours complet d'une application.
+  1 238 tests hôte passent. **Mesure applicative (AMD)** : AbiWord s'installe mais termine encore
+  sur 0xC0000005 ; son rapport d'exception donne maintenant EIP 0x102b119f
+  (`libAbiWord.dll+0x2b119f`), lecture de 0x3c, EAX et ESI nuls. L'attribution du plantage au seul
+  ProcessDebugPort était insuffisante : diagnostiquer l'objet nul dans libAbiWord. SumatraPDF
+  rend toujours 1, `userenv/profile.c:1841` Error 2 : essayer sous une vraie session avec profil.
+  Les scénarios applicatifs passent leurs planchers (pas les parcours complets) ; fsck.vfat
+  trouve les deux volumes propres. Les scénarios interdisent désormais la classe 7 sans handler.
+  **Suite** : diagnostic AbiWord, profil SumatraPDF, puis les autres blocages M7 déjà listés.
 
 - **Les métriques des polices de GDI** (`claude/font-metrics`, M7, premier point du bilan ;
   [`compat/applications.md`](compat/applications.md#les-métriques-des-polices-le-2026-11-20) ; demandé le
