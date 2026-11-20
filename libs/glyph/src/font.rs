@@ -78,13 +78,52 @@ pub struct TextMetrics {
 }
 
 /// The names GDI gives a font, from its `name` table: its family
-/// (lfFaceName, name 1), its style (elfStyle, name 2) and its full name
-/// (elfFullName, name 4).
+/// (lfFaceName, name 1), its style (elfStyle, name 2), its full name
+/// (elfFullName, name 4) and its unique name (name 3, the `FullName` of an
+/// OUTLINETEXTMETRIC of ReactOS).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Names {
     pub family: String,
     pub style: String,
     pub full_name: String,
+    pub unique_name: String,
+}
+
+/// The numbers an OUTLINETEXTMETRICW carries beyond its TEXTMETRIC
+/// (`freetype.c` of ReactOS, `IntGetOutlineTextMetrics`, as specification),
+/// in the units of the face: `OS/2` for the PANOSE and its numbers, `hhea`
+/// for the slope of the caret, `head` for the box and the least readable
+/// em, `post` for the italic angle and the underscore. A table missing
+/// leaves its numbers at 0, as Windows writes there; a table of version 1
+/// has no `x_height` nor `cap_height`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct OutlineNumbers {
+    pub panose: [u8; 10],
+    /// `OS/2` fsSelection.
+    pub selection: u16,
+    /// `OS/2` fsType.
+    pub fs_type: u16,
+    pub caret_slope_rise: i16,
+    pub caret_slope_run: i16,
+    /// `post` italicAngle, in 16.16.
+    pub italic_angle: i32,
+    pub typo_ascender: i16,
+    pub typo_descender: i16,
+    pub typo_line_gap: i16,
+    pub cap_height: Option<i16>,
+    pub x_height: Option<i16>,
+    /// `head`, (xMin, yMin).
+    pub box_min: (i16, i16),
+    /// `head`, (xMax, yMax).
+    pub box_max: (i16, i16),
+    /// `OS/2`, (x size, y size, x offset, y offset).
+    pub subscript: (i16, i16, i16, i16),
+    pub superscript: (i16, i16, i16, i16),
+    pub strikeout_size: i16,
+    pub strikeout_position: i16,
+    pub underscore_position: i16,
+    pub underscore_size: i16,
+    pub minimum_ppem: u16,
 }
 
 /// TMPF_FIXED_PITCH: set for a font of variable pitch (the name is the
@@ -180,7 +219,60 @@ impl<'a> Font<'a> {
                 None => String::new(),
             }
         };
-        Names { family: name(1), style: name(2), full_name: name(4) }
+        Names { family: name(1), style: name(2), full_name: name(4), unique_name: name(3) }
+    }
+
+    /// The numbers of an [`OutlineNumbers`]: every one from its table, 0
+    /// (and `None` for the heights of a table of version 1) without it.
+    pub fn outline_numbers(&self) -> OutlineNumbers {
+        let be_i16 = |table: Option<&[u8]>, at: usize| {
+            table.and_then(|t| t.get(at..at + 2)).map(|b| i16::from_be_bytes([b[0], b[1]]))
+        };
+        let table = |tag: &[u8; 4]| self.face.raw_face().table(Tag::from_bytes(tag));
+        let os2 = table(b"OS/2");
+        let hhea = table(b"hhea");
+        let head = table(b"head");
+        let post = table(b"post");
+        let panose =
+            os2.and_then(|t| t.get(32..42)).map(|bytes| bytes.try_into().unwrap_or([0; 10])).unwrap_or([0; 10]);
+        OutlineNumbers {
+            panose,
+            selection: self.table_u16(b"OS/2", 62).unwrap_or(0),
+            fs_type: self.table_u16(b"OS/2", 8).unwrap_or(0),
+            caret_slope_rise: be_i16(hhea, 18).unwrap_or(0),
+            caret_slope_run: be_i16(hhea, 20).unwrap_or(0),
+            italic_angle: self.table_u32(b"post", 4).unwrap_or(0) as i32,
+            typo_ascender: be_i16(os2, 68).unwrap_or(0),
+            typo_descender: be_i16(os2, 70).unwrap_or(0),
+            typo_line_gap: be_i16(os2, 72).unwrap_or(0),
+            cap_height: self.table_u16(b"OS/2", 0).filter(|&v| v >= 2).and_then(|_| be_i16(os2, 88)),
+            x_height: self.table_u16(b"OS/2", 0).filter(|&v| v >= 2).and_then(|_| be_i16(os2, 86)),
+            box_min: (be_i16(head, 36).unwrap_or(0), be_i16(head, 38).unwrap_or(0)),
+            box_max: (be_i16(head, 40).unwrap_or(0), be_i16(head, 42).unwrap_or(0)),
+            subscript: (
+                be_i16(os2, 10).unwrap_or(0),
+                be_i16(os2, 12).unwrap_or(0),
+                be_i16(os2, 14).unwrap_or(0),
+                be_i16(os2, 16).unwrap_or(0),
+            ),
+            superscript: (
+                be_i16(os2, 18).unwrap_or(0),
+                be_i16(os2, 20).unwrap_or(0),
+                be_i16(os2, 22).unwrap_or(0),
+                be_i16(os2, 24).unwrap_or(0),
+            ),
+            strikeout_size: be_i16(os2, 26).unwrap_or(0),
+            strikeout_position: be_i16(os2, 28).unwrap_or(0),
+            underscore_position: be_i16(post, 8).unwrap_or(0),
+            underscore_size: be_i16(post, 10).unwrap_or(0),
+            minimum_ppem: self.table_u16(b"head", 46).unwrap_or(0),
+        }
+    }
+
+    /// `units` of the face at an em of `em` pixels (16.16), rounded to
+    /// pixels — the `SCALE_X` and `SCALE_Y` of `freetype.c`.
+    pub fn scaled(&self, em: i64, units: i64) -> i32 {
+        ((self.scale(units, em) + ONE / 2) >> 16) as i32
     }
 
     /// An italic or oblique face: `OS/2` fsSelection (offset 62), ITALIC

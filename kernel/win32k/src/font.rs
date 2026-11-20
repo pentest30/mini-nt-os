@@ -307,6 +307,75 @@ pub fn text_metrics(face: Face, height: i32) -> Option<glyph::TextMetrics> {
     Some(font.text_metrics(em_of(&font, height)))
 }
 
+/// Ce qu'un OUTLINETEXTMETRIC dit de la police (NtGdiGetOutlineTextMetrics
+/// InternalW) : ses nombres bruts, ceux qui se mesurent mis à la hauteur de
+/// LOGFONT `height`, et ses noms. `None` si elle n'est pas installée.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Outline {
+    pub numbers: glyph::OutlineNumbers,
+    /// TypoAscender, TypoDescender et TypoLineGap de `OS/2`, en pixels.
+    pub ascent: i32,
+    pub descent: i32,
+    pub line_gap: i32,
+    /// sCapHeight et sxHeight de `OS/2` (version 2), en pixels.
+    pub cap_height: i32,
+    pub x_height: i32,
+    /// La boîte de `head`, (left, top, right, bottom), en pixels.
+    pub font_box: [i32; 4],
+    /// Le Mac : l'ascension et la descent de TEXTMETRIC, le LineGap.
+    pub mac_ascent: i32,
+    pub mac_descent: i32,
+    pub subscript_size: [i32; 2],
+    pub subscript_offset: [i32; 2],
+    pub superscript_size: [i32; 2],
+    pub superscript_offset: [i32; 2],
+    pub strikeout_size: i32,
+    pub strikeout_position: i32,
+    pub underscore_position: i32,
+    pub underscore_size: i32,
+    pub names: glyph::Names,
+}
+
+/// L'OUTLINETEXTMETRIC de la police `face` à la hauteur de LOGFONT
+/// `height` ; `None` si elle n'est pas installée.
+///
+/// # IRQL
+/// PASSIVE_LEVEL.
+pub fn outline(face: Face, height: i32) -> Option<Outline> {
+    let data = file(face)?;
+    let font = Font::parse(&data).ok()?;
+    let em = em_of(&font, height);
+    let numbers = font.outline_numbers();
+    let tm = font.text_metrics(em);
+    let scale = |units: i64| font.scaled(em, units);
+    let pair = |values: (i16, i16, i16, i16)| [scale(i64::from(values.0)), scale(i64::from(values.1))];
+    Some(Outline {
+        names: font.names(),
+        ascent: scale(i64::from(numbers.typo_ascender)),
+        descent: scale(i64::from(numbers.typo_descender)),
+        line_gap: scale(i64::from(numbers.typo_line_gap)),
+        cap_height: numbers.cap_height.map_or(0, |v| scale(i64::from(v))),
+        x_height: numbers.x_height.map_or(0, |v| scale(i64::from(v))),
+        font_box: [
+            scale(i64::from(numbers.box_min.0)),
+            scale(i64::from(numbers.box_max.1)),
+            scale(i64::from(numbers.box_max.0)),
+            scale(i64::from(numbers.box_min.1)),
+        ],
+        mac_ascent: tm.metrics.ascent,
+        mac_descent: -tm.metrics.descent,
+        subscript_size: pair(numbers.subscript),
+        subscript_offset: [scale(i64::from(numbers.subscript.2)), scale(i64::from(numbers.subscript.3))],
+        superscript_size: pair(numbers.superscript),
+        superscript_offset: [scale(i64::from(numbers.superscript.2)), scale(i64::from(numbers.superscript.3))],
+        strikeout_size: scale(i64::from(numbers.strikeout_size)),
+        strikeout_position: scale(i64::from(numbers.strikeout_position)),
+        underscore_position: scale(i64::from(numbers.underscore_position)),
+        underscore_size: scale(i64::from(numbers.underscore_size)),
+        numbers,
+    })
+}
+
 /// Ce que l'énumération des polices dit d'une police (FontFamilyFillInfo).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct EnumerationMetrics {

@@ -10,8 +10,11 @@ cpus = default
 timeout = 600
 # What works today, a floor: NSIS makes its plug-ins directory (a
 # temporary file deleted, FileDispositionInformation, then a directory of
-# its name) and installs; the program starts. Not yet: it ends on an
-# access violation of its own (0xC0000005).
+# its name) and installs; the program starts. The font metrics it asks
+# (GetCharWidth32W, GetOutlineTextMetricsW) are answered: it passes
+# libAbiWord.dll. Not yet: it ends on an access violation of its own
+# (0xC0000005), at the ProcessDebugPort it asks the kernel
+# (NtQueryInformationProcess class 7).
 expect = [appbench] installer started
 expect = [appbench] installer ended: exit code 0
 expect = [appbench] installed: C:\Program Files\AbiSuite2\AbiWord\bin\AbiWord.exe
@@ -19,4 +22,6 @@ expect = [appbench] program started
 expect = [appbench] AbiWord 2.4.1: report done
 forbid = Can't initialize plug-ins directory
 forbid = [appbench] installer still running after
+forbid = NtGdiGetCharWidthW (0x10a2) is not implemented
+forbid = NtGdiGetOutlineTextMetricsInternalW (0x10bc) is not implemented
 forbid = *** STOP:

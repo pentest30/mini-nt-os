@@ -19,17 +19,21 @@
 //! pixels de cellule).
 //!
 //! L'énumération (EnumFontFamiliesEx, NtGdiGetFontFamilyInfo) :
-//! [`family_info`].
+//! [`family_info`]. Les largeurs (GetCharWidth32, NtGdiGetCharWidthW) :
+//! [`char_widths`] ; l'OUTLINETEXTMETRIC (GetOutlineTextMetricsW,
+//! NtGdiGetOutlineTextMetricsInternalW) : [`outline_metrics`].
 //!
 //! Pas encore : la largeur, l'italique, le soulignement et le barré au dessin
 //! (les métriques les disent), l'orientation, GetObject d'une police,
-//! GetCharWidth, les index de glyphes (GetTextExtentExPointI),
-//! OUTLINETEXTMETRIC.
+//! `GCW_INDICES` et les flottants de GetCharWidth.
 
 use alloc::string::String;
 use alloc::sync::Arc;
 
-use abi::gdi::{objt, stock, LogFontW32, TextMetricW32, TmDiff32, TmwInternal32, ANSI_CHARSET, DEFAULT_CHARSET};
+use abi::gdi::{
+    objt, stock, LogFontW32, OutlineTextMetricW32, TextMetricW32, TmDiff32, TmwInternal32, ANSI_CHARSET,
+    DEFAULT_CHARSET,
+};
 use abi::gdi::{
     EnumLogFontExW32, FontFamilyInfo32, FontSignature32, NewTextMetricExW32, NewTextMetricW32, CLIP_DEFAULT_PRECIS,
     FF_MODERN, FIXED_PITCH, LO_FONT_TYPE, NTM_BOLD, NTM_ITALIC, NTM_REGULAR, OUT_OUTLINE_PRECIS, PROOF_QUALITY,
@@ -396,6 +400,76 @@ pub fn text_metrics(logfont: &LogFontW32) -> Option<TmwInternal32> {
     Some(TmwInternal32 { text_metric, diff })
 }
 
+/// GreGetCharWidthW : la largeur de chaque caractère de `chars` dans la
+/// police de `logfont` — l'avance de son glyphe, arrondie au pixel. `None`
+/// sans la police installée.
+///
+/// # IRQL
+/// PASSIVE_LEVEL.
+pub fn char_widths(logfont: &LogFontW32, chars: &[u16]) -> Option<alloc::vec::Vec<i32>> {
+    let (face, height) = realize(logfont)?;
+    font::advances(face, height, chars).map(|(widths, _)| widths)
+}
+
+/// IntGetOutlineTextMetrics : l'OUTLINETEXTMETRICW de `logfont` — sa partie
+/// fixe puis ses quatre noms (famille, face, style, nom unique) en
+/// chaînes larges terminées, comme la `gdi32` de ReactOS les relit ; les
+/// champs `otmp*` portent leur position en octets. `None` sans la police
+/// installée.
+///
+/// # IRQL
+/// PASSIVE_LEVEL.
+pub fn outline_metrics(logfont: &LogFontW32) -> Option<alloc::vec::Vec<u8>> {
+    let (face, height) = realize(logfont)?;
+    let outline = font::outline(face, height)?;
+    let TmwInternal32 { text_metric, .. } = text_metrics(logfont)?;
+    let numbers = &outline.numbers;
+    let mut otm = OutlineTextMetricW32 {
+        size: 224,
+        text_metric,
+        panose: numbers.panose,
+        selection: u32::from(numbers.selection),
+        fs_type: u32::from(numbers.fs_type),
+        slope_rise: i32::from(numbers.caret_slope_rise),
+        slope_run: i32::from(numbers.caret_slope_run),
+        italic_angle: numbers.italic_angle,
+        em_square: u32::from(font::enumeration_metrics(face)?.size_em),
+        ascent: outline.ascent,
+        descent: outline.descent,
+        line_gap: outline.line_gap,
+        cap_em_height: outline.cap_height.max(0) as u32,
+        x_height: outline.x_height.max(0) as u32,
+        font_box: outline.font_box,
+        mac_ascent: outline.mac_ascent,
+        mac_descent: outline.mac_descent,
+        mac_line_gap: outline.line_gap,
+        minimum_ppem: u32::from(numbers.minimum_ppem),
+        subscript_size: outline.subscript_size,
+        subscript_offset: outline.subscript_offset,
+        superscript_size: outline.superscript_size,
+        superscript_offset: outline.superscript_offset,
+        strikeout_size: outline.strikeout_size.max(0) as u32,
+        strikeout_position: outline.strikeout_position,
+        underscore_position: outline.underscore_position,
+        underscore_size: outline.underscore_size,
+        ..OutlineTextMetricW32::default()
+    };
+    let mut bytes: alloc::vec::Vec<u8> = otm.as_bytes().into();
+    let mut place = |text: &str, at: usize| {
+        let offset = bytes.len() as u32;
+        bytes.extend(text.encode_utf16().chain([0]).flat_map(|unit| unit.to_le_bytes()));
+        bytes[at..at + 4].copy_from_slice(&offset.to_le_bytes());
+    };
+    let at = core::mem::offset_of!(OutlineTextMetricW32, family_name);
+    place(&outline.names.family, at);
+    place(&outline.names.full_name, at + 4);
+    place(&outline.names.style, at + 8);
+    place(&outline.names.unique_name, at + 12);
+    otm.size = bytes.len() as u32;
+    bytes[..4].copy_from_slice(&otm.size.to_le_bytes());
+    Some(bytes)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -470,6 +544,51 @@ mod tests {
         assert!(family_info(&japanese).is_empty(), "another character set");
         let all = family_info(&LogFontW32 { char_set: DEFAULT_CHARSET, ..LogFontW32::default() });
         assert!(all.len() >= font::faces().len(), "every installed font, then the substitutes");
+    }
+
+    #[test]
+    fn char_widths_are_the_advances_of_the_glyphs() {
+        if !crate::font::tests::install_reactos_fonts() {
+            return;
+        }
+        let units: alloc::vec::Vec<u16> = "Mino".encode_utf16().collect();
+        let logfont = named("Tahoma", FW_NORMAL);
+        let widths = char_widths(&logfont, &units).unwrap();
+        assert_eq!(widths.len(), 4);
+        assert!(widths.iter().all(|&width| width > 0), "each character advances");
+        assert!(widths[0] > widths[1], "M is wider than i");
+        let (face, height) = realize(&logfont).unwrap();
+        let run = font::text_run(face, height, &units, None, Quality::Antialiased).unwrap();
+        assert_eq!(widths.iter().sum::<i32>(), run.width, "the widths add up to the extent of the text");
+    }
+
+    #[test]
+    fn an_outline_text_metric_carries_its_names_and_numbers() {
+        if !crate::font::tests::install_reactos_fonts() {
+            return;
+        }
+        let bytes = outline_metrics(&named("Tahoma", FW_NORMAL)).unwrap();
+        let u32_at = |at: usize| u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap());
+        let i32_at = |at: usize| i32::from_le_bytes(bytes[at..at + 4].try_into().unwrap());
+        let size = u32_at(0) as usize;
+        assert_eq!(size, bytes.len(), "otmSize covers the names");
+        assert!(size > 224, "Tahoma has names");
+        let wide = |at: usize| {
+            let units: alloc::vec::Vec<u16> = bytes[at..]
+                .chunks_exact(2)
+                .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+                .take_while(|&unit| unit != 0)
+                .collect();
+            String::from_utf16_lossy(&units)
+        };
+        let family = u32_at(core::mem::offset_of!(OutlineTextMetricW32, family_name)) as usize;
+        let style = u32_at(core::mem::offset_of!(OutlineTextMetricW32, style_name)) as usize;
+        assert_eq!((wide(family), wide(style)), (String::from("Tahoma"), String::from("Regular")));
+        assert_eq!(u32_at(core::mem::offset_of!(OutlineTextMetricW32, em_square)), 2048, "Tahoma's units per em");
+        assert!(i32_at(core::mem::offset_of!(OutlineTextMetricW32, ascent)) > 0);
+        assert!(i32_at(core::mem::offset_of!(OutlineTextMetricW32, descent)) < 0);
+        let box_left = core::mem::offset_of!(OutlineTextMetricW32, font_box);
+        assert!(i32_at(box_left) < 0 && i32_at(box_left + 8) > 0, "the box spans its overhangs");
     }
 
     #[test]

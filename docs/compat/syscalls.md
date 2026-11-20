@@ -9,7 +9,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | Table | Implémentés | Services |
 |---|---:|---:|
 | ntoskrnl | 133 | 296 |
-| win32k | 216 | 737 |
+| win32k | 218 | 737 |
 
 ## ntoskrnl
 
@@ -478,7 +478,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x109f` | `NtGdiGetCharABCWidthsW` | 6 | ✅ |
 | `0x10a0` | `NtGdiGetCharacterPlacementW` | 6 |  |
 | `0x10a1` | `NtGdiGetCharSet` | 1 |  |
-| `0x10a2` | `NtGdiGetCharWidthW` | 6 |  |
+| `0x10a2` | `NtGdiGetCharWidthW` | 6 | ✅ |
 | `0x10a3` | `NtGdiGetCharWidthInfo` | 2 |  |
 | `0x10a4` | `NtGdiGetColorAdjustment` | 2 |  |
 | `0x10a5` | `NtGdiGetColorSpaceforBitmap` | 1 |  |
@@ -504,7 +504,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x10b9` | `NtGdiGetNearestColor` | 2 | ✅ |
 | `0x10ba` | `NtGdiGetNearestPaletteIndex` | 2 |  |
 | `0x10bb` | `NtGdiGetObjectBitmapHandle` | 2 |  |
-| `0x10bc` | `NtGdiGetOutlineTextMetricsInternalW` | 4 |  |
+| `0x10bc` | `NtGdiGetOutlineTextMetricsInternalW` | 4 | ✅ |
 | `0x10bd` | `NtGdiGetPath` | 4 |  |
 | `0x10be` | `NtGdiGetPixel` | 3 | ✅ |
 | `0x10bf` | `NtGdiGetRandomRgn` | 3 | ✅ |
