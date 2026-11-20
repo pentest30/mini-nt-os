@@ -1,5 +1,18 @@
 # Notes de passation
 
+- **ProcessDebugPort : le contrat i386 sans débogueur** (`fix/ps-process-debug-port`, M7,
+  2026-11-20). `NtQueryInformationProcess` classe 7 vérifie la taille exacte (4), les pointeurs,
+  le type du handle et PROCESS_QUERY_INFORMATION, puis écrit zéro : Mino refuse encore les ports
+  de débogage à la création et n'implémente pas l'attachement. La mauvaise taille laisse les
+  sorties intactes ; ReturnLength est sondé avant le handle et reçoit 4 après cette vérification,
+  même en cas d'erreur du handle ou du tampon. Spécification : ReactOS 0.4.16, `ps/query.c`,
+  `internal/ps_i.h`, `internal/probe.h` (pas de portage de code).
+  Scénario `process-debug-port` (`debugport1.c`) : AMD et Intel passent ; sans le handler,
+  le scénario échoue sur le premier appel. Il vérifie aussi CheckRemoteDebuggerPresent de kernel32,
+  les tailles, pointeurs, alignements, handles et droits. Lint propre.
+  **Suite de cette étape** : tests hôte et mesure de l'effet sur AbiWord/SumatraPDF ; ne pas
+  confondre la réussite du test du contrat avec celle du parcours complet d'une application.
+
 - **Les métriques des polices de GDI** (`claude/font-metrics`, M7, premier point du bilan ;
   [`compat/applications.md`](compat/applications.md#les-métriques-des-polices-le-2026-11-20) ; demandé le
   2026-11-20). NtGdiGetCharWidthW (les largeurs de caractères, l'avance de chaque glyphe arrondie au pixel :

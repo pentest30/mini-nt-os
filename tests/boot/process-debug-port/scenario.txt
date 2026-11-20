@@ -1,0 +1,14 @@
+# ProcessDebugPort's i386 ABI, error paths, access checks and kernel32 wrapper.
+# No user-mode debugger can currently be attached to a Mino process.
+features = test-smss
+requires = userland, native
+initial-command = DBGPORT1.EXE
+cpus = default, intel
+timeout = 120
+expect = [debug-port] current and real process handles: zero, four bytes
+expect = [debug-port] lengths and user pointers checked
+expect = [debug-port] handle type and query access checked
+expect = [debug-port] kernel32 CheckRemoteDebuggerPresent: false
+expect = [debug-port] PASS
+forbid = [debug-port] FAIL
+forbid = *** STOP:

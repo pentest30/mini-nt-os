@@ -285,6 +285,8 @@ pub(super) fn nt_terminate_thread(arguments: &[u32]) -> NtStatus {
 /// - `ProcessBasicInformation` : son statut de sortie, son PEB, son masque
 ///   d'affinité, sa priorité de base, son PID et celui de son créateur ;
 /// - `ProcessSessionInformation` : sa session ;
+/// - `ProcessDebugPort` : zéro, les ports de débogage utilisateur ne sont
+///   pas encore pris en charge ([`query_debug_port`]) ;
 /// - `ProcessDefaultHardErrorMode` : ses `SEM_*` ;
 /// - `ProcessBreakOnTermination` : 1 s'il est critique, 0 sinon ;
 /// - `ProcessLUIDDeviceMapsEnabled` : 0, les périphériques DOS sont ceux de
@@ -303,6 +305,9 @@ pub(super) fn nt_query_information_process(arguments: &[u32]) -> NtStatus {
     let (handle, class, buffer, length, return_length) =
         (arguments[0], arguments[1], arguments[2], arguments[3], arguments[4]);
     match class {
+        abi::process::PROCESS_DEBUG_PORT => {
+            return status(query_debug_port(handle, buffer, length, return_length));
+        }
         PROCESS_BASIC_INFORMATION
         | PROCESS_SESSION_INFORMATION
         | PROCESS_DEFAULT_HARD_ERROR_MODE
@@ -374,6 +379,35 @@ pub(super) fn nt_query_information_process(arguments: &[u32]) -> NtStatus {
         }
     };
     super::return_information(information, buffer, length, return_length)
+}
+
+/// Contrat de ReactOS 0.4.16, NtQueryInformationProcess(ProcessDebugPort)
+/// et DefaultQueryInfoBufferCheck : taille exacte, sonde du tampon et de
+/// ReturnLength, puis handle avec PROCESS_QUERY_INFORMATION. Une mauvaise
+/// taille laisse ReturnLength intact ; après la référence du handle, il
+/// reçoit 4 même si celle-ci ou l'écriture du résultat échoue.
+/// Mino refuse encore la création avec DebugPort et n'implémente pas
+/// l'attachement d'un débogueur : aucun processus n'a de port à déclarer.
+fn query_debug_port(handle: u32, buffer: u32, length: u32, return_length: u32) -> Result<NtStatus, NtStatus> {
+    if length != 4 {
+        return Err(STATUS_INFO_LENGTH_MISMATCH);
+    }
+    if buffer != 0 {
+        ke::usermem::probe_for_read(u64::from(buffer), 4, 4)?;
+    }
+    if return_length != 0 {
+        // ProbeForWriteUlong touches the word without requiring alignment.
+        // Keep its value, including when a later handle check fails.
+        let mut old = [0u8; 4];
+        ke::usermem::copy_from_user(&mut old, u64::from(return_length))?;
+        ke::usermem::copy_to_user(u64::from(return_length), &old)?;
+    }
+    let result = super::reference_process(handle, PROCESS_QUERY_INFORMATION)
+        .and_then(|_process| UserPtr::<u32>::new(buffer).write(&0));
+    if return_length != 0 {
+        ke::usermem::copy_to_user(u64::from(return_length), &4u32.to_le_bytes())?;
+    }
+    result.map(|()| STATUS_SUCCESS)
 }
 
 /// La carte des lecteurs DOS (ObQueryDeviceMapInformation) : un bit par
