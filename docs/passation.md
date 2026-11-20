@@ -1,5 +1,26 @@
 # Notes de passation
 
+- **STATUS_BAD_STACK d'Inno Setup 5.4 : la pile et le filtre de débogage** (`claude/inno-bad-stack`, M7,
+  deuxième point du bilan ;
+  [`compat/applications.md`](compat/applications.md#status_bad_stack-dinno-setup-54-le-2026-11-20) ; demandé
+  le 2026-11-20). Mm : `fault::stack_extension` récrit — la limite (`StackLimit`) suit toujours la page
+  touchée, la garde ne descend que s'il lui reste une page (la première de la réserve ne se commite jamais),
+  et une violation d'accès dans la réserve étend la pile aussi (`page_fault_hook` appelle l'extension des
+  deux) : `RtlUnwind` ne voit plus de pile utilisable sous sa limite (`STATUS_BAD_STACK` disparu), le smoke
+  attend `STATUS_STACK_OVERFLOW` à la première page de la réserve. Ntoskrnl :
+  `NtQueryDebugFilterState` suit XP (`Kd_WIN2000_Mask = 1` de ReactOS : le niveau ERROR seul passe, celui du
+  `DbgPrint` sans composant et de `DPRINT1`) — le `DbgPrintEx` de `ntdll` formate son message chez l'appelant
+  seulement si le filtre le laisse, et le TRACE de `LCMapStringW` du payload (locale.c:3812, qui pousse
+  `srclen` à la place du pointeur de `debugstr_wn`) ne lisait plus `strlen(0x100)` à chaque appel : l'accès
+  mémoire qui alimentait la boucle imbriquée du gestionnaire de Delphi a disparu. Scénarios réajustés pour
+  les lignes de TRACE que le filtre ne laisse plus imprimer : `logon` (le listage du bureau prend la ligne
+  ReadDirectoryChangesW d'explorer), `power-cut` (sa chaîne `expect-last` et le déclencheur de la coupure),
+  `smss` (les trois `Pipe name` de npipe.c, dont la preuve est dans les sondes `[m4]`). Les installeurs Inno
+  5.4 finissent toujours sur `STATUS_STACK_OVERFLOW`, mais sans plus aucune exception de débogage dans la
+  boucle : leur propre code recurse en refautant sur la page `0xf46f61` de son tas, non projetée chez Mino —
+  le blocage suivant du bilan. **Suite** : pourquoi la page du tas n'est pas projetée (le commit du tas ou un
+  pointeur au-delà du bloc), Authenticode, ProcessDebugPort.
+
 - **Les métriques des polices de GDI** (`claude/font-metrics`, M7, premier point du bilan ;
   [`compat/applications.md`](compat/applications.md#les-métriques-des-polices-le-2026-11-20) ; demandé le
   2026-11-20). NtGdiGetCharWidthW (les largeurs de caractères, l'avance de chaque glyphe arrondie au pixel :

@@ -30,9 +30,10 @@ use core::mem::offset_of;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use abi::ntstatus::{
-    NtStatus, STATUS_ACCESS_VIOLATION, STATUS_CONFLICTING_ADDRESSES, STATUS_GUARD_PAGE_VIOLATION,
-    STATUS_IMAGE_NOT_AT_BASE, STATUS_INVALID_PAGE_PROTECTION, STATUS_INVALID_PARAMETER, STATUS_INVALID_VIEW_SIZE,
-    STATUS_MAPPED_ALIGNMENT, STATUS_NOT_MAPPED_VIEW, STATUS_NO_MEMORY, STATUS_STACK_OVERFLOW, STATUS_SUCCESS,
+    NtStatus, STATUS_ACCESS_VIOLATION, STATUS_ALREADY_COMMITTED, STATUS_CONFLICTING_ADDRESSES,
+    STATUS_GUARD_PAGE_VIOLATION, STATUS_IMAGE_NOT_AT_BASE, STATUS_INVALID_PAGE_PROTECTION, STATUS_INVALID_PARAMETER,
+    STATUS_INVALID_VIEW_SIZE, STATUS_MAPPED_ALIGNMENT, STATUS_NOT_MAPPED_VIEW, STATUS_NO_MEMORY, STATUS_STACK_OVERFLOW,
+    STATUS_SUCCESS,
 };
 use abi::teb32::{NtTib32, Teb32};
 use hal::sync::KSpinLock;
@@ -691,8 +692,24 @@ impl AddressSpace {
             Ok(extension) => extension,
             Err(status) => return status,
         };
-        if self.allocate(guard, PAGE, AllocType::MEM_COMMIT, PageProtect::READWRITE | PageProtect::GUARD).is_err() {
-            return STATUS_STACK_OVERFLOW;
+        // La page touchée : committée sans sa garde par la résolution d'une
+        // faute de garde, ou réservée sous la limite — une violation
+        // d'accès dans la réserve l'y rejoint (MiCheckForUserStackOverflow
+        // est appelé des deux, et l'accès y reprend) ; déjà committée
+        // autrement, elle reste ce qu'elle est.
+        match self.allocate(limit, PAGE, AllocType::MEM_COMMIT, PageProtect::READWRITE) {
+            Ok(_) | Err(STATUS_ALREADY_COMMITTED) => {}
+            Err(_) => return STATUS_NO_MEMORY,
+        }
+        // La garde descend d'une page s'il lui en reste une : la première
+        // page de la réservation ne se commite jamais avec une garde, et
+        // une pile pleine n'en a plus — mais sa limite suit toujours la
+        // page touchée (une pile utilisable sous StackLimit, et RtlUnwind
+        // la refuse : STATUS_BAD_STACK chez l'installeur d'Inno Setup 5.4).
+        if guard > bottom {
+            if self.allocate(guard, PAGE, AllocType::MEM_COMMIT, PageProtect::READWRITE | PageProtect::GUARD).is_err() {
+                return STATUS_STACK_OVERFLOW;
+            }
         }
         match self.write_bytes(tib + offset_of!(NtTib32, stack_limit) as u64, &(limit as u32).to_le_bytes()) {
             Ok(()) => STATUS_SUCCESS,

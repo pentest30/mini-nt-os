@@ -4576,7 +4576,8 @@ fn information_services_self_test() {
     code.call_args(query_system, &[v(3), v(PART), v(32), v(PART_LENGTH)]).store_eax(status(4));
     code.call_args(query_system, &[v(3), v(TIME_OF_DAY), v(49), v(0)]).store_eax(status(5));
     code.call_args(query_system, &[v(50), v(RANGE), v(4), v(RANGE_LENGTH)]).store_eax(status(6));
-    code.call_args(services::NtQueryDebugFilterState, &[v(0xC8), v(2)]).store_eax(status(7));
+    code.call_args(services::NtQueryDebugFilterState, &[v(0xC8), v(0)]).store_eax(status(7));
+    code.call_args(services::NtQueryDebugFilterState, &[v(0xC8), v(2)]).store_eax(status(14));
     code.call_args(services::NtCreateEvent, &[v(EVENT), v(0x001F_0003), v(0), v(0), v(0)]).store_eax(status(8));
     code.call_args(set_object, &[m(EVENT), v(4), v(FLAGS_ON), v(2)]).store_eax(status(9));
     code.call_args(services::NtClose, &[m(EVENT)]).store_eax(status(10));
@@ -4648,7 +4649,11 @@ fn information_services_self_test() {
     assert_eq!(read(PART + 32), 0xAAAA_AAAA, "no more than the part asked for");
     assert_eq!(statuses[5], STATUS_INFO_LENGTH_MISMATCH, "more than the information");
     assert_eq!((statuses[6], read(RANGE), read(RANGE_LENGTH)), (STATUS_SUCCESS, 0x8000_0000, 4), "range start");
-    assert_eq!(statuses[7], NtStatus(1), "NtQueryDebugFilterState: TRUE, everything is printed");
+    assert_eq!(
+        (statuses[7], statuses[14]),
+        (NtStatus(1), NtStatus(0)),
+        "NtQueryDebugFilterState: the ERROR level passes, the INFO level is filtered (the broken TRACE of LCMapStringW stays out)"
+    );
     assert_eq!((statuses[8], statuses[9]), (STATUS_SUCCESS, STATUS_SUCCESS), "a handle protected from close");
     assert_eq!(statuses[10], STATUS_HANDLE_NOT_CLOSABLE, "NtClose refuses it");
     assert_eq!(statuses[11], STATUS_INFO_LENGTH_MISMATCH, "two BOOLEANs, no more");
