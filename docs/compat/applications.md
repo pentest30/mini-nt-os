@@ -373,7 +373,7 @@ Ce qui vient ensuite, dans l'ordre où cela débloque le plus :
 
 Ce qui manquait : NtGdiGetCharWidthW (GreGetCharWidthW : l'avance de chaque glyphe, arrondie au pixel —
 `win32k::gdi::fontobj::char_widths`, par `font::advances`) et NtGdiGetOutlineTextMetricsInternalW
-(`IntGetOutlineTextMetrics` de `freetype.c` : la partie fixe de 224 octets puis les quatre noms en chaînes
+(`IntGetOutlineTextMetrics` de `freetype.c` : la partie fixe de 216 octets — la structure de ReactOS s'arrête au quatrième nom — puis les quatre noms en chaînes
 larges, leurs positions dans `otmp*` ; `glyph::Font::outline_numbers` lit `OS/2`, `hhea`, `head` et `post`,
 `win32k::font::outline` met les nombres à la hauteur du LOGFONT, `fontobj::outline_metrics` les assemble ; la
 `gdi32` de ReactOS relit ces noms comme des chaînes larges, et son GetOutlineTextMetricsA les convertit).

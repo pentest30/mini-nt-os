@@ -424,15 +424,18 @@ pub fn outline_metrics(logfont: &LogFontW32) -> Option<alloc::vec::Vec<u8>> {
     let outline = font::outline(face, height)?;
     let TmwInternal32 { text_metric, .. } = text_metrics(logfont)?;
     let numbers = &outline.numbers;
+    // italicAngle de `post` est en 16.16 ; l'OUTLINETEXTMETRIC le donne en
+    // degrés entiers, arrondi au plus proche.
+    let italic_angle = ((i64::from(numbers.italic_angle) + 0x8000) >> 16) as i32;
     let mut otm = OutlineTextMetricW32 {
-        size: 224,
+        size: 216,
         text_metric,
         panose: numbers.panose,
         selection: u32::from(numbers.selection),
         fs_type: u32::from(numbers.fs_type),
         slope_rise: i32::from(numbers.caret_slope_rise),
         slope_run: i32::from(numbers.caret_slope_run),
-        italic_angle: numbers.italic_angle,
+        italic_angle,
         em_square: u32::from(font::enumeration_metrics(face)?.size_em),
         ascent: outline.ascent,
         descent: outline.descent,
@@ -450,8 +453,8 @@ pub fn outline_metrics(logfont: &LogFontW32) -> Option<alloc::vec::Vec<u8>> {
         superscript_offset: outline.superscript_offset,
         strikeout_size: outline.strikeout_size.max(0) as u32,
         strikeout_position: outline.strikeout_position,
-        underscore_position: outline.underscore_position,
         underscore_size: outline.underscore_size,
+        underscore_position: outline.underscore_position,
         ..OutlineTextMetricW32::default()
     };
     let mut bytes: alloc::vec::Vec<u8> = otm.as_bytes().into();
@@ -572,7 +575,7 @@ mod tests {
         let i32_at = |at: usize| i32::from_le_bytes(bytes[at..at + 4].try_into().unwrap());
         let size = u32_at(0) as usize;
         assert_eq!(size, bytes.len(), "otmSize covers the names");
-        assert!(size > 224, "Tahoma has names");
+        assert!(size > 216, "Tahoma has names");
         let wide = |at: usize| {
             let units: alloc::vec::Vec<u16> = bytes[at..]
                 .chunks_exact(2)
@@ -589,6 +592,28 @@ mod tests {
         assert!(i32_at(core::mem::offset_of!(OutlineTextMetricW32, descent)) < 0);
         let box_left = core::mem::offset_of!(OutlineTextMetricW32, font_box);
         assert!(i32_at(box_left) < 0 && i32_at(box_left + 8) > 0, "the box spans its overhangs");
+        assert_eq!(
+            (
+                bytes[core::mem::offset_of!(OutlineTextMetricW32, filler)],
+                bytes[core::mem::offset_of!(OutlineTextMetricW32, panose)]
+            ),
+            (0, 2),
+            "one filler byte, then the PANOSE: Tahoma is a text font (family 2)"
+        );
+        assert_eq!(i32_at(core::mem::offset_of!(OutlineTextMetricW32, italic_angle)), 0, "upright");
+    }
+
+    #[test]
+    fn an_italic_face_tells_its_angle_in_degrees() {
+        if !crate::font::tests::install_reactos_fonts() {
+            return;
+        }
+        let italic = LogFontW32 { italic: 1, ..named("Courier New", FW_NORMAL) };
+        let bytes = outline_metrics(&italic).unwrap();
+        let angle = i32::from_le_bytes(
+            bytes[core::mem::offset_of!(OutlineTextMetricW32, italic_angle)..][..4].try_into().unwrap(),
+        );
+        assert!((-45..0).contains(&angle), "an italic leans, in whole degrees: {angle}");
     }
 
     #[test]

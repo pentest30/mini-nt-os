@@ -27,9 +27,10 @@ traite l'une d'elles y ajoute la section de sa PR (voir « Ajouter une évaluati
 | [133](https://github.com/pentest30/mini-nt-os/pull/133) | 1 | 1 | 0 | 0 | 0 | 0 | 0 |
 | [134](https://github.com/pentest30/mini-nt-os/pull/134) | 1 | 0 | 0 | 0 | 0 | 1 | 0 |
 | [149](https://github.com/pentest30/mini-nt-os/pull/149) | 3 | 1 | 1 | 1 | 0 | 0 | 2 |
-| **Total** | **52** | **25** | **6** | **4** | **1** | **16** | **3** |
+| [152](https://github.com/pentest30/mini-nt-os/pull/152) | 7 | 7 | 0 | 0 | 0 | 0 | 1 |
+| **Total** | **59** | **32** | **6** | **4** | **1** | **16** | **4** |
 
-Toutes les remarques jusqu'à la PR 149 sont évaluées.
+Toutes les remarques jusqu'à la PR 152 sont évaluées.
 
 Ce qui ressort :
 
@@ -196,3 +197,24 @@ Manqués :
 - **`Volume::cleanup` efface le fichier sous un `KSpinLock`.** Il écrit sur le disque et alloue en tenant `opened`,
   donc à DISPATCH_LEVEL, contre 06 §4. Trouvé en vérifiant les remarques. Corrigé par `f8e1b71` : l'effacement se
   fait sous le verrou de FCB, et le `KSpinLock` ne garde plus que les comptes.
+
+## PR 152 : les métriques des polices
+
+Commit relu par les bots : `6f892d2`. Évalué le 2026-11-20. Vortex a posté cinq remarques dont trois fois la même
+(le débordement de `FirstChar + Count`, en remarque principale puis deux fois parmi celles « hors des lignes
+changées ») ; Codex en a posté deux.
+
+| Où | Remarque | Verdict | Pourquoi | Suite |
+|---|---|---|---|---|
+| `kernel/ntoskrnl/src/sys/gdi.rs:261` | `first + count` fait le tour en u32 (profil `release`, sans contrôles de débordement) : la plage est vide, la largeur rend TRUE sans rien écrire ; `as u16` tranque un FirstChar au-dessus de 0xFFFF. | Fondé | `(first..first + count)` avec FirstChar = 0xFFFFFFFF et Count = 2 rend une plage vide, `copy_to_user` de zéro octet réussit et le service rend TRUE ; 0x10041 devient 0x0041. | Plage validée par `checked_add` et bornée à un WCHAR (`first <= 0xFFFF`, fin `<= 0x1_0000`), sinon FALSE et `ERROR_INVALID_PARAMETER`. |
+| `kernel/win32k/src/gdi/fontobj.rs:435` | `italic_angle` va brut dans l'OTM : c'est le 16.16 de `post`, le champ veut des degrés entiers — 65536 fois trop grand pour une italique. | Fondé | `OutlineNumbers::italic_angle` porte le Fixed de `post` (doc du champ), et `OutlineTextMetricW32::italic_angle` est `int` en degrés. Tahoma Regular (angle nul) ne le montrait pas. | Converti en degrés, arrondi (`(v + 0x8000) >> 16`) ; test `an_italic_face_tells_its_angle_in_degrees` (Courier New italique). |
+| `kernel/ntoskrnl/src/sys/gdi.rs:249` | `flOptions` est jeté sans regard : un `GCW_INDICES` rendrait des largeurs de caractères pour des index de glyphes, en réussissant. | Fondé | Les valeurs seraient des index, traités comme des caractères : une réponse fausse vaut pire qu'un échec. | Drapeaux inconnus, `GCW_INDICES` et les flottants sans `GCW_NOFLOAT` refusés (FALSE, `ERROR_INVALID_PARAMETER` ; `ntgdityp.h` : WIN32 0x1, NOFLOAT 0x2, INDICES 0x8). |
+| `abi/src/gdi.rs:960` (Codex) | Le remplissage vient après la PANOSE : le header de ReactOS pose `otmFiller` à 64 et la PANOSE de dix octets à 65, chaque composante lue est donc décalée d'un octet. | Fondé | `sdk/include/psdk/wingdi.h` de 0.4.16 : `BYTE otmFiller; PANOSE otmPanoseNumber;` — la structure avait `panose` à 64. | `filler: u8` puis `panose` (65), l'octet d'alignement explicite ; testé (`filler` 0, composante de famille 2 pour Tahoma). |
+| `abi/src/gdi.rs:987` (Codex) | Le souligné rend sa position et sa taille échangées : le header pose `otmsUnderscoreSize` avant `otmsUnderscorePosition`. | Fondé | Le header de 0.4.16 a bien la taille (192) puis la position (196) — l'ordre inverse du barré. | Champs remis dans l'ordre, offset testé à 192. |
+
+Manqués :
+
+- **La structure comptait `otmpVersion` et `otmpNotice`.** Le header de ReactOS 0.4.16 s'arrête au quatrième nom
+  (`otmpFullName`) : 216 octets, pas les 224 de l'ABI de Windows (six noms). Les champs de plus n'étaient jamais lus
+  — la `gdi32` épinglée n'en a pas — mais la taille était fausse. Trouvé en vérifiant les deux remarques de Codex
+  contre `wingdi.h`. Corrigé avec elles : quatre noms, 216 octets, `size_of` testé.

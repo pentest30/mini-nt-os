@@ -4,7 +4,8 @@
   [`compat/applications.md`](compat/applications.md#les-métriques-des-polices-le-2026-11-20) ; demandé le
   2026-11-20). NtGdiGetCharWidthW (les largeurs de caractères, l'avance de chaque glyphe arrondie au pixel :
   `win32k::gdi::fontobj::char_widths` par `font::advances`) et NtGdiGetOutlineTextMetricsInternalW
-  (l'OUTLINETEXTMETRICW : partie fixe de 224 octets — `abi::gdi::OutlineTextMetricW32` — puis les quatre noms
+  (l'OUTLINETEXTMETRICW : partie fixe de 216 octets, la structure de ReactOS s'arrête au quatrième nom —
+  `abi::gdi::OutlineTextMetricW32` — puis les quatre noms
   en chaînes larges, leurs positions dans `otmp*` ; `glyph::Font::outline_numbers` lit `OS/2`, `hhea`, `head`
   et `post`, `win32k::font::outline` met les nombres mesurés à la hauteur du LOGFONT,
   `fontobj::outline_metrics` assemble ; la `gdi32` de ReactOS relit ces noms en chaînes larges et son

@@ -236,18 +236,32 @@ pub(super) fn nt_gdi_get_text_metrics_w(arguments: &[u32]) -> NtStatus {
     NtStatus(u32::from(copy_to_user(u64::from(out), bytes).is_ok()))
 }
 
+/// Les drapeaux de NtGdiGetCharWidthW (`ntgdityp.h`) : GCW_WIN32, GCW_NOFLOAT
+/// et GCW_INDICES.
+const GCW_WIN32: u32 = 0x0001;
+const GCW_NOFLOAT: u32 = 0x0002;
+const GCW_INDICES: u32 = 0x0008;
+
 /// NtGdiGetCharWidthW(hdc, FirstChar, Count, pwc, flOptions, Buffer) :
 /// BOOL ; écrit en `Buffer` la largeur (`INT`) de chacun des `Count`
 /// caractères qui suivent `FirstChar` — ou de ceux de la chaîne `pwc`
 /// (`GetCharWidth32A`) — dans la police du DC (`GreGetCharWidthW` :
-/// l'avance de chaque glyphe, arrondie au pixel ; `GCW_INDICES` et les
-/// flottants, que personne ici ne demande, pas encore). FALSE et
-/// `ERROR_INVALID_PARAMETER` pour un compte nul ou trop grand,
-/// `ERROR_INVALID_HANDLE` pour un DC qui n'est pas au processus, FALSE
-/// sans la police installée ou pour une mémoire inaccessible.
+/// l'avance de chaque glyphe, arrondie au pixel). FALSE et
+/// `ERROR_INVALID_PARAMETER` pour un compte nul ou trop grand, un premier
+/// caractère ou une fin de plage hors d'un WCHAR (la somme ne doit pas
+/// faire le tour), un drapeau inconnu, `GCW_INDICES` ou les flottants sans
+/// `GCW_NOFLOAT` — tous deux pas encore, et une réponse juste vaut mieux
+/// qu'une réponse fausse ; `ERROR_INVALID_HANDLE` pour un DC qui n'est pas
+/// au processus, FALSE sans la police installée ou pour une mémoire
+/// inaccessible.
 pub(super) fn nt_gdi_get_char_width_w(arguments: &[u32]) -> NtStatus {
-    let [hdc, first, count, string, _options, buffer] = arguments[..6] else { unreachable!("6 arguments") };
+    let [hdc, first, count, string, options, buffer] = arguments[..6] else { unreachable!("6 arguments") };
     if count == 0 || count > 1024 {
+        return fail(ERROR_INVALID_PARAMETER, 0);
+    }
+    let last = first.checked_add(count).filter(|&last| last <= 0x1_0000 && first <= 0xFFFF);
+    let known = GCW_WIN32 | GCW_NOFLOAT | GCW_INDICES;
+    if last.is_none() || options & !known != 0 || options & GCW_INDICES != 0 || options & GCW_NOFLOAT == 0 {
         return fail(ERROR_INVALID_PARAMETER, 0);
     }
     let Some((_, _, logfont)) = dc_font(hdc) else { return fail(ERROR_INVALID_HANDLE, 0) };

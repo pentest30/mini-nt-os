@@ -947,17 +947,22 @@ pub struct TmwInternal32 {
 }
 
 /// OUTLINETEXTMETRICW: what NtGdiGetOutlineTextMetricsInternalW writes —
-/// its fixed part (224 bytes on 32 bits), the names of an
-/// OUTLINETEXTMETRIC coming after it as wide strings of ReactOS, their
-/// offsets in the fields `otmp*` (`IntGetOutlineTextMetrics`, which gives
-/// the face the name 4 and the full name the name 3).
+/// its fixed part (216 bytes on 32 bits: the structure of ReactOS ends at
+/// the fourth name, without the version and the notice of Windows), the
+/// names of an OUTLINETEXTMETRIC coming after it as wide strings of
+/// ReactOS, their offsets in the fields `otmp*` (`IntGetOutlineTextMetrics`,
+/// which gives the face the name 4 and the full name the name 3). The
+/// filler comes before the PANOSE, and the underscore is its size then its
+/// position, as the header of ReactOS lays them.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct OutlineTextMetricW32 {
     pub size: u32,
     pub text_metric: TextMetricW32,
+    pub filler: u8,
     pub panose: [u8; 10],
-    pub filler: [u8; 2],
+    /// The byte that aligns `otmfsSelection`.
+    pub padding: u8,
     pub selection: u32,
     pub fs_type: u32,
     pub slope_rise: i32,
@@ -983,16 +988,15 @@ pub struct OutlineTextMetricW32 {
     pub superscript_offset: [i32; 2],
     pub strikeout_size: u32,
     pub strikeout_position: i32,
-    pub underscore_position: i32,
+    /// The underscore: its size, then its position (the opposite order of
+    /// the strikeout).
     pub underscore_size: i32,
-    /// Byte offsets of the names after the fixed part; the version and the
-    /// notice stay 0, which ReactOS leaves.
+    pub underscore_position: i32,
+    /// Byte offsets of the names after the fixed part.
     pub family_name: u32,
     pub face_name: u32,
     pub style_name: u32,
     pub full_name: u32,
-    pub version: u32,
-    pub notice: u32,
 }
 
 /// GDIBSTEXTOUT: a TextOut or ExtTextOut that `gdi32` queued (GdiBCTextOut),
@@ -1135,8 +1139,10 @@ const _: () = {
     assert!(offset_of!(GdiBsTextOut32, viewport_org) == 0x48);
     assert!(size_of::<GdiBsExtTextOut32>() == 0x28);
     assert!(offset_of!(GdiBsExtTextOut32, ul_background_clr) == 0x24);
-    assert!(size_of::<OutlineTextMetricW32>() == 224, "the fixed part an OUTLINETEXTMETRICW of 32 bits");
-    assert!(offset_of!(OutlineTextMetricW32, selection) == 76, "two bytes pad after the PANOSE");
+    assert!(size_of::<OutlineTextMetricW32>() == 216, "the fixed part of the OUTLINETEXTMETRICW of ReactOS");
+    assert!(offset_of!(OutlineTextMetricW32, panose) == 65, "one filler byte before the PANOSE");
+    assert!(offset_of!(OutlineTextMetricW32, selection) == 76);
+    assert!(offset_of!(OutlineTextMetricW32, underscore_size) == 192, "the size of the underscore before its position");
     assert!(offset_of!(OutlineTextMetricW32, family_name) == 200);
 };
 
