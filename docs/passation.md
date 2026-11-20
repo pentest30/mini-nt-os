@@ -16,7 +16,11 @@
   `installer-finish` (AMD, Intel), `cmd` et `notepad-save` (AMD, Intel) passent. `fsck.vfat` manque sur l'hôte
   Windows : leurs disques ont été vérifiés par un script (taille et chaîne de chaque entrée, les deux FAT, les
   clusters perdus), tous propres. Reste : l'instant entre un secteur de la FAT et celui de l'entrée (un
-  raccourcissement libère les clusters avant d'écrire la nouvelle taille).
+  raccourcissement libère les clusters avant d'écrire la nouvelle taille). Vu en chemin, déjà sur `main` : le
+  test hôte `sections_share_the_bytes_of_an_unchanged_file` échoue parfois sous charge (3 fois sur 48, quatre
+  binaires de test à la fois). `section_cache::CACHE` est global au processus, et `insert` ne garde rien si la
+  génération globale a changé depuis la lecture : l'écriture d'un autre test parallèle, sur un autre volume, suffit.
+  Diagnostic fait, correction à faire (une génération par volume, ou par fichier).
 
 - **Les métriques des polices de GDI** (`claude/font-metrics`, M7, premier point du bilan ;
   [`compat/applications.md`](compat/applications.md#les-métriques-des-polices-le-2026-11-20) ; demandé le
