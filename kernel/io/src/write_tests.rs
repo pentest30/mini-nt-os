@@ -1215,3 +1215,51 @@ fn the_shutdown_flushes_every_volume_past_an_error() {
     let pass = mounted.write_behind();
     assert_eq!((pass.volumes, pass.error), (0, Some(STATUS_IO_DEVICE_ERROR)), "tried again, refused again");
 }
+
+#[test]
+fn the_locks_of_a_file_are_seen_by_each_of_its_opens_and_go_with_the_last_handle() {
+    // msiexec (7-Zip, OpenOffice) opens its package by the structured
+    // storage of ole32, which locks byte ranges far past the end of the file
+    // (LockFileEx, LOCKFILE_FAIL_IMMEDIATELY) and loops while they conflict.
+    use crate::File;
+    use abi::ntstatus::*;
+    use ob::{AccessMask, HandleAttributes, HandleTable};
+
+    let (volume, _disk) = mounted(FSCK_CLUSTERS);
+    let table = HandleTable::new();
+    let root = File::open(&volume, "\\").unwrap();
+    root.create_child("PACKAGE.MSI", false, 0).unwrap().write(0, &[7u8; 4096]).unwrap();
+    let open = |path: &str| {
+        let file = File::open(&volume, path).unwrap();
+        file.begin_open(0).unwrap();
+        let handle = table.insert(file.clone(), AccessMask(0x001F_01FF), HandleAttributes::default()).unwrap();
+        (file, handle)
+    };
+    let (first, first_handle) = open("\\PACKAGE.MSI");
+    let (second, second_handle) = open("\\package.msi");
+    let a = first.lock_owner(8, 0);
+    let b = second.lock_owner(12, 0);
+
+    // A range of the storage's locks, and one in the data.
+    first.lock(0x7FFF_FF92, 1, true, a).unwrap();
+    first.lock(0, 512, true, a).unwrap();
+    assert_eq!(second.lock(0x7FFF_FF92, 1, false, b), Err(STATUS_FILE_LOCK_CONFLICT), "seen by every open");
+    assert_eq!(second.check_read(100, 10, b), Err(STATUS_FILE_LOCK_CONFLICT));
+    assert_eq!(second.check_write(511, 2, b), Err(STATUS_FILE_LOCK_CONFLICT));
+    first.check_write(0, 512, a).unwrap();
+    second.check_read(512, 100, b).unwrap();
+    assert_eq!(second.unlock(0, 512, b), Err(STATUS_RANGE_NOT_LOCKED));
+    first.unlock(0, 512, a).unwrap();
+    second.check_write(0, 512, b).unwrap();
+
+    // A directory has no locks.
+    assert_eq!(root.lock(0, 1, true, root.lock_owner(8, 0)), Err(STATUS_INVALID_PARAMETER));
+
+    // Its last handle closed, the first open's locks go.
+    table.close(first_handle).unwrap();
+    second.lock(0x7FFF_FF92, 1, true, b).unwrap();
+    table.close(second_handle).unwrap();
+    let (third, third_handle) = open("\\PACKAGE.MSI");
+    third.lock(0x7FFF_FF92, 1, true, third.lock_owner(16, 0)).unwrap();
+    table.close(third_handle).unwrap();
+}

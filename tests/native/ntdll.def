@@ -33,3 +33,5 @@ NtFlushKey@4
 NtQueryInformationProcess@20
 NtQueryKey@20
 NtQueryObject@20
+NtLockFile@40
+NtUnlockFile@20

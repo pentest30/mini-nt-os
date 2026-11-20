@@ -1,0 +1,27 @@
+# Byte-range locks (NtLockFile, NtUnlockFile): LOCK1.EXE (tests/native/lock1.c)
+# through kernel32 (LockFile, LockFileEx, UnlockFile), the native services
+# (status block, event, key), reads and writes stopped by a lock, the locks
+# of a handle gone with it; then ole32's structured storage, which msiexec
+# opens its package with (StgOpenStorage locks ranges past the end of the
+# file and loops while they conflict). And CreateDirectoryW with a trailing
+# backslash, which msi makes C:\WINDOWS\Installer\ with.
+features = test-smss
+requires = userland, native
+initial-command = LOCK1.EXE
+cpus = default, intel
+timeout = 180
+expect = [lock] CreateDirectoryW: a trailing backslash names a directory
+expect = [lock] LockFile: an exclusive lock overlaps nothing
+expect = [lock] LockFileEx: shared locks share, writes stop at them
+expect = [lock] NtReadFile, NtWriteFile: an exclusive lock of another key stops them
+expect = [lock] NtLockFile, NtUnlockFile: status block, event, key
+expect = [lock] UnlockFile: the exact range
+expect = [lock] the locks of a handle go with it
+expect = [lock] ole32: StgCreateDocfile
+expect = [lock] ole32: StgOpenStorage shares and refuses by its locks
+expect = [lock] PASS
+forbid = [lock] FAIL
+forbid = NtLockFile (0x0069) is not implemented
+forbid = NtUnlockFile (0x0113) is not implemented
+forbid = sys: NtLockFile without FailImmediately
+forbid = *** STOP:

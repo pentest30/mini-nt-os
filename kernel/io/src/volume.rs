@@ -16,7 +16,13 @@
 //! before a deletion finds its entry gone, and fails. The deletion writes
 //! the volume under it, never under the spinlock of the table (`opened`),
 //! which only keeps the counts.
+//!
+//! The FCB also keeps the byte-range locks of each file (its FILE_LOCK,
+//! [`crate::file_lock`]): [`Volume::lock`], [`Volume::unlock`],
+//! [`Volume::unlock_all`] at the last close of a file object, and the checks
+//! of reads and writes ([`Volume::check_read`], [`Volume::check_write`]).
 pub use crate::fat_volume::{Listed, Node, SharedBlockDevice, Space, VolumeLabel};
+use crate::file_lock::{FileLocks, LockOwner};
 use crate::{fat_volume::FatMount, ntfs_volume::NtfsMount};
 use abi::{
     file::{FileBasicInformation, FileFsDeviceInformation},
@@ -33,6 +39,8 @@ pub struct Volume {
     fcb: KGuardedMutex<()>,
     /// What the FCB of each open file keeps, by its identity on the volume.
     opened: KSpinLock<BTreeMap<u64, Opened>>,
+    /// The byte-range locks of each file that has some, by its identity.
+    locks: KSpinLock<BTreeMap<u64, FileLocks>>,
 }
 
 /// The opens of a file (its FCB).
@@ -46,7 +54,12 @@ struct Opened {
 
 impl Volume {
     fn new(backend: Backend) -> Self {
-        Self { backend, fcb: KGuardedMutex::new(()), opened: KSpinLock::new(BTreeMap::new()) }
+        Self {
+            backend,
+            fcb: KGuardedMutex::new(()),
+            opened: KSpinLock::new(BTreeMap::new()),
+            locks: KSpinLock::new(BTreeMap::new()),
+        }
     }
 
     /// The content of `node` changes: before the change, and after it (even
@@ -96,7 +109,7 @@ impl Volume {
             Backend::Fat(v) => Backend::Fat(v.with_clock(clock)),
             other => other,
         };
-        Self { backend, fcb: self.fcb, opened: self.opened }
+        Self { backend, fcb: self.fcb, opened: self.opened, locks: self.locks }
     }
     /// Whether all mutations are refused by this filesystem driver.
     pub fn is_read_only(&self) -> bool {
@@ -412,5 +425,73 @@ impl Volume {
             Backend::Fat(v) => v.is_empty_directory(node),
             Backend::Ntfs(_) => Ok(false),
         }
+    }
+}
+
+impl Volume {
+    /// NtLockFile on `node`: see [`FileLocks::lock`]. The root has no
+    /// identity and no locks (`STATUS_INVALID_DEVICE_REQUEST`).
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL; allocates from the non-paged pool.
+    pub fn lock(
+        &self,
+        node: &Node,
+        offset: u64,
+        length: u64,
+        exclusive: bool,
+        owner: LockOwner,
+    ) -> Result<(), NtStatus> {
+        let identity = node.identity().ok_or(STATUS_INVALID_DEVICE_REQUEST)?;
+        self.locks.lock().entry(identity).or_default().lock(offset, length, exclusive, owner)
+    }
+
+    /// NtUnlockFile on `node`: see [`FileLocks::unlock`].
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn unlock(&self, node: &Node, offset: u64, length: u64, owner: LockOwner) -> Result<(), NtStatus> {
+        let identity = node.identity().ok_or(STATUS_RANGE_NOT_LOCKED)?;
+        let mut locks = self.locks.lock();
+        let file = locks.get_mut(&identity).ok_or(STATUS_RANGE_NOT_LOCKED)?;
+        let result = file.unlock(offset, length, owner);
+        if file.is_empty() {
+            locks.remove(&identity);
+        }
+        result
+    }
+
+    /// The last handle of the file object `file_object` on `node` is closed
+    /// (FsRtlFastUnlockAll): its locks go.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn unlock_all(&self, node: &Node, file_object: usize) {
+        let Some(identity) = node.identity() else { return };
+        let mut locks = self.locks.lock();
+        if let Some(file) = locks.get_mut(&identity) {
+            file.unlock_all(file_object);
+            if file.is_empty() {
+                locks.remove(&identity);
+            }
+        }
+    }
+
+    /// A read of `node` by `owner`: see [`FileLocks::check_read`].
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn check_read(&self, node: &Node, offset: u64, length: u64, owner: LockOwner) -> Result<(), NtStatus> {
+        let Some(identity) = node.identity() else { return Ok(()) };
+        self.locks.lock().get(&identity).map_or(Ok(()), |file| file.check_read(offset, length, owner))
+    }
+
+    /// A write of `node` by `owner`: see [`FileLocks::check_write`].
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn check_write(&self, node: &Node, offset: u64, length: u64, owner: LockOwner) -> Result<(), NtStatus> {
+        let Some(identity) = node.identity() else { return Ok(()) };
+        self.locks.lock().get(&identity).map_or(Ok(()), |file| file.check_write(offset, length, owner))
     }
 }

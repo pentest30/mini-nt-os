@@ -65,6 +65,7 @@ const PROGRAMS: &[(&[&str], &str, Toolchain)] = &[
     (&["asyncact1.c"], "ASYNCACT1.EXE", Toolchain::MinGwWin32),
     (&["fgmin1.c"], "FGMIN1.EXE", Toolchain::MinGwWin32),
     (&["debugport1.c"], "DBGPORT1.EXE", Toolchain::MinGwWin32),
+    (&["lock1.c"], "LOCK1.EXE", Toolchain::MinGwWin32),
     (&["caret1.c"], "CARET1.EXE", Toolchain::MinGwWin32),
     (&["hook1.c"], "HOOK1.EXE", Toolchain::MinGwWin32),
     (&["section1.c"], "SECTION1.EXE", Toolchain::MinGwWin32),
