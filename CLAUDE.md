@@ -574,7 +574,9 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   le bit de changement de `QS_SENDMESSAGE` tombe avec le dernier message envoyé). NtAccessCheck (`se::access`) et
   l'effacement des fichiers (FileDispositionInformation, FILE_DELETE_ON_CLOSE : `io_manager::Volume::cleanup`) :
   KeePass, Notepad++, AbiWord et Dev-C++ s'installent et leurs programmes démarrent ; le PEB a les champs FLS de
-  Server 2003 (`abi::peb32`, la liste des tas après eux) : KeePass montre sa fenêtre.
+  Server 2003 (`abi::peb32`, la liste des tas après eux) : KeePass montre sa fenêtre. Les métriques des polices
+  (NtGdiGetCharWidthW, NtGdiGetOutlineTextMetricsInternalW : `fontobj::char_widths`, `fontobj::outline_metrics`)
+  : AbiWord passe `libAbiWord.dll`.
   Suite : [`docs/passation.md`](docs/passation.md).
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.

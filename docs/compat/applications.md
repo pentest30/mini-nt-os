@@ -358,15 +358,30 @@ Les planchers de KeePass et de Notepad++ attendent la fenêtre du programme et i
 
 Ce qui vient ensuite, dans l'ordre où cela débloque le plus :
 
-1. **Les métriques des polices de GDI** (AbiWord ; Dev-C++ et les installeurs les appellent aussi) :
-   NtGdiGetCharWidthW et NtGdiGetOutlineTextMetricsInternalW rendent 0 sans être faits.
-2. **STATUS_BAD_STACK d'Inno Setup 5.4** (PeaZip, GIMP).
-3. **Authenticode** (Notepad++) : WinVerifyTrust et la chaîne de certificats de `wintrust` et `crypt32` de ReactOS.
+1. **STATUS_BAD_STACK d'Inno Setup 5.4** (PeaZip, GIMP).
+2. **Authenticode** (Notepad++) : WinVerifyTrust et la chaîne de certificats de `wintrust` et `crypt32` de ReactOS.
+3. **NtQueryInformationProcess, classe 7** (ProcessDebugPort ; AbiWord et SumatraPDF) : rendue sans handler, sa
+   sortie reste ce qu'on lui donne et AbiWord lit son débogueur au pointeur nul (sa faute à `0x3C`, dans
+   `AbiWord.exe`).
 4. **Le profil que `userenv` ne trouve pas** (SumatraPDF) : le banc remplace `winlogon` et tourne sous le jeton
    de System, sans session ouverte.
 5. **KeePass** : WM_CLOSE de sa fenêtre principale, et son titre.
 6. Et toujours : l'enregistrement de DLL de WinMerge, le renommage (FileRenameInformation), EReadError de Dev-C++,
    les processus d'aide de Dev-C++.
+
+### Les métriques des polices, le 2026-11-20
+
+Ce qui manquait : NtGdiGetCharWidthW (GreGetCharWidthW : l'avance de chaque glyphe, arrondie au pixel —
+`win32k::gdi::fontobj::char_widths`, par `font::advances`) et NtGdiGetOutlineTextMetricsInternalW
+(`IntGetOutlineTextMetrics` de `freetype.c` : la partie fixe de 216 octets — la structure de ReactOS s'arrête au quatrième nom — puis les quatre noms en chaînes
+larges, leurs positions dans `otmp*` ; `glyph::Font::outline_numbers` lit `OS/2`, `hhea`, `head` et `post`,
+`win32k::font::outline` met les nombres à la hauteur du LOGFONT, `fontobj::outline_metrics` les assemble ; la
+`gdi32` de ReactOS relit ces noms comme des chaînes larges, et son GetOutlineTextMetricsA les convertit).
+AbiWord passe alors `libAbiWord.dll` — ses cadres de faute — et sa faute monte dans `AbiWord.exe` : le
+ProcessDebugPort du point 3. Les largeurs restent entières : `GCW_INDICES` et les flottants de GetCharWidth,
+que personne du banc ne demande, attendent. Le scénario `app-abiword` interdit désormais les deux services
+non faits ; tests hôtes `fontobj::tests::char_widths_are_the_advances_of_the_glyphs` et
+`an_outline_text_metric_carries_its_names_and_numbers`.
 
 ### La suite
 

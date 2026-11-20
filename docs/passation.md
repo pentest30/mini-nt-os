@@ -1,5 +1,22 @@
 # Notes de passation
 
+- **Les métriques des polices de GDI** (`claude/font-metrics`, M7, premier point du bilan ;
+  [`compat/applications.md`](compat/applications.md#les-métriques-des-polices-le-2026-11-20) ; demandé le
+  2026-11-20). NtGdiGetCharWidthW (les largeurs de caractères, l'avance de chaque glyphe arrondie au pixel :
+  `win32k::gdi::fontobj::char_widths` par `font::advances`) et NtGdiGetOutlineTextMetricsInternalW
+  (l'OUTLINETEXTMETRICW : partie fixe de 216 octets, la structure de ReactOS s'arrête au quatrième nom —
+  `abi::gdi::OutlineTextMetricW32` — puis les quatre noms
+  en chaînes larges, leurs positions dans `otmp*` ; `glyph::Font::outline_numbers` lit `OS/2`, `hhea`, `head`
+  et `post`, `win32k::font::outline` met les nombres mesurés à la hauteur du LOGFONT,
+  `fontobj::outline_metrics` assemble ; la `gdi32` de ReactOS relit ces noms en chaînes larges et son
+  GetOutlineTextMetricsA les convertit ; `pTmd` n'est pas écrit, comme le noyau de ReactOS 0.4.16). 218
+  services de win32k. AbiWord passe `libAbiWord.dll` — ses cadres de faute — et sa faute monte dans
+  `AbiWord.exe`, sur le ProcessDebugPort (NtQueryInformationProcess classe 7, le suivant du bilan). Le
+  scénario `app-abiword` interdit les deux services non faits ; tests hôtes
+  `char_widths_are_the_advances_of_the_glyphs`, `an_outline_text_metric_carries_its_names_and_numbers`.
+  **Suite** : STATUS_BAD_STACK d'Inno 5.4 (PeaZip, GIMP), Authenticode (Notepad++), ProcessDebugPort (AbiWord,
+  SumatraPDF).
+
 - **Ce qu'une session écrit survit à l'arrêt : l'écrivain paresseux** (`claude/lazy-writer`, sur
   `claude/relaxed-wilson-e4616f` et `claude/inspiring-allen-8bb1b7`, M7,
   [`compat/applications.md`](compat/applications.md#les-essayer-à-la-main--cargo-xtask-image---apps) ; demandé le

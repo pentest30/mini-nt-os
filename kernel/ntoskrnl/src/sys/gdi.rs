@@ -19,7 +19,8 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use abi::gdi::{rgn, BitmapInfoHeader32, BI_BITFIELDS, ERROR, GDI_HANDLE_STOCK_MASK, GDI_HANDLE_TYPE_MASK, LO_DC_TYPE};
 use abi::ntstatus::{NtStatus, STATUS_INVALID_PARAMETER, STATUS_SUCCESS};
 use abi::winerror::{
-    ERROR_INVALID_HANDLE, ERROR_INVALID_PARAMETER, ERROR_NOT_ENOUGH_MEMORY, ERROR_NO_SYSTEM_RESOURCES,
+    ERROR_INSUFFICIENT_BUFFER, ERROR_INVALID_HANDLE, ERROR_INVALID_PARAMETER, ERROR_NOT_ENOUGH_MEMORY,
+    ERROR_NO_SYSTEM_RESOURCES,
 };
 use ke::usermem::{copy_from_user, copy_to_user};
 use win32k::gdi::dib::{ColorRef, Rect};
@@ -233,6 +234,69 @@ pub(super) fn nt_gdi_get_text_metrics_w(arguments: &[u32]) -> NtStatus {
     let bytes = metrics.as_bytes();
     let bytes = &bytes[..bytes.len().min(size as usize)];
     NtStatus(u32::from(copy_to_user(u64::from(out), bytes).is_ok()))
+}
+
+/// Les drapeaux de NtGdiGetCharWidthW (`ntgdityp.h`) : GCW_WIN32, GCW_NOFLOAT
+/// et GCW_INDICES.
+const GCW_WIN32: u32 = 0x0001;
+const GCW_NOFLOAT: u32 = 0x0002;
+const GCW_INDICES: u32 = 0x0008;
+
+/// NtGdiGetCharWidthW(hdc, FirstChar, Count, pwc, flOptions, Buffer) :
+/// BOOL ; écrit en `Buffer` la largeur (`INT`) de chacun des `Count`
+/// caractères qui suivent `FirstChar` — ou de ceux de la chaîne `pwc`
+/// (`GetCharWidth32A`) — dans la police du DC (`GreGetCharWidthW` :
+/// l'avance de chaque glyphe, arrondie au pixel). FALSE et
+/// `ERROR_INVALID_PARAMETER` pour un compte nul ou trop grand, un premier
+/// caractère ou une fin de plage hors d'un WCHAR (la somme ne doit pas
+/// faire le tour), un drapeau inconnu, `GCW_INDICES` ou les flottants sans
+/// `GCW_NOFLOAT` — tous deux pas encore, et une réponse juste vaut mieux
+/// qu'une réponse fausse ; `ERROR_INVALID_HANDLE` pour un DC qui n'est pas
+/// au processus, FALSE sans la police installée ou pour une mémoire
+/// inaccessible.
+pub(super) fn nt_gdi_get_char_width_w(arguments: &[u32]) -> NtStatus {
+    let [hdc, first, count, string, options, buffer] = arguments[..6] else { unreachable!("6 arguments") };
+    if count == 0 || count > 1024 {
+        return fail(ERROR_INVALID_PARAMETER, 0);
+    }
+    let last = first.checked_add(count).filter(|&last| last <= 0x1_0000 && first <= 0xFFFF);
+    let known = GCW_WIN32 | GCW_NOFLOAT | GCW_INDICES;
+    if last.is_none() || options & !known != 0 || options & GCW_INDICES != 0 || options & GCW_NOFLOAT == 0 {
+        return fail(ERROR_INVALID_PARAMETER, 0);
+    }
+    let Some((_, _, logfont)) = dc_font(hdc) else { return fail(ERROR_INVALID_HANDLE, 0) };
+    let chars: alloc::vec::Vec<u16> = if string != 0 {
+        let mut bytes = alloc::vec![0u8; count as usize * 2];
+        if copy_from_user(&mut bytes, u64::from(string)).is_err() {
+            return NtStatus(0);
+        }
+        bytes.chunks_exact(2).map(|pair| u16::from_le_bytes([pair[0], pair[1]])).collect()
+    } else {
+        (first..first + count).map(|unit| unit as u16).collect()
+    };
+    let Some(widths) = win32k::gdi::fontobj::char_widths(&logfont, &chars) else { return NtStatus(0) };
+    let bytes: alloc::vec::Vec<u8> = widths.iter().flat_map(|width| width.to_le_bytes()).collect();
+    NtStatus(u32::from(copy_to_user(u64::from(buffer), &bytes).is_ok()))
+}
+
+/// NtGdiGetOutlineTextMetricsInternalW(hdc, cjSize, potm, pTmd) : la taille
+/// de l'OUTLINETEXTMETRICW de la police du DC, écrite en `potm` s'il y a la
+/// place (`cjSize` octets au moins) ; rien n'y écrit sans `potm` — c'est
+/// la demande de la taille. La `gdi32` de ReactOS relit ses noms comme des
+/// chaînes larges ; `pTmd` n'est pas lu (ReactOS 0.4.16 ne l'écrit pas non
+/// plus). 0 pour un DC qui n'est pas au processus, sans la police
+/// installée, sans la place, ou pour un tampon qu'on ne peut écrire.
+pub(super) fn nt_gdi_get_outline_text_metrics_internal_w(arguments: &[u32]) -> NtStatus {
+    let [hdc, size, out, _tmd] = arguments[..4] else { unreachable!("4 arguments") };
+    let Some((_, _, logfont)) = dc_font(hdc) else { return fail(ERROR_INVALID_HANDLE, 0) };
+    let Some(bytes) = win32k::gdi::fontobj::outline_metrics(&logfont) else { return NtStatus(0) };
+    if out == 0 {
+        return NtStatus(bytes.len() as u32);
+    }
+    if (size as usize) < bytes.len() {
+        return fail(ERROR_INSUFFICIENT_BUFFER, 0);
+    }
+    NtStatus(if copy_to_user(u64::from(out), &bytes).is_ok() { bytes.len() as u32 } else { 0 })
 }
 
 /// NtGdiGetFontFamilyInfo(Dc, LogFont, Info, *InfoCount) : les polices
