@@ -171,6 +171,11 @@ fn the_mino_layer_installs_a_system_that_logs_on() {
     assert_eq!(value(software, winlogon, "DefaultPassword").unwrap().data, sz(""));
     let profiles = value(software, "Microsoft\\Windows NT\\CurrentVersion\\ProfileList", "ProfilesDirectory").unwrap();
     assert_eq!(profiles.data, sz("%SystemDrive%\\Documents and Settings"));
+    // msi's ProgramFilesFolder: without it, 7-Zip went to C:\WINDOWS\System32.
+    let program_files = value(software, "Microsoft\\Windows\\CurrentVersion", "ProgramFilesDir").unwrap();
+    assert_eq!((program_files.data_type, program_files.data.clone()), (REG_SZ, sz("C:\\Program Files")));
+    let common = value(software, "Microsoft\\Windows\\CurrentVersion", "CommonFilesDir").unwrap();
+    assert_eq!(common.data, sz("C:\\Program Files\\Common Files"));
 }
 
 /// The pinned ReactOS hives (`cargo xtask fetch-userland`), layered as

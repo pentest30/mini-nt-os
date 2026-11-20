@@ -49,6 +49,13 @@ HKLM,"SYSTEM\CurrentControlSet\Services\Tcpip\Parameters","Domain",0x00000000,""
 ; Le répertoire des profils d'un système installé (le LiveCD : \Profiles).
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList","ProfilesDirectory",0x00020000,"%SystemDrive%\Documents and Settings"
 
+; Le répertoire des programmes et celui des fichiers communs, que syssetup
+; écrit à l'installation de ReactOS (InitializeProgramFilesDir, en REG_SZ
+; développé) : msi en tire ProgramFilesFolder et CommonFilesFolder, et
+; installait sans eux dans son répertoire courant (C:\WINDOWS\System32).
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion","ProgramFilesDir",0x00000000,"C:\Program Files"
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion","CommonFilesDir",0x00000000,"C:\Program Files\Common Files"
+
 ; Les paramètres régionaux de l'utilisateur, que la page des paramètres
 ; régionaux de l'installation de ReactOS écrit (la clé du LiveCD est vide) :
 ; winlogon les lit à l'ouverture de session (SetDefaultLanguage), et la
