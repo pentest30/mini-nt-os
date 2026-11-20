@@ -11,7 +11,7 @@
 //! | SYSENTER | KiFastCallEntry, vers le même KiSystemService |
 //!
 //! Et le service qui dit ce que `DbgPrintEx` laisse passer
-//! ([`nt_query_debug_filter_state`]) : tout.
+//! ([`nt_query_debug_filter_state`]) : le niveau ERROR, comme le masque d'XP.
 
 use abi::ntstatus::{NtStatus, STATUS_ASSERTION_FAILURE, STATUS_SUCCESS};
 use hal::trap::{set_trap_hook, KTrapFrame, SYSENTER};
@@ -164,10 +164,19 @@ fn service(frame: &mut KTrapFrame, number: u32, arguments: u32) {
 }
 
 /// NtQueryDebugFilterState(ComponentId, Level) : un message de `DbgPrintEx`
-/// de ce composant et de ce niveau va-t-il au débogueur ? Le noyau de Mino
-/// envoie tout au port série (`DbgPrint`, ci-dessus) : `TRUE` pour tous, comme un
-/// noyau dont chaque masque de composant serait plein. Le service rend ce
-/// booléen comme NTSTATUS, comme XP.
-pub(super) fn nt_query_debug_filter_state(_arguments: &[u32]) -> NtStatus {
-    NtStatus(1)
+/// de ce composant et de ce niveau va-t-il au débogueur ? Comme XP et comme
+/// ReactOS (`Kd_WIN2000_Mask = 1`, le filtre `Debug Print Filter` du
+/// registre absent) : le niveau ERROR (0) passe — celui du `DbgPrint` sans
+/// composant et de `DPRINT1` — les niveaux WARNING, INFO et TRACE sont
+/// filtrés. Le service rend ce booléen comme NTSTATUS, comme XP.
+///
+/// C'est ce filtre qui décide si le `DbgPrintEx` de `ntdll` formate son
+/// message avant de l'envoyer : sans lui, le TRACE de `LCMapStringW`
+/// (locale.c:3812, dont le `debugstr_wn` parti a laissé `srclen` à la place
+/// du pointeur) lisait `strlen(0x100)` chez chaque appel — l'accès mémoire
+/// que le gestionnaire de Delphi enchaînait en boucle imbriquée jusqu'à
+/// `STATUS_STACK_OVERFLOW` chez les installeurs Inno Setup 5.4.
+pub(super) fn nt_query_debug_filter_state(arguments: &[u32]) -> NtStatus {
+    let [_component, level] = arguments[..2] else { unreachable!("2 arguments") };
+    NtStatus(u32::from(level == 0))
 }

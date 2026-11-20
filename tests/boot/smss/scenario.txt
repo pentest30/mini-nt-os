@@ -159,8 +159,10 @@ expect = [m4]   NtCallbackReturn (0x0016):
 forbid = win32k: GetCharsetInfo for keyboard layout
 expect = [m4]   NtUserGetKeyboardLayoutList (0x119b): 2 calls, the first returned 0x00000001
 # Its RPC server (M5, step 24): the pipe \pipe\winreg, whose instance
-# listens, overlapped, in rpcrt4's server thread.
-expect = Pipe name: \??\pipe\winreg
+# listens, overlapped, in rpcrt4's server thread. The TRACE of npipe.c
+# that named the pipes is filtered since the debug print filter follows
+# XP (NtQueryDebugFilterState: the ERROR level only); the [m4] probes of
+# the two calls carry the same evidence.
 expect = [m4]   NtCreateNamedPipeFile (0x002e):
 expect = [m4]   NtFsControlFile (0x0058):
 forbid = sys: NtCreateNamedPipeFile (0x002e) is not implemented
@@ -176,8 +178,6 @@ expect = [boot] SECURITY hive mounted at \REGISTRY\MACHINE\SECURITY
 expect = [boot] SAM hive mounted at \REGISTRY\MACHINE\SAM
 expect = [boot] Se: \Security\LSA_AUTHENTICATION_INITIALIZED, \SeRmCommandPort and \SeLsaInitEvent, waiting for lsass
 expect = [boot] Se: lsass (PID
-expect = Pipe name: \??\pipe\lsarpc
-expect = Pipe name: \??\pipe\ntsvcs
 expect = [m4]   NtSetDefaultLocale (0x00e0): 1 calls, the first returned 0x00000000
 expect = [m4]   NtUserSetLogonNotifyWindow (0x1208): 1 calls, the first returned 0x00000001
 forbid = WL: Failed to execute services

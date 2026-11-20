@@ -4576,7 +4576,8 @@ fn information_services_self_test() {
     code.call_args(query_system, &[v(3), v(PART), v(32), v(PART_LENGTH)]).store_eax(status(4));
     code.call_args(query_system, &[v(3), v(TIME_OF_DAY), v(49), v(0)]).store_eax(status(5));
     code.call_args(query_system, &[v(50), v(RANGE), v(4), v(RANGE_LENGTH)]).store_eax(status(6));
-    code.call_args(services::NtQueryDebugFilterState, &[v(0xC8), v(2)]).store_eax(status(7));
+    code.call_args(services::NtQueryDebugFilterState, &[v(0xC8), v(0)]).store_eax(status(7));
+    code.call_args(services::NtQueryDebugFilterState, &[v(0xC8), v(2)]).store_eax(status(28));
     code.call_args(services::NtCreateEvent, &[v(EVENT), v(0x001F_0003), v(0), v(0), v(0)]).store_eax(status(8));
     code.call_args(set_object, &[m(EVENT), v(4), v(FLAGS_ON), v(2)]).store_eax(status(9));
     code.call_args(services::NtClose, &[m(EVENT)]).store_eax(status(10));
@@ -4631,7 +4632,7 @@ fn information_services_self_test() {
     }
     let after = hal::rtc::system_time();
 
-    let statuses: alloc::vec::Vec<NtStatus> = (0..28).map(|i| NtStatus(read(status(i)))).collect();
+    let statuses: alloc::vec::Vec<NtStatus> = (0..29).map(|i| NtStatus(read(status(i)))).collect();
     // 2020-01-01: the real-time clock gives a date, not 1601.
     const YEAR_2020: u64 = 132_223_104_000_000_000;
     assert!(hal::rtc::boot_time() > YEAR_2020, "the boot time comes from the real-time clock");
@@ -4648,7 +4649,11 @@ fn information_services_self_test() {
     assert_eq!(read(PART + 32), 0xAAAA_AAAA, "no more than the part asked for");
     assert_eq!(statuses[5], STATUS_INFO_LENGTH_MISMATCH, "more than the information");
     assert_eq!((statuses[6], read(RANGE), read(RANGE_LENGTH)), (STATUS_SUCCESS, 0x8000_0000, 4), "range start");
-    assert_eq!(statuses[7], NtStatus(1), "NtQueryDebugFilterState: TRUE, everything is printed");
+    assert_eq!(
+        (statuses[7], statuses[28]),
+        (NtStatus(1), NtStatus(0)),
+        "NtQueryDebugFilterState: the ERROR level passes, the INFO level is filtered (the broken TRACE of LCMapStringW stays out)"
+    );
     assert_eq!((statuses[8], statuses[9]), (STATUS_SUCCESS, STATUS_SUCCESS), "a handle protected from close");
     assert_eq!(statuses[10], STATUS_HANDLE_NOT_CLOSABLE, "NtClose refuses it");
     assert_eq!(statuses[11], STATUS_INFO_LENGTH_MISMATCH, "two BOOLEANs, no more");
@@ -8973,6 +8978,13 @@ fn process_round() -> ([u32; 2], [u32; 2]) {
     const OVERFLOW: [u8; 3] = [0x50, 0xEB, 0xFD];
     /// A guard page outside any stack, in `guarded`.
     const GUARD_VA: u32 = 0x50_0000;
+    // mov eax, fs:[0x18]; mov edx, [eax+8] (StackLimit); sub edx, 0x2000;
+    // mov dword [edx], 1; jmp $ — `noaccess` writes below its limit, in its
+    // stack's reservation.
+    let noaccess = [
+        0x64, 0xA1, 0x18, 0x00, 0x00, 0x00, 0x8B, 0x50, 0x08, 0x81, 0xEA, 0x00, 0x20, 0x00, 0x00, 0xC7, 0x02, 0x01,
+        0x00, 0x00, 0x00, 0xEB, 0xFE,
+    ];
     // mov ecx, 0x2000; push eax; dec ecx; jnz push: 32 KiB pushed; then
     // mov dword [DATA+8], 1; jmp $.
     let mut grow = [0u8; 21];
@@ -8999,7 +9011,7 @@ fn process_round() -> ([u32; 2], [u32; 2]) {
     };
     // Thread `i`'s code at RVA 0x1000 + 0x20 * i.
     let image = |codes: &[&[u8]], marker: &[u8; 8]| {
-        let mut text = [0xCC; 0x60];
+        let mut text = [0xCC; 0x80];
         for (i, code) in codes.iter().enumerate() {
             text[0x20 * i..0x20 * i + code.len()].copy_from_slice(code);
         }
@@ -9007,7 +9019,7 @@ fn process_round() -> ([u32; 2], [u32; 2]) {
         data[0x20..].copy_from_slice(marker);
         let file = Pe32Builder::new(IMAGE_BASE)
             .entry_point(0x1000)
-            .section(".text", 0x1000, 0x60, &text, pe::SCN_CNT_CODE | pe::SCN_MEM_EXECUTE | pe::SCN_MEM_READ)
+            .section(".text", 0x1000, 0x80, &text, pe::SCN_CNT_CODE | pe::SCN_MEM_EXECUTE | pe::SCN_MEM_READ)
             .section(".data", 0x2000, 0x28, &data, pe::SCN_MEM_READ | pe::SCN_MEM_WRITE)
             .build();
         Section::create_image(Arc::from(file)).expect("image section")
@@ -9143,7 +9155,7 @@ fn process_round() -> ([u32; 2], [u32; 2]) {
     assert_eq!(wait(d.dispatcher_object(), 100), STATUS_WAIT_0, "a thread ended before its first run lingered");
 
     // The stack grows by its guard page, down to its overflow.
-    let stacks = image(&[&grow, &OVERFLOW, &guarded], b"stacks\0\0");
+    let stacks = image(&[&grow, &OVERFLOW, &guarded, &noaccess], b"stacks\0\0");
     let (e, te) = start(&stacks, "grows.exe", &[0x1000]);
     wait_until("a thread did not push 32 KiB", &|| read_u32(&e, DATA + 8) == 1);
     let tib = offset_of!(Teb32, nt_tib) as u32;
@@ -9156,13 +9168,19 @@ fn process_round() -> ([u32; 2], [u32; 2]) {
     ps::terminate_process(e.clone(), NtStatus(0xE0E0)).expect("terminate grows");
     let (f, tf) = start(&stacks, "overflow.exe", &[0x1020]);
     let (g, _) = start(&stacks, "guarded.exe", &[]);
+    // An access violation inside a stack's reservation is a stack overflow,
+    // never an extension: a committed PAGE_NOACCESS page below the limit
+    // stays no-access (rewriting its protection would silently resume the
+    // write that must not happen).
+    let (n, _tn) = start(&stacks, "noaccess.exe", &[]);
+    let tn = alloc::vec![thread(&n, &stacks, IMAGE_BASE + 0x1060)];
     let commit = AllocType::MEM_RESERVE | AllocType::MEM_COMMIT;
     let guard = g.with_space(|space| {
         space.allocate(u64::from(GUARD_VA), PAGE_SIZE, commit, PageProtect::READWRITE | PageProtect::GUARD)
     });
     guard.expect("a space").expect("a guard page");
     let tg = alloc::vec![thread(&g, &stacks, IMAGE_BASE + 0x1040)];
-    for process in [&e, &f, &g] {
+    for process in [&e, &f, &g, &n] {
         assert_eq!(wait(process.dispatcher_object(), 3000), STATUS_WAIT_0, "{} did not end", process.image_file_name());
     }
 
@@ -9226,6 +9244,7 @@ fn process_round() -> ([u32; 2], [u32; 2]) {
         (&e, &te, NtStatus(0xE0E0)),
         (&f, &tf, STATUS_STACK_OVERFLOW),
         (&g, &tg, STATUS_GUARD_PAGE_VIOLATION),
+        (&n, &tn, STATUS_STACK_OVERFLOW),
         (&h, &th, NtStatus(0xDE0F)),
         (&i, &ti, STATUS_ACCESS_VIOLATION),
     ];

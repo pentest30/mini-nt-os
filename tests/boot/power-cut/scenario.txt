@@ -37,14 +37,14 @@ disk = system
 boots = 3
 cpus = default, intel
 timeout = 420
-power-cut = 2 => Documents and Settings\Administrator\Desktop\*.* => everything written
+power-cut = 2 => ReadDirectoryChangesW for 'C:\Documents and Settings\Administrator\Desktop' => everything written
 
 expect = [boot] ACPI: power off through PM1a_CNT
 expect = [boot] lazy writer: the hives and the mounted volumes written back every second
 expect = [minoinit] done; rebooting
 expect = [power] NtShutdownSystem: reboot requested
 expect = [power] the hives and the volumes written back
-expect-last = IncrementRefCount(S-1-5-21- => We are logged on => of explorer.exe => Documents and Settings\Administrator\Desktop\*.* => everything written
+expect-last = We are logged on => of explorer.exe => ReadDirectoryChangesW for 'C:\Documents and Settings\Administrator\Desktop' => everything written
 
 forbid = IncrementRefCount() failed
 forbid = WL: LoadUserProfileW() failed

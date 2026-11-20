@@ -358,16 +358,50 @@ Les planchers de KeePass et de Notepad++ attendent la fenêtre du programme et i
 
 Ce qui vient ensuite, dans l'ordre où cela débloque le plus :
 
-1. **STATUS_BAD_STACK d'Inno Setup 5.4** (PeaZip, GIMP).
-2. **Authenticode** (Notepad++) : WinVerifyTrust et la chaîne de certificats de `wintrust` et `crypt32` de ReactOS.
-3. **NtQueryInformationProcess, classe 7** (ProcessDebugPort ; AbiWord et SumatraPDF) : rendue sans handler, sa
+1. **Authenticode** (Notepad++) : WinVerifyTrust et la chaîne de certificats de `wintrust` et `crypt32` de ReactOS.
+2. **NtQueryInformationProcess, classe 7** (ProcessDebugPort ; AbiWord et SumatraPDF) : rendue sans handler, sa
    sortie reste ce qu'on lui donne et AbiWord lit son débogueur au pointeur nul (sa faute à `0x3C`, dans
    `AbiWord.exe`).
-4. **Le profil que `userenv` ne trouve pas** (SumatraPDF) : le banc remplace `winlogon` et tourne sous le jeton
+3. **Le profil que `userenv` ne trouve pas** (SumatraPDF) : le banc remplace `winlogon` et tourne sous le jeton
    de System, sans session ouverte.
-5. **KeePass** : WM_CLOSE de sa fenêtre principale, et son titre.
-6. Et toujours : l'enregistrement de DLL de WinMerge, le renommage (FileRenameInformation), EReadError de Dev-C++,
+4. **KeePass** : WM_CLOSE de sa fenêtre principale, et son titre.
+5. Et toujours : l'enregistrement de DLL de WinMerge, le renommage (FileRenameInformation), EReadError de Dev-C++,
    les processus d'aide de Dev-C++.
+
+### STATUS_BAD_STACK d'Inno Setup 5.4, le 2026-11-20
+
+Ce qui manquait, en deux couches.
+
+**La pile.** `RtlUnwind` de `ntdll` refuse tout cadre SEH posé sous `StackLimit` (`STATUS_BAD_STACK`), et la
+croissance de pile de Mino laissait les deux désaccordés : la faute de garde committe la page touchée mais la
+limite ne suivait pas, et la première page de la réserve restait au-dessus d'une pile utilisable.
+`mm::fault::stack_extension` récrit : la limite suit toujours la page touchée, la garde ne descend que s'il
+lui reste une page (la première page de la réservation ne se commite jamais), et une violation d'accès dans
+la réserve étend la pile aussi — `MiCheckForUserStackOverflow` est appelé des deux, et une pile pleine n'a
+plus de garde. Les deux services rendent `STATUS_STACK_OVERFLOW` à la première page de la réserve. Le smoke
+vérifie les deux (`overflow` pousse jusqu'au dépassement, `guarded` hors de la pile).
+
+**Le filtre des messages de débogage.** `NtQueryDebugFilterState` de Mino rendait `TRUE` pour tous les
+composants et tous les niveaux, si bien que le `DbgPrintEx` de `ntdll` formatait chaque message chez
+l'appelant avant de l'envoyer. Or le TRACE de `LCMapStringW` (locale.c:3812 du payload) pousse **`srclen` à
+la place du pointeur que `debugstr_wn` devrait rendre** : le `%s` du format recevait `0x100`, et le
+`strlen` du formateur lisait l'adresse 0x100, hors de toute projection — un accès mémoire de plus à chaque
+`LCMapStringW` du traitement d'exception de Delphi. Le filtre suit XP maintenant (`Kd_WIN2000_Mask = 1` de
+ReactOS : le niveau ERROR seul passe — celui du `DbgPrint` sans composant, de `DPRINT1` et de minoinit) ; le
+TRACE de locale.c ne se formate plus du tout. Les autres niveaux attendent la clé de registre `Debug Print
+Filter` (pas encore lue).
+
+**Ce qui reste.** L'installeur finit toujours sur `STATUS_STACK_OVERFLOW`, mais sans plus aucune exception
+de débogage dans la boucle : son propre code recurse (chaque niveau refaute à `0x401dc7`, lisant la page
+`0xf46f61` de son tas, non projetée chez Mino) et la récursion épuise la réserve d'un fil. C'est le
+blocage suivant : pourquoi la page du tas que la cible tient projetée ne l'est pas ici — le commit du tas ou
+un pointeur au-delà du bloc.
+
+**Scénarios réajustés** pour les lignes de TRACE que le filtre ne laisse plus imprimer : `logon` (le
+marqueur du listage du bureau prend la ligne ReadDirectoryChangesW d'explorer), `power-cut` (sa chaîne
+`expect-last`, et le déclencheur de la coupure), `smss` (les trois `Pipe name` de npipe.c, dont la preuve
+est déjà dans les sondes `[m4]` des deux appels). Tests hôtes : `stack_extension` récrit ; le smoke attend
+FALSE pour (0xC8, 2).
 
 ### Les métriques des polices, le 2026-11-20
 

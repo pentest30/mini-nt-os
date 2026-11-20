@@ -28,9 +28,10 @@ traite l'une d'elles y ajoute la section de sa PR (voir « Ajouter une évaluati
 | [134](https://github.com/pentest30/mini-nt-os/pull/134) | 1 | 0 | 0 | 0 | 0 | 1 | 0 |
 | [149](https://github.com/pentest30/mini-nt-os/pull/149) | 3 | 1 | 1 | 1 | 0 | 0 | 2 |
 | [152](https://github.com/pentest30/mini-nt-os/pull/152) | 7 | 7 | 0 | 0 | 0 | 0 | 1 |
-| **Total** | **59** | **32** | **6** | **4** | **1** | **16** | **4** |
+| [155](https://github.com/pentest30/mini-nt-os/pull/155) | 3 | 3 | 0 | 0 | 0 | 0 | 0 |
+| **Total** | **62** | **35** | **6** | **4** | **1** | **16** | **4** |
 
-Toutes les remarques jusqu'à la PR 152 sont évaluées.
+Toutes les remarques jusqu'à la PR 155 sont évaluées.
 
 Ce qui ressort :
 
@@ -218,3 +219,13 @@ Manqués :
   (`otmpFullName`) : 216 octets, pas les 224 de l'ABI de Windows (six noms). Les champs de plus n'étaient jamais lus
   — la `gdi32` épinglée n'en a pas — mais la taille était fausse. Trouvé en vérifiant les deux remarques de Codex
   contre `wingdi.h`. Corrigé avec elles : quatre noms, 216 octets, `size_of` testé.
+
+## PR 155 : la croissance de pile et le filtre de débogage
+
+Commit relu par le bot : `d3aa0c8` (puis `6db467c`, hors des lignes changées). Évalué le 2026-11-20. Trois remarques.
+
+| Où | Remarque | Verdict | Pourquoi | Suite |
+|---|---|---|---|---|
+| `kernel/mm/src/address_space.rs:700` | L'accès mémoire sur une page committée de la pile devient une réussite silencieuse : `allocate` ne rend pas `STATUS_ALREADY_COMMITTED` sur une page déjà committée — `VadNode::commit` rend un changement dès que la protection diffère, et `map_commit` réécrit la page à READWRITE. Le chemin AV du `page_fault_hook` passe donc par là : une écriture dans une page PAGE_NOACCESS de la réserve de la pile réussit, et la limite suit. | Fondé | `virtual_alloc::allocate` → `VadNode::commit(start, end, protect)` : une page committée rend `PageChange { old_state: Committed, old_protect }` et `map_commit` appelle `m.protect_page(va, protect)` — jamais `ALREADY_COMMITTED`. L'écriture d'une page NOACCESS de la réserve réusissait en silence. | `MiCheckForUserStackOverflow` fidèle : l'extension ne se fait que par une faute de garde ; une violation d'accès dans la réserve délivre `STATUS_STACK_OVERFLOW` (`AddressSpace::stack_overflow`, la réserve lue du TEB), sans commiter ni reprendre. L'allocation-rewrite a disparu. Test de régression dans le smoke : `noaccess.exe` commite une page PAGE_NOACCESS sous sa limite et écrit dedans — le processus doit finir sur `STATUS_STACK_OVERFLOW` (l'écriture réusissait et le fil tournait à l'infini avant). |
+| `docs/compat/applications.md:397` | « la page du tas que Windows tient projetée » : le nom de marque, que CLAUDE.md écarte au profit de « compatible XP ». | Fondé | La règle de rédaction du dépôt. | « la page du tas que la cible tient projetée ». |
+| `kernel/ntoskrnl/src/main.rs:4580` | Le résultat du filtre pour le niveau 2 (`store_eax(status(14))`) est écrasé par `NtCreateDirectoryObject(...).store_eax(status(14))` du même test : `statuses[14]` porte le statut du répertoire, et l'assertion `(1, 0)` passe quel que soit le filtre. | Fondé | Les deux appels du même test écrivent le slot 14, et l'assertion tourne après tout le programme. | Le filtre va au slot 28 (le vecteur des statuts élargi à 29), l'assertion `(statuses[7], statuses[28]) == (1, 0)` ne passe plus que si le niveau 2 est filtré. |

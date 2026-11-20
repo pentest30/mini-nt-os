@@ -667,11 +667,33 @@ impl AddressSpace {
         }
     }
 
-    /// MiCheckForUserStackOverflow : la faute en `addr` vient de lever une
-    /// page de garde, dans le thread dont le TEB est en `teb`. Si elle est
-    /// dans sa pile, la garde descend d'une page, `StackLimit` suit, et
-    /// l'accès reprend (`STATUS_SUCCESS`) ; sinon l'exception que donne
-    /// [`fault::stack_extension`].
+    /// `MiCheckForUserStackOverflow` : l'accès en `addr` violé-t-il la
+    /// réserve de la pile du thread dont le TEB est en `teb` ? La pile ne
+    /// grandit que par sa page de garde — une violation d'accès dedans est
+    /// un dépassement (`STATUS_STACK_OVERFLOW`), jamais une extension.
+    pub fn stack_overflow(&self, addr: u64, teb: u32) -> bool {
+        let tib = u64::from(teb) + offset_of!(Teb32, nt_tib) as u64;
+        let field = |at: u64| {
+            let mut bytes = [0u8; 4];
+            self.read_bytes(at, &mut bytes).map(|()| u64::from(u32::from_le_bytes(bytes)))
+        };
+        match (
+            field(tib + offset_of!(NtTib32, stack_base) as u64),
+            field(u64::from(teb) + offset_of!(Teb32, deallocation_stack) as u64),
+        ) {
+            (Ok(base), Ok(bottom)) => (bottom..base).contains(&addr),
+            _ => false,
+        }
+    }
+
+    /// `MiCheckForUserStackOverflow`, la mémoire : la faute en `addr` vient
+    /// de lever la page de garde du thread dont le TEB est en `teb`. La page
+    /// touchée est déjà committée sans sa garde par la résolution de la
+    /// faute ; la garde descend d'une page s'il lui en reste une (la
+    /// première de la réservation ne se commite jamais, et une pile pleine
+    /// n'en a plus), et sa limite suit toujours la page touchée — une pile
+    /// utilisable sous `StackLimit`, et `RtlUnwind` la refuse
+    /// (`STATUS_BAD_STACK` chez l'installeur d'Inno Setup 5.4).
     ///
     /// # IRQL
     /// < DISPATCH_LEVEL.
@@ -691,7 +713,9 @@ impl AddressSpace {
             Ok(extension) => extension,
             Err(status) => return status,
         };
-        if self.allocate(guard, PAGE, AllocType::MEM_COMMIT, PageProtect::READWRITE | PageProtect::GUARD).is_err() {
+        if guard > bottom
+            && self.allocate(guard, PAGE, AllocType::MEM_COMMIT, PageProtect::READWRITE | PageProtect::GUARD).is_err()
+        {
             return STATUS_STACK_OVERFLOW;
         }
         match self.write_bytes(tib + offset_of!(NtTib32, stack_limit) as u64, &(limit as u32).to_le_bytes()) {

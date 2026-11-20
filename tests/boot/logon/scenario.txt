@@ -89,12 +89,11 @@ expect = [minoinit] DllRegisterServer browseui.dll: 0
 expect = [minoinit] DllRegisterServer shell32.dll: 0
 expect = [minoinit] RunOnceEx: 0
 expect = [minoinit] done; rebooting
-expect = IncrementRefCount(S-1-5-21-
 expect = We are logged on
 expect = of userinit.exe
 expect = of explorer.exe
-expect = Documents and Settings\Administrator\Desktop\*.*
-keys = Documents and Settings\Administrator\Desktop\*.* => move:-300,193 move:-300,193 press:1 release
+expect = ReadDirectoryChangesW for 'C:\Documents and Settings\Administrator\Desktop'
+keys = ReadDirectoryChangesW for 'C:\Documents and Settings\Administrator\Desktop' => move:-300,193 move:-300,193 press:1 release
 screen = 640 790 D4D0C8
 screen = 640 773 FFFFFF
 screen = 2 786 404040
