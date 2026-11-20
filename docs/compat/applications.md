@@ -394,7 +394,7 @@ Filter` (pas encore lue).
 **Ce qui reste.** L'installeur finit toujours sur `STATUS_STACK_OVERFLOW`, mais sans plus aucune exception
 de débogage dans la boucle : son propre code recurse (chaque niveau refaute à `0x401dc7`, lisant la page
 `0xf46f61` de son tas, non projetée chez Mino) et la récursion épuise la réserve d'un fil. C'est le
-blocage suivant : pourquoi la page du tas que Windows tient projetée ne l'est pas ici — le commit du tas ou
+blocage suivant : pourquoi la page du tas que la cible tient projetée ne l'est pas ici — le commit du tas ou
 un pointeur au-delà du bloc.
 
 **Scénarios réajustés** pour les lignes de TRACE que le filtre ne laisse plus imprimer : `logon` (le

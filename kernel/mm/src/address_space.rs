@@ -30,10 +30,9 @@ use core::mem::offset_of;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use abi::ntstatus::{
-    NtStatus, STATUS_ACCESS_VIOLATION, STATUS_ALREADY_COMMITTED, STATUS_CONFLICTING_ADDRESSES,
-    STATUS_GUARD_PAGE_VIOLATION, STATUS_IMAGE_NOT_AT_BASE, STATUS_INVALID_PAGE_PROTECTION, STATUS_INVALID_PARAMETER,
-    STATUS_INVALID_VIEW_SIZE, STATUS_MAPPED_ALIGNMENT, STATUS_NOT_MAPPED_VIEW, STATUS_NO_MEMORY, STATUS_STACK_OVERFLOW,
-    STATUS_SUCCESS,
+    NtStatus, STATUS_ACCESS_VIOLATION, STATUS_CONFLICTING_ADDRESSES, STATUS_GUARD_PAGE_VIOLATION,
+    STATUS_IMAGE_NOT_AT_BASE, STATUS_INVALID_PAGE_PROTECTION, STATUS_INVALID_PARAMETER, STATUS_INVALID_VIEW_SIZE,
+    STATUS_MAPPED_ALIGNMENT, STATUS_NOT_MAPPED_VIEW, STATUS_NO_MEMORY, STATUS_STACK_OVERFLOW, STATUS_SUCCESS,
 };
 use abi::teb32::{NtTib32, Teb32};
 use hal::sync::KSpinLock;
@@ -668,11 +667,33 @@ impl AddressSpace {
         }
     }
 
-    /// MiCheckForUserStackOverflow : la faute en `addr` vient de lever une
-    /// page de garde, dans le thread dont le TEB est en `teb`. Si elle est
-    /// dans sa pile, la garde descend d'une page, `StackLimit` suit, et
-    /// l'accès reprend (`STATUS_SUCCESS`) ; sinon l'exception que donne
-    /// [`fault::stack_extension`].
+    /// `MiCheckForUserStackOverflow` : l'accès en `addr` violé-t-il la
+    /// réserve de la pile du thread dont le TEB est en `teb` ? La pile ne
+    /// grandit que par sa page de garde — une violation d'accès dedans est
+    /// un dépassement (`STATUS_STACK_OVERFLOW`), jamais une extension.
+    pub fn stack_overflow(&self, addr: u64, teb: u32) -> bool {
+        let tib = u64::from(teb) + offset_of!(Teb32, nt_tib) as u64;
+        let field = |at: u64| {
+            let mut bytes = [0u8; 4];
+            self.read_bytes(at, &mut bytes).map(|()| u64::from(u32::from_le_bytes(bytes)))
+        };
+        match (
+            field(tib + offset_of!(NtTib32, stack_base) as u64),
+            field(u64::from(teb) + offset_of!(Teb32, deallocation_stack) as u64),
+        ) {
+            (Ok(base), Ok(bottom)) => (bottom..base).contains(&addr),
+            _ => false,
+        }
+    }
+
+    /// `MiCheckForUserStackOverflow`, la mémoire : la faute en `addr` vient
+    /// de lever la page de garde du thread dont le TEB est en `teb`. La page
+    /// touchée est déjà committée sans sa garde par la résolution de la
+    /// faute ; la garde descend d'une page s'il lui en reste une (la
+    /// première de la réservation ne se commite jamais, et une pile pleine
+    /// n'en a plus), et sa limite suit toujours la page touchée — une pile
+    /// utilisable sous `StackLimit`, et `RtlUnwind` la refuse
+    /// (`STATUS_BAD_STACK` chez l'installeur d'Inno Setup 5.4).
     ///
     /// # IRQL
     /// < DISPATCH_LEVEL.
@@ -692,20 +713,6 @@ impl AddressSpace {
             Ok(extension) => extension,
             Err(status) => return status,
         };
-        // La page touchée : committée sans sa garde par la résolution d'une
-        // faute de garde, ou réservée sous la limite — une violation
-        // d'accès dans la réserve l'y rejoint (MiCheckForUserStackOverflow
-        // est appelé des deux, et l'accès y reprend) ; déjà committée
-        // autrement, elle reste ce qu'elle est.
-        match self.allocate(limit, PAGE, AllocType::MEM_COMMIT, PageProtect::READWRITE) {
-            Ok(_) | Err(STATUS_ALREADY_COMMITTED) => {}
-            Err(_) => return STATUS_NO_MEMORY,
-        }
-        // La garde descend d'une page s'il lui en reste une : la première
-        // page de la réservation ne se commite jamais avec une garde, et
-        // une pile pleine n'en a plus — mais sa limite suit toujours la
-        // page touchée (une pile utilisable sous StackLimit, et RtlUnwind
-        // la refuse : STATUS_BAD_STACK chez l'installeur d'Inno Setup 5.4).
         if guard > bottom
             && self.allocate(guard, PAGE, AllocType::MEM_COMMIT, PageProtect::READWRITE | PageProtect::GUARD).is_err()
         {

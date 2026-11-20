@@ -177,10 +177,11 @@ pub fn stack_extension(addr: u64, bottom: u64, base: u64) -> Result<(u64, u64), 
 /// d'un espace d'adresses, sinon `STATUS_SUCCESS` si l'accès peut reprendre
 /// ou l'exception qu'il lève. Une garde levée dans la pile du thread courant
 /// l'étend (son TEB vient du KPCR), que l'accès vienne du thread ou du noyau
-/// qui copie pour lui (`ke::usermem`) ; une violation d'accès y est aussi
-/// regardée : sous la partie committée de sa pile, dans sa réservation,
-/// c'est un dépassement de pile (MiCheckForUserStackOverflow est appelé des
-/// deux), et une pile pleine n'a plus de garde.
+/// qui copie pour lui (`ke::usermem`) ; une violation d'accès dans sa
+/// réserve est un dépassement de pile (`MiCheckForUserStackOverflow` : la
+/// pile ne grandit que par sa garde, jamais par une violation — étendre
+/// ici réécrirait la protection d'une page committée, et un accès de trop
+/// reprendrait en silence).
 ///
 /// # IRQL
 /// < DISPATCH_LEVEL (hal le vérifie avant l'appel).
@@ -191,11 +192,11 @@ pub fn page_fault_hook(addr: u64, error: PageFaultErrorCode) -> Option<NtStatus>
     let space = AddressSpace::current()?;
     let status = space.access_fault(addr, Access::from_error_code(error));
     let teb = hal::pcr::current().teb();
-    if teb != 0 && matches!(status, STATUS_GUARD_PAGE_VIOLATION | STATUS_ACCESS_VIOLATION) {
-        let extended = space.extend_user_stack(addr, teb);
-        if status == STATUS_GUARD_PAGE_VIOLATION || extended != STATUS_GUARD_PAGE_VIOLATION {
-            return Some(extended);
-        }
+    if teb != 0 && status == STATUS_GUARD_PAGE_VIOLATION {
+        return Some(space.extend_user_stack(addr, teb));
+    }
+    if teb != 0 && status == STATUS_ACCESS_VIOLATION && space.stack_overflow(addr, teb) {
+        return Some(STATUS_STACK_OVERFLOW);
     }
     Some(status)
 }
