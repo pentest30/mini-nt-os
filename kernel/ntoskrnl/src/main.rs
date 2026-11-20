@@ -9172,7 +9172,7 @@ fn process_round() -> ([u32; 2], [u32; 2]) {
     // never an extension: a committed PAGE_NOACCESS page below the limit
     // stays no-access (rewriting its protection would silently resume the
     // write that must not happen).
-    let (n, tn) = start(&stacks, "noaccess.exe", &[]);
+    let (n, _tn) = start(&stacks, "noaccess.exe", &[]);
     let tn = alloc::vec![thread(&n, &stacks, IMAGE_BASE + 0x1060)];
     let commit = AllocType::MEM_RESERVE | AllocType::MEM_COMMIT;
     let guard = g.with_space(|space| {
