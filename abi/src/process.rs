@@ -35,6 +35,9 @@ pub const PROCESS_BASIC_INFORMATION: u32 = 0;
 /// ProcessBasePriority: a KPRIORITY, the base priority of the process's
 /// threads (NtSetInformationProcess).
 pub const PROCESS_BASE_PRIORITY: u32 = 5;
+/// ProcessDebugPort: a 32-bit HANDLE, zero without a user debugger,
+/// otherwise -1 (not the debugger's port handle).
+pub const PROCESS_DEBUG_PORT: u32 = 7;
 /// ProcessExceptionPort: a HANDLE, the LPC port that the process's unhandled
 /// exceptions go to (that of csrss), set once (NtSetInformationProcess).
 pub const PROCESS_EXCEPTION_PORT: u32 = 8;

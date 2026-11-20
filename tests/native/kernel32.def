@@ -4,6 +4,8 @@
 ; DLL exports them undecorated.
 LIBRARY kernel32.dll
 EXPORTS
+CheckRemoteDebuggerPresent@8
+OpenProcess@12
 CancelIo@4
 CloseHandle@4
 ConnectNamedPipe@8

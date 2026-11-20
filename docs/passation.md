@@ -1,5 +1,24 @@
 # Notes de passation
 
+- **ProcessDebugPort : le contrat i386 sans débogueur** (`fix/ps-process-debug-port`, M7,
+  2026-11-20). `NtQueryInformationProcess` classe 7 vérifie la taille exacte (4), les pointeurs,
+  le type du handle et PROCESS_QUERY_INFORMATION, puis écrit zéro : Mino refuse encore les ports
+  de débogage à la création et n'implémente pas l'attachement. La mauvaise taille laisse les
+  sorties intactes ; ReturnLength est sondé avant le handle et reçoit 4 après cette vérification,
+  même en cas d'erreur du handle ou du tampon. Spécification : ReactOS 0.4.16, `ps/query.c`,
+  `internal/ps_i.h`, `internal/probe.h` (pas de portage de code).
+  Scénario `process-debug-port` (`debugport1.c`) : AMD et Intel passent ; sans le handler,
+  le scénario échoue sur le premier appel. Il vérifie aussi CheckRemoteDebuggerPresent de kernel32,
+  les tailles, pointeurs, alignements, handles et droits. Lint propre.
+  1 238 tests hôte passent. **Mesure applicative (AMD)** : AbiWord s'installe mais termine encore
+  sur 0xC0000005 ; son rapport d'exception donne maintenant EIP 0x102b119f
+  (`libAbiWord.dll+0x2b119f`), lecture de 0x3c, EAX et ESI nuls. L'attribution du plantage au seul
+  ProcessDebugPort était insuffisante : diagnostiquer l'objet nul dans libAbiWord. SumatraPDF
+  rend toujours 1, `userenv/profile.c:1841` Error 2 : essayer sous une vraie session avec profil.
+  Les scénarios applicatifs passent leurs planchers (pas les parcours complets) ; fsck.vfat
+  trouve les deux volumes propres. Les scénarios interdisent désormais la classe 7 sans handler.
+  **Suite** : diagnostic AbiWord, profil SumatraPDF, puis les autres blocages M7 déjà listés.
+
 - **STATUS_BAD_STACK d'Inno Setup 5.4 : la pile et le filtre de débogage** (`claude/inno-bad-stack`, M7,
   deuxième point du bilan ;
   [`compat/applications.md`](compat/applications.md#status_bad_stack-dinno-setup-54-le-2026-11-20) ; demandé
