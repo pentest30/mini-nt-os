@@ -439,6 +439,34 @@ commitée) :
 Sur la branche, AMD : `msiexec` rend 0 en 11 s, `C:\Program Files\7-Zip` tient ses programmes, `7z.dll` et ses langues, `7zFM.exe`
 ouvre « 7-Zip File Manager » et se ferme avec 0. Le parcours (archiver un fichier, l'extraire, comparer) reste à
 faire. OpenOffice, dont l'installeur NSIS lance un MSI, n'a pas été remesuré (1 500 s de banc).
+### Authenticode : le banc dans une session, le 2026-11-21
+
+Notepad++ 7.9.2 vérifie la signature de ses propres DLL (`SciLexer.dll`) : WinVerifyTrust, puis le certificat du
+signataire par CryptQueryObject, CryptMsgGetParam, CertFindCertificateInStore, CertNameToStr,
+CertGetCertificateContextProperty et CertGetNameString (`verifySignedfile.cpp` de Notepad++). Sous le banc, il
+montrait « DLL signature verification failed » (« Unknown exception occurred ») puis « Authenticode check failed:
+signing certificate or hash is not recognized ».
+
+- CryptQueryObject rendait CRYPT_E_NO_MATCH : `crypt32` lit bien la table des certificats du PE, mais ne décode pas
+  le PKCS#7 faute de fournisseur cryptographique. CryptAcquireContext de `rsaenh` (repris de Wine) demande le nom
+  de l'utilisateur, même en CRYPT_VERIFYCONTEXT ; GetUserNameW demande à LSA (`\pipe\lsarpc`), et le banc, qui
+  remplaçait `winlogon`, tournait sans `lsass` : RPC_S_SERVER_UNAVAILABLE.
+- FormatMessage de ReactOS ne connaît pas `0x80092009` : le message d'erreur de Notepad++ concaténait un tampon
+  nul, faute attrapée par son `catch (...)` (compilé en `/EHa`).
+- La ruche SOFTWARE épinglée n'a aucune clé `Cryptography` (fournisseurs, fournisseurs de confiance, SIP), que
+  `syssetup` pose à l'installation de ReactOS par les DllRegisterServer de `syssetup.inf`.
+
+Correctifs : `minoinit` enregistre aussi `cryptnet`, `mscat32`, `msisip`, `rsabase`, `rsaenh`, `softpub` et
+`wintrust` ; et le banc tourne dans une vraie session (choix du mainteneur) : la clé `session = APPBENCH.EXE` garde
+le vrai `winlogon`, `minoinit` installe au premier démarrage, l'ouverture de session automatique a lieu au second,
+et `userinit` lance le banc comme shell de l'utilisateur (`Winlogon\Shell` de la ruche du scénario), sous son jeton,
+avec `lsass` et son profil. Le scénario `authenticode` (`tests/native/auth1.c`) refait les appels de Notepad++ sur
+son installeur, signé du même certificat : WinVerifyTrust rend 0, le signataire est « Notepad++ ».
+
+Notepad++ s'arrêtait alors sur « Exception On WM_CREATE » (« Unknown exception ») : GetNumaHighestNodeNumber de
+`kernel32` échouait, NtQuerySystemInformation(SystemNumaProcessorMap, 55) n'étant pas servie. Elle l'est, comme
+`ex/sysinfo.c` de ReactOS (un nœud, les processeurs de SystemBasicInformation). Notepad++ ouvre « new 1 -
+Notepad++ » et se ferme avec 0. Son parcours (taper, remplacer, enregistrer, rouvrir) reste à faire.
 
 ### La suite
 
