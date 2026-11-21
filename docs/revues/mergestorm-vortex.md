@@ -29,9 +29,10 @@ traite l'une d'elles y ajoute la section de sa PR (voir « Ajouter une évaluati
 | [149](https://github.com/pentest30/mini-nt-os/pull/149) | 3 | 1 | 1 | 1 | 0 | 0 | 2 |
 | [152](https://github.com/pentest30/mini-nt-os/pull/152) | 7 | 7 | 0 | 0 | 0 | 0 | 1 |
 | [155](https://github.com/pentest30/mini-nt-os/pull/155) | 3 | 3 | 0 | 0 | 0 | 0 | 0 |
-| **Total** | **62** | **35** | **6** | **4** | **1** | **16** | **4** |
+| [156](https://github.com/pentest30/mini-nt-os/pull/156) | 3 | 3 | 0 | 0 | 0 | 0 | 0 |
+| **Total** | **65** | **38** | **6** | **4** | **1** | **16** | **4** |
 
-Toutes les remarques jusqu'à la PR 155 sont évaluées.
+Toutes les remarques jusqu'à la PR 156 sont évaluées.
 
 Ce qui ressort :
 
@@ -229,3 +230,17 @@ Commit relu par le bot : `d3aa0c8` (puis `6db467c`, hors des lignes changées). 
 | `kernel/mm/src/address_space.rs:700` | L'accès mémoire sur une page committée de la pile devient une réussite silencieuse : `allocate` ne rend pas `STATUS_ALREADY_COMMITTED` sur une page déjà committée — `VadNode::commit` rend un changement dès que la protection diffère, et `map_commit` réécrit la page à READWRITE. Le chemin AV du `page_fault_hook` passe donc par là : une écriture dans une page PAGE_NOACCESS de la réserve de la pile réussit, et la limite suit. | Fondé | `virtual_alloc::allocate` → `VadNode::commit(start, end, protect)` : une page committée rend `PageChange { old_state: Committed, old_protect }` et `map_commit` appelle `m.protect_page(va, protect)` — jamais `ALREADY_COMMITTED`. L'écriture d'une page NOACCESS de la réserve réusissait en silence. | `MiCheckForUserStackOverflow` fidèle : l'extension ne se fait que par une faute de garde ; une violation d'accès dans la réserve délivre `STATUS_STACK_OVERFLOW` (`AddressSpace::stack_overflow`, la réserve lue du TEB), sans commiter ni reprendre. L'allocation-rewrite a disparu. Test de régression dans le smoke : `noaccess.exe` commite une page PAGE_NOACCESS sous sa limite et écrit dedans — le processus doit finir sur `STATUS_STACK_OVERFLOW` (l'écriture réusissait et le fil tournait à l'infini avant). |
 | `docs/compat/applications.md:397` | « la page du tas que Windows tient projetée » : le nom de marque, que CLAUDE.md écarte au profit de « compatible XP ». | Fondé | La règle de rédaction du dépôt. | « la page du tas que la cible tient projetée ». |
 | `kernel/ntoskrnl/src/main.rs:4580` | Le résultat du filtre pour le niveau 2 (`store_eax(status(14))`) est écrasé par `NtCreateDirectoryObject(...).store_eax(status(14))` du même test : `statuses[14]` porte le statut du répertoire, et l'assertion `(1, 0)` passe quel que soit le filtre. | Fondé | Les deux appels du même test écrivent le slot 14, et l'assertion tourne après tout le programme. | Le filtre va au slot 28 (le vecteur des statuts élargi à 29), l'assertion `(statuses[7], statuses[28]) == (1, 0)` ne passe plus que si le niveau 2 est filtré. |
+
+## PR 156 : les verrous de plages d'octets (NtLockFile)
+
+Commit relu par les bots : `d3ea9a6`. Évalué le 2026-11-21. Vortex a posté deux fois la même remarque (en
+ligne, puis parmi celles « hors des lignes changées ») ; Codex l'a postée aussi.
+
+| Où | Remarque | Verdict | Pourquoi | Suite |
+|---|---|---|---|---|
+| `kernel/ntoskrnl/src/sys/file.rs:475` | Le neuvième argument de NtReadFile et NtWriteFile est un `PULONG Key` optionnel : son adresse sert de clé, et un processus voit refuser ses propres E/S sur une plage qu'il a verrouillée avec cette clé. | Fondé | `transfer` passait `key`, l'adresse, à `File::lock_owner`. ReactOS 0.4.16 (`io/iomgr/iofunc.c`, NtReadFile et NtWriteFile : `IN PULONG Key OPTIONAL`, `if (Key) CapturedKey = ProbeForReadUlong(Key)`). Le cas « read with another key » de `lock1.c` ne passait que parce que l'adresse diffère de 0. `kernel32` passe NULL : aucune application touchée. | `4ca2cae` : la clé lue par `UserPtr::<u32>` (0 sans pointeur). `LOCK1.EXE` verrouille avec la clé 7 puis lit et écrit par un pointeur vers 7 (accepté ; refusé sans le correctif, vérifié), sans clé et par un pointeur vers 8 (refusés). |
+| idem (hors des lignes changées) | La même, en double. | Fondé | Voir la ligne précédente. | `4ca2cae`. |
+| idem (Codex, P2) | La même. | Fondé | Voir la première ligne. | `4ca2cae`. |
+
+Aucun défaut manqué vérifié. Les dettes que la PR déclare (un verrou refusé sans FailImmediately n'attend pas ; le
+mode de partage de CreateFile pas vérifié) ne sont pas des défauts du diff, et le bot ne les a pas relevées.
