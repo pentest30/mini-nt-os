@@ -140,6 +140,21 @@ static void kernel32_and_native(void)
     check(NtWriteFile(first, 0, 0, 0, &iosb, "y", 1, &at, &key) == CONFLICT, "write with another key");
     check(NtReadFile(first, 0, 0, 0, &iosb, &byte, 1, &at, 0) == SUCCESS && byte == 120, "owner reads");
     check(NtWriteFile(first, 0, 0, 0, &iosb, "z", 1, &at, 0) == SUCCESS, "owner writes");
+    /* Key is a PULONG for the I/O, a ULONG for NtLockFile: a lock taken with
+     * key 7 lets the I/O that points at 7 through, not the one without key
+     * (0) nor the one that points at 8. */
+    at = 400;
+    length = 10;
+    check(NtLockFile(first, 0, 0, 0, &iosb, &at, &length, 7, 1, 1) == SUCCESS, "a lock with key 7");
+    at = 405;
+    key = 7;
+    check(NtReadFile(second, 0, 0, 0, &iosb, &byte, 1, &at, &key) == SUCCESS, "read through a pointer to its key");
+    check(NtWriteFile(second, 0, 0, 0, &iosb, "k", 1, &at, &key) == SUCCESS, "write through a pointer to its key");
+    check(NtReadFile(second, 0, 0, 0, &iosb, &byte, 1, &at, 0) == CONFLICT, "read without key");
+    key = 8;
+    check(NtReadFile(second, 0, 0, 0, &iosb, &byte, 1, &at, &key) == CONFLICT, "read through a pointer to 8");
+    at = 400;
+    check(NtUnlockFile(first, &iosb, &at, &length, 7) == SUCCESS, "unlock key 7");
     DbgPrint("[lock] NtReadFile, NtWriteFile: an exclusive lock of another key stops them\n");
 
     /* The native services: the I/O status block, the event, the key. */

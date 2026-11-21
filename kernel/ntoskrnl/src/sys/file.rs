@@ -432,7 +432,9 @@ fn write_iosb(iosb: u32, status: NtStatus, information: u32) -> Result<(), NtSta
 }
 
 /// NtReadFile et NtWriteFile(FileHandle, Event, ApcRoutine, ApcContext,
-/// IoStatusBlock, Buffer, Length, ByteOffset, Key) : la position vient de
+/// IoStatusBlock, Buffer, Length, ByteOffset, Key) : `Key` est un `PULONG`
+/// optionnel (la clé des verrous, 0 sans lui), à la différence de celui,
+/// par valeur, de NtLockFile ; la position vient de
 /// `ByteOffset`, ou de celle du fichier s'il est synchrone (sans
 /// `ByteOffset`, ou `FILE_USE_FILE_POINTER_POSITION`) ;
 /// `FILE_WRITE_TO_END_OF_FILE` écrit à la fin.
@@ -472,6 +474,10 @@ fn transfer(arguments: &[u32], write: bool) -> Result<(), NtStatus> {
     if !granted.intersects(AccessMask(needed)) {
         return Err(STATUS_ACCESS_DENIED);
     }
+    let key = match key {
+        0 => 0,
+        at => UserPtr::<u32>::new(at).read()?,
+    };
     let owner = file.lock_owner(super::current_process().pid(), key);
     if write {
         file.check_write(offset, u64::from(length), owner)?;
