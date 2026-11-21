@@ -1,5 +1,15 @@
 # Notes de passation
 
+- **Les sous-menus du menu Démarrer : NtUserSetParent** (`claude/start-menu-speed`, sur la PR 157, M7,
+  [`compat/m6-logon.md`](compat/m6-logon.md) ; demandé le 2026-11-21 après un essai sous VirtualBox : « l'affichage
+  des sous-menus Programs prend du temps et affiche parfois une liste vide figée »). La liste vide : NtUserSetParent
+  sans handler, la barre d'outils du sous-menu restait sous le pager qui devait la contenir
+  (`win32k::winpos::set_parent`, co_IntSetParent ; `sys::window::nt_user_set_parent`). Scénario `start-programs`.
+  **Pas encore mesuré** : la lenteur. Pistes vues dans le journal de la VM : NtGdiSetDIBitsToDeviceInternal sans
+  handler (le cache d'icônes de `shell32` : « SetBIBits failed!, 120 » à chaque icône), NtNotifyChangeDirectoryFile
+  (ReadDirectoryChangesW échoue sur chaque dossier suivi), le démarrage de RpcSs qui échoue. Mesurer avant de
+  corriger (le profileur temporaire de l'étape 32).
+
 - **Authenticode : le banc dans une vraie session ; Notepad++ ouvre sa fenêtre** (`claude/authenticode`, M7,
   [`compat/applications.md`](compat/applications.md#authenticode-le-banc-dans-une-session-le-2026-11-21) ;
   demandé le 2026-11-20). Notepad++ montrait « DLL signature verification failed », puis « Authenticode check

@@ -883,3 +883,43 @@ pub(super) fn nt_user_internal_get_window_text(arguments: &[u32]) -> NtStatus {
         Err(status) => fail(dos_error(status)),
     }
 }
+
+/// NtUserSetParent(hWndChild, hWndNewParent) : `hWndChild` devient
+/// l'enfant de `hWndNewParent` (`win32k::winpos::set_parent`), celui du
+/// bureau du thread s'il est nul, sa fenêtre des messages pour
+/// `HWND_MESSAGE` ; rend l'ancien parent. Comme co_UserSetParent : 0 et
+/// `ERROR_INVALID_PARAMETER` pour `HWND_BROADCAST`, `ERROR_ACCESS_DENIED`
+/// pour la fenêtre du bureau, `ERROR_INVALID_WINDOW_HANDLE` pour une
+/// fenêtre qui n'existe pas.
+pub(super) fn nt_user_set_parent(arguments: &[u32]) -> NtStatus {
+    let (child, new_parent) = (arguments[0], arguments[1]);
+    if child == HWND_BROADCAST || new_parent == HWND_BROADCAST {
+        return fail(abi::winerror::ERROR_INVALID_PARAMETER);
+    }
+    let Some(desktop) = win32k::convert_current_thread().ok().and_then(|thread| thread.desktop()) else {
+        return fail(abi::winerror::ERROR_ACCESS_DENIED);
+    };
+    let parent = match new_parent {
+        0 => Some(desktop.desktop.window.clone()),
+        abi::user::HWND_MESSAGE => Some(desktop.desktop.message_window.clone()),
+        handle => win32k::window::get(handle),
+    };
+    let Some(window) = win32k::window::get(child) else {
+        return fail(abi::winerror::ERROR_INVALID_WINDOW_HANDLE);
+    };
+    if window.is_desktop_window() {
+        return fail(abi::winerror::ERROR_ACCESS_DENIED);
+    }
+    let Some(parent) = parent else {
+        return fail(abi::winerror::ERROR_INVALID_WINDOW_HANDLE);
+    };
+    let pid = super::current_process().pid();
+    match win32k::winpos::set_parent(&window, &parent, pid) {
+        Ok(old) => NtStatus(old.map_or(0, |old| old.handle)),
+        Err(win32k::winpos::SetParentError(Some(error))) => fail(error),
+        Err(win32k::winpos::SetParentError(None)) => NtStatus(0),
+    }
+}
+
+/// HWND_BROADCAST.
+const HWND_BROADCAST: u32 = 0xFFFF;

@@ -303,6 +303,18 @@ EnableWindow (NtUserCallTwoParam 0x60, TWOPARAM_ROUTINE_ENABLEWINDOW), NtUserAlt
 Tab dans la boîte « Security » (le focus ne change pas : DefWindowProc de WM_KEYDOWN, journalisé), le texte
 « Logon Information » vide.
 
+**Les sous-menus du menu Démarrer : NtUserSetParent** (le 2026-11-21, vu sous VirtualBox). Programs s'ouvrait en
+une boîte vide, figée. `shell32` (CMenuToolbarBase::CreateToolbar) crée la barre d'outils du sous-menu, puis un pager
+(`WC_PAGESCROLLER`) à côté d'elle, et l'y range par `SetParent(toolbar, pager)` ; NtUserSetParent n'avait pas de
+handler : la barre restait la sœur du pager, qui, créé après elle, la couvrait au même endroit. Elle énumérait bien
+les deux dossiers Programs et peignait ses entrées (icônes, texte), toutes découpées par sa sœur (`WS_CLIPSIBLINGS`).
+Trouvé par une trace temporaire des services d'`explorer` (jamais commitée). NtUserSetParent est fait comme
+co_IntSetParent de ReactOS (`win32k::winpos::set_parent`) : cachée, déliée, liée en tête de ses nouvelles sœurs
+(`HWND_TOP` sous le bureau, sinon `HWND_TOPMOST`), placée au même point de la zone cliente du nouveau parent,
+remontrée ; NULL vaut le bureau, `HWND_MESSAGE` sa fenêtre des messages. Pas encore : UserAttachThreadInput entre les
+threads d'une fille et de son parent. Scénario `start-programs` (Démarrer → Programs : l'icône de dossier et le
+texte d'« Administrative Tools » et de « Startup » lus à l'écran ; il échoue sans le handler).
+
 ## La suite
 
 Le premier critère du M6 est atteint ; restent le changement de résolution (troisième critère : `bochs-dispi`,
