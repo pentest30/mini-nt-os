@@ -1319,8 +1319,9 @@ impl<D: BlockDevice> FatVolume<D> {
     /// base or an extension all in lower case, a single 8.3 entry with the
     /// NT case flags ([`CASE_LOWER_BASE`], [`CASE_LOWER_EXT`]); with a base
     /// or an extension of mixed case (`Recent`), long-name entries before
-    /// its 8.3 entry, the name in upper case without `~N`. Every entry lands
-    /// in the first free slot; a full directory grows by a zeroed cluster.
+    /// its 8.3 entry, the name in upper case without `~N`. The entries of a
+    /// name take a run of consecutive free slots ([`add_entries`]); a full
+    /// directory grows by zeroed clusters.
     /// `PathFormat` for a name longer than VFAT holds, before anything is
     /// written; if an entry cannot be written, the long-name entries already
     /// written are deleted again.
@@ -1364,15 +1365,57 @@ impl<D: BlockDevice> FatVolume<D> {
                 alias_11(long, |candidate| taken.contains(candidate))
             }
         };
-        let mut written = Vec::new();
-        for part in long_name_entries(long, &alias) {
-            match self.add_entry(dir_cluster, &part, hint) {
-                Ok(at) => written.push(at),
-                Err(error) => return Err(self.delete_entries(&written, error)),
+        let mut entries = long_name_entries(long, &alias);
+        entries.push(make_entry(&alias, attributes, first_cluster, 0));
+        let written = self.add_entries(dir_cluster, &entries, hint)?;
+        Ok(*written.last().expect("the 8.3 entry"))
+    }
+
+    /// vfatFindDirSpace, then the writes: `entries` (a name's long-name
+    /// entries and its 8.3 entry) in a run of as many consecutive free slots
+    /// (`0x00`, `0xE5`) of the directory at `dir_cluster`, in directory
+    /// order, from one of its clusters into the next if need be — the long
+    /// name must come just before its 8.3 entry: a hole that a deleted entry
+    /// left and that is too short is skipped. Without such a run, the
+    /// directory grows by zeroed clusters, the free slots at its end
+    /// starting the run. Returns where each entry went; if one cannot be
+    /// written, those already written are deleted again.
+    fn add_entries(&self, dir_cluster: u32, entries: &[[u8; 32]], hint: u32) -> Result<Vec<EntryRef>, FatError> {
+        let per_cluster = self.cluster_bytes() as usize / 32;
+        let chain = self.chain(dir_cluster)?;
+        let mut buffer = vec![0u8; self.cluster_bytes() as usize];
+        // The run of free slots that ends at the last slot seen.
+        let mut run: Vec<EntryRef> = Vec::new();
+        'search: for &cluster in &chain {
+            self.read_cluster(cluster, &mut buffer)?;
+            for (index, slot) in buffer.chunks_exact(32).enumerate() {
+                if slot[0] == 0x00 || slot[0] == 0xE5 {
+                    run.push(EntryRef { cluster, index: index as u32 });
+                    if run.len() == entries.len() {
+                        break 'search;
+                    }
+                } else {
+                    run.clear();
+                }
             }
         }
-        self.add_entry(dir_cluster, &make_entry(&alias, attributes, first_cluster, 0), hint)
-            .map_err(|error| self.delete_entries(&written, error))
+        if run.len() < entries.len() {
+            let more = (entries.len() - run.len()).div_ceil(per_cluster);
+            let mut first = dir_cluster;
+            let clusters = self.resize_chain(&mut first, chain.len() + more, hint)?;
+            for &cluster in &clusters[chain.len()..] {
+                let wanted = entries.len() - run.len();
+                run.extend((0..per_cluster.min(wanted)).map(|index| EntryRef { cluster, index: index as u32 }));
+            }
+        }
+        let mut written = Vec::new();
+        for (&at, entry) in run.iter().zip(entries) {
+            if let Err(error) = self.write_entry(at, entry) {
+                return Err(self.delete_entries(&written, error));
+            }
+            written.push(at);
+        }
+        Ok(written)
     }
 
     /// The entry before `at` in its directory: the one before it in its
