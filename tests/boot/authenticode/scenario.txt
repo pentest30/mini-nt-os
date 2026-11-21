@@ -17,6 +17,7 @@ expect = [minoinit] done; rebooting
 expect = We are logged on
 expect = [auth] user: Administrator
 expect = [auth] CryptAcquireContextW: the default provider
+expect = [auth] WinVerifyTrust: 0
 expect = [auth] CryptQueryObject: the embedded signature
 expect = [auth] signer: Notepad++
 expect = [auth] PASS

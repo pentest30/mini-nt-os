@@ -100,6 +100,11 @@ DWORD WINAPI GuiStartup(void)
         DbgPrint(TAG "WinVerifyTrust: %lx\n", (DWORD)trust);
         data.dwStateAction = WTD_STATEACTION_CLOSE;
         verify(0, &policy, &data);
+        /* Notepad++ refuses a DLL whose signature does not verify. */
+        if (trust != 0) {
+            SetLastError((DWORD)trust);
+            stop("WinVerifyTrust");
+        }
     }
 
     if (!query(CERT_QUERY_OBJECT_FILE, path, CERT_QUERY_CONTENT_FLAG_PKCS7_SIGNED_EMBED, CERT_QUERY_FORMAT_FLAG_BINARY, 0,
