@@ -1,5 +1,36 @@
 # Notes de passation
 
+- **CALLPROCDATA : Inno Setup 5.4 installe** (`claude/callprocdata`, sur la PR 158, M7,
+  [`compat/m6-fenetres.md`](compat/m6-fenetres.md) étape 47,
+  [`compat/applications.md`](compat/applications.md#callprocdata-inno-setup-54-installe-le-2026-11-21) ; demandé le
+  2026-11-21, premier point de la liste : PeaZip et GIMP). L'hypothèse de la passation (une page du tas que Mino ne
+  projette pas) était fausse. Mesuré (trace temporaire des services et des exceptions du `setup.tmp`, jamais
+  commitée ; le `setup.tmp` récupéré d'une image de disque et désassemblé) : la faute est dans `InsertFree` du
+  gestionnaire de mémoire de Delphi, et la liste libre du tas contient du texte UTF-16. Le TEdit de Delphi prend la
+  procédure d'Edit par GetClassInfoA et l'appelle par CallWindowProcA ; le manifeste de `setup.tmp` fait d'« Edit »
+  celui de `comctl32` 6, Unicode et sans FNID, et win32k rendait sa procédure à l'appelant ANSI : le WM_GETTEXT du
+  contrôle écrivait deux octets par caractère dans un tampon ANSI. Fait comme ReactOS : les procédures d'appel
+  (`win32k::callproc`, `abi::user::CallProcData32`, objets `TYPE_CALLPROC` dans le tas du bureau, NtUserGetCPD),
+  rendues par `Class::procedure` (IntGetClassWndProc) et `window::seen_by_client` (IntGetWindowProc) pour une
+  procédure de l'autre jeu de caractères, reconnues par SetWindowLong(GWLP_WNDPROC) et à la création d'une fenêtre ;
+  et deux écarts trouvés en route par le banc : la classe d'un contrôle de `user32` se voit par la procédure du
+  client du jeu demandé (GetClassInfoA d'« Edit » rendait EditWndProcW), et un contrôle créé en ANSI est une
+  fenêtre ANSI (`window::creation_procedure`, IntCreateWindow : un Edit de CreateWindowExA ne gardait que la
+  première lettre de son texte). Scénario `ansi-controls` (`tests/native/ansictl1.c`, AMD et Intel) ; six
+  mutations le font échouer chacune. PeaZip : `setup.tmp` ne plante plus, il copie 78 fichiers dans
+  `C:\Program Files\PeaZip`, puis ne peut créer `res\themes\nographic-embedded\fm-theme.bmp` (« The system cannot
+  find the path specified ») et revient en arrière (code 5) ; plancher relevé. **GIMP s'installe** (code 0 en
+  558 s ; `gimp-2.6.exe` lit `0xC` dans `libgdk` juste après NtUserEnumDisplayMonitors, sans handler) ; plancher
+  relevé aux lignes de la fin de son journal (le banc n'imprime que les 64 derniers Kio d'un journal plus long :
+  le début, la version d'Inno, n'y est plus — à corriger dans `appbench.c`). KeePass se lit « KeePass » (« K »
+  avant) ; AbiWord ouvre « Untitled1 - AbiWord » et se ferme avec 0 (pas comparé à la base). Vérifié : lint,
+  1 252 tests hôte, la suite de démarrage sans `app-openoffice` (99 passés au moment de la PR) ; échec
+  `display-desktop` (AMD, Intel) : son marqueur `…\Desktop\*.*` est une ligne de listage que le filtre de débogage
+  de la PR 155 n'imprime plus (comme `logon` et `folder-view`, adaptés) — pas encore comparé à la base. **Suite** :
+  NtUserEnumDisplayMonitors (GIMP) ; ce répertoire à nom
+  long de 18 caractères est écrit sans son nom long (seule l'entrée 8.3 `NOGRAP~1` est sur le disque, alors que
+  `firecrystal.theme.7z`, 20 caractères, a le sien) — Io, le prochain blocage de PeaZip ; FileRenameInformation
+  (`kernel32` copie puis efface à chaque MoveFile : « Forcing copy, renaming not supported by FSD »).
 - **Les sous-menus du menu Démarrer : NtUserSetParent** (`claude/start-menu-speed`, sur la PR 157, M7,
   [`compat/m6-logon.md`](compat/m6-logon.md) ; demandé le 2026-11-21 après un essai sous VirtualBox : « l'affichage
   des sous-menus Programs prend du temps et affiche parfois une liste vide figée »). La liste vide : NtUserSetParent

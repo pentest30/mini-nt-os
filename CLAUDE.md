@@ -579,8 +579,14 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   : AbiWord passe `libAbiWord.dll`. La croissance de pile suit XP (`mm::fault::stack_extension` : la limite
   suit la page touchée, la garde ne descend que s'il reste une page, l'accès dans la réserve étend aussi) et
   `NtQueryDebugFilterState` aussi (`Kd_WIN2000_Mask = 1` : le niveau ERROR seul passe) — le `STATUS_BAD_STACK`
-  et la boucle de débogage des installeurs Inno 5.4 disparus ; leur blocage suivant est la récursion de leur
-  propre code sur une page de tas non projetée.
+  et la boucle de débogage des installeurs Inno 5.4 disparus. Les procédures d'appel (CALLPROCDATA,
+  `win32k::callproc`, NtUserGetCPD ; `Class::procedure`, `window::seen_by_client`) : une procédure demandée dans
+  l'autre jeu de caractères (GetClassInfoA d'une classe Unicode) se donne par un handle que CallWindowProc
+  convertit ; la classe d'un contrôle de `user32` se voit par la procédure du client du jeu demandé, un contrôle
+  créé en ANSI est une fenêtre ANSI (`window::creation_procedure`) ; scénario `ansi-controls`. Le TEdit de Delphi
+  appelait l'Edit Unicode de `comctl32` 6 avec des messages ANSI et son WM_GETTEXT écrasait le tas : Inno Setup 5.4
+  installe (PeaZip copie ses fichiers, puis bute sur un répertoire à nom long de 18 caractères écrit sans son nom
+  long).
   Suite : [`docs/passation.md`](docs/passation.md).
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.

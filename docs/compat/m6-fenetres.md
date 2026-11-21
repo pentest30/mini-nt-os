@@ -2265,3 +2265,59 @@ Tests : `enable-window` sur AMD et Intel. Huit mutations le font échouer chacun
 activée ; une fille activée ; SetActiveWindow(NULL) qui n'active personne ; SetActiveWindow qui rend toujours NULL ;
 NtUserSetActiveWindow sans handler ; et, dans l'EnableWindow de l'étape 44, pas de WM_CANCELMODE, le clavier gardé
 par la fenêtre désactivée, WM_ENABLE envoyé sans changement d'état.
+
+## Étape 47 : les procédures de l'autre jeu de caractères (CALLPROCDATA)
+
+Vu au M7, sur les installeurs Inno Setup 5.4 de PeaZip et de GIMP, qui finissaient sur `STATUS_STACK_OVERFLOW` (en
+session, une boîte de Delphi « EAccessViolation »). La passation y voyait une page du tas que Mino ne projetait pas ;
+une trace temporaire des services et des exceptions de `setup.tmp` (jamais commitée), et le `setup.tmp` récupéré
+d'une image de disque et désassemblé, ont montré autre chose : la faute est dans `InsertFree` du gestionnaire de
+mémoire de Delphi (`0x401dc7`, l'écriture de la taille d'un bloc libre à sa fin), sur une adresse impaire, et la
+faute suivante lit dans la liste libre `0x67610074` et `0x4e0065` : du texte UTF-16 (« ta », « eN »). Juste avant,
+le contrôle mesurait les caractères `0x3a43 0x505c 0x6f72…` : « C:\Program Files\PeaZip » en ANSI, lu comme de
+l'UTF-16.
+
+La cause : le TEdit de Delphi est une classe à lui par-dessus Edit (CreateSubClass : GetClassInfoA de « EDIT », puis
+CallWindowProcA de la procédure obtenue pour chaque message). `setup.tmp` a un manifeste qui désigne `comctl32` 6 :
+`user32` traduit le nom (ClassNameToVersion) en l'Edit de `comctl32` 6, une classe Unicode sans FNID
+(`EDIT_Register` : RegisterClassW). win32k rendait sa procédure telle quelle à l'appelant ANSI (« the procedure of
+class 0xc00e asked in the other character set: no call procedure yet ») : le contrôle recevait du texte ANSI comme de
+l'UTF-16, et son WM_GETTEXT écrivait deux octets par caractère dans le tampon ANSI que Delphi avait alloué pour
+la longueur — par-dessus l'en-tête du bloc suivant du tas.
+
+ReactOS (comme spécification : `callproc.c`, `class.c`, IntGetClassWndProc, `window.c`, IntGetWindowProc,
+IntSetWindowProc, IntCreateWindow ; `user32` : `class.c`, IntGetClsWndProc, IntGetWndProc, `message.c`,
+CallWindowProcA et CallWindowProcW, `misc.c`, ValidateCallProc) rend dans ce cas une procédure d'appel.
+
+| Partie | Ce que fait Mino |
+|---|---|
+| Les procédures d'appel (`win32k::callproc`, `abi::user::CallProcData32`) | UserGetCPD : un objet `TYPE_CALLPROC` de la table des handles de USER, au `PROCESSINFO` du processus (ValidateCallProc le compare à `g_ppi`), sa `CALLPROCDATA` dans le tas du bureau du thread (PROCDESKHEAD, `pfnClientPrevious`, `wType` : `CPD_A2U` ou `CPD_U2A`, et `CPD_CLASS`, `CPD_WINDOW`…) ; le client reçoit le handle au mot haut `0xFFFF` (GetCallProcHandle), que CallWindowProcA et CallWindowProcW reconnaissent (IsCallProcHandle) et convertissent. Une classe garde les siennes : une même procédure demandée de la même façon rend le même handle (UserSearchForCallProc) ; elles partent avec la classe, ou avec le processus (`crate::destroy`) |
+| La procédure d'une classe (`Class::procedure`, `Class::seen_procedure`, IntGetClassWndProc) | celle du serveur se voit par celle du client de son FNID ; un contrôle (de FNID_BUTTON à FNID_GHOST) dont la classe a la procédure du client de l'autre jeu de caractères se voit par celle du jeu demandé (manquait : GetClassInfoA de l'Edit de `user32` rendait EditWndProcW) ; une autre procédure de l'autre jeu, par une procédure d'appel (`callproc::Seen::Crossed`), ou elle-même sans elle |
+| La procédure d'une fenêtre (`window::window_procedure`, `seen_by_client`, IntGetWindowProc) | une procédure de l'autre jeu de caractères se voit par une procédure d'appel de la classe de la fenêtre, au lieu d'ERROR_CALL_NOT_IMPLEMENTED ; SetWindowLong(GWLP_WNDPROC) dans l'autre jeu change la procédure, comme ReactOS, et rend l'ancienne par une procédure d'appel |
+| NtUserGetCPD (`sys::window::nt_user_get_cpd`, `window::call_procedure`) | ce que `user32` demande lui-même pour GetWindowLong(GWLP_WNDPROC) et GetClassLong(GCLP_WNDPROC) dans l'autre jeu de caractères (IntGetWndProc, IntGetClsWndProc) ; une demande de la classe seule (`CPD_CLASS`) rend 0, comme ReactOS |
+| Une procédure d'appel rendue (`window::set_long`, IntSetWindowProc ; `create_window`) | SetWindowLong(GWLP_WNDPROC) d'une procédure d'appel installe sa procédure, dans son jeu de caractères (`CPD_U2A` : une procédure ANSI) ; une classe enregistrée avec une procédure d'appel donne sa procédure à ses fenêtres |
+| Une fenêtre de contrôle créée en ANSI (`window::creation_procedure`, IntCreateWindow) | un créateur ANSI d'un contrôle du système de Button à IME fait une fenêtre ANSI (`WNDS_ANSIWINDOWPROC`), sa procédure celle, ANSI, du client ; elle avait EditWndProcA mais passait pour Unicode, et `user32` lui convertissait son texte en UTF-16 : un Edit de CreateWindowExA n'en gardait que la première lettre. ReactOS compare l'atome de la classe à ceux du système (`atomSysClass`), que Mino n'a pas : seules les classes de `user32` ont ces FNID |
+
+Écarts avec ReactOS : `spcpdNext` reste nul dans le tas (`user32` ne le lit pas ; win32k garde la liste) ; pas de
+SetClassLong(GCLP_WNDPROC) (NtUserSetClassLong n'a pas de handler), ni de procédures d'appel des boîtes de dialogue
+(DWLP_DLGPROC reste dans `user32`).
+
+Le banc d'essai : `tests/native/ansictl1.c` (`ANSICTL1.EXE`, MinGW), scénario `ansi-controls`, à la place de
+`winlogon.exe`. 1. GetClassInfoA et GetClassInfoW de Button, ComboBox, Edit, ListBox et Static : la procédure de
+chaque jeu, celle que `user32` donne lui-même (GetClassLong de GCL_WNDPROC). 2. Une classe par-dessus Edit, comme
+Delphi la fait : son texte ANSI se relit entier, et un tampon court n'est pas dépassé. 3. Un Edit créé en ANSI garde
+son texte ANSI. 4. Ce que demande Inno Setup 5.4 : GetClassInfoA d'une classe Unicode sans FNID rend une procédure
+d'appel (le mot haut `0xFFFF`), la même chaque fois ; CallWindowProcA d'elle donne le texte en UTF-16 à la
+procédure Unicode, et son WM_GETTEXT remplit un tampon ANSI court sans rien écrire au-delà. 5. GetWindowLongA de la
+fenêtre Unicode (NtUserGetCPD) ; sous-classée par SetWindowLongA, son ancienne procédure est la procédure d'appel, les
+messages arrivent par elle à la procédure Unicode, et rendue, la fenêtre a de nouveau sa procédure Unicode. Une
+fenêtre de cette classe Unicode créée en ANSI reste Unicode. 6. Dans l'autre sens, GetClassInfoW d'une classe ANSI et
+CallWindowProcW.
+
+Tests : hôte (`win32k::class` : la procédure d'un contrôle vue des deux jeux, une procédure de l'autre jeu
+`Seen::Crossed` ; `win32k::window` : `creation_procedure`, `window_procedure` et `replace_procedure` de l'autre jeu ;
+`win32k::callproc` : le handle au mot haut `0xFFFF`) ; `ansi-controls` sur AMD et Intel. Six mutations le font
+échouer chacune : la procédure d'un contrôle de classe sans l'échange de jeu (étape 1) ; un contrôle créé en ANSI
+qui reste Unicode (étape 3) ; toute fenêtre d'un créateur ANSI faite ANSI (étape 4) ; aucune procédure d'appel créée
+(étapes 4 à 6) ; NtUserGetCPD sans handler, et une procédure d'appel donnée à SetWindowLong sans être résolue
+(étape 5).
