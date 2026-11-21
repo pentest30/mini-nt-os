@@ -30,9 +30,10 @@ traite l'une d'elles y ajoute la section de sa PR (voir « Ajouter une évaluati
 | [152](https://github.com/pentest30/mini-nt-os/pull/152) | 7 | 7 | 0 | 0 | 0 | 0 | 1 |
 | [155](https://github.com/pentest30/mini-nt-os/pull/155) | 3 | 3 | 0 | 0 | 0 | 0 | 0 |
 | [156](https://github.com/pentest30/mini-nt-os/pull/156) | 7 | 3 | 0 | 0 | 2 | 2 | 0 |
-| **Total** | **69** | **38** | **6** | **4** | **3** | **18** | **4** |
+| [157](https://github.com/pentest30/mini-nt-os/pull/157) | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
+| **Total** | **71** | **40** | **6** | **4** | **3** | **18** | **4** |
 
-Toutes les remarques jusqu'à la PR 156 sont évaluées.
+Toutes les remarques jusqu'à la PR 157 sont évaluées.
 
 Ce qui ressort :
 
@@ -250,3 +251,14 @@ a reposté deux fois la première, déjà corrigée.
 
 Aucun défaut manqué vérifié. Les dettes que la PR déclare (un verrou refusé sans FailImmediately n'attend pas ; le
 mode de partage de CreateFile pas vérifié) ne sont pas des défauts du diff, et le bot ne les a pas relevées.
+
+## PR 157 : Authenticode et le banc en session
+
+Commit relu par les bots : `4cb8cad`. Évalué le 2026-11-21. Une remarque, postée par Vortex et par Codex.
+
+| Où | Remarque | Verdict | Pourquoi | Suite |
+|---|---|---|---|---|
+| `tests/native/auth1.c:100` | Le résultat de WinVerifyTrust est imprimé, jamais vérifié, et le scénario ne l'attend pas : une régression de la vérification de confiance laisse `authenticode` vert, alors que la PR dit WinVerifyTrust à 0 vérifié. | Fondé | La sonde allait jusqu'à « PASS » quel que soit `trust` ; les étapes suivantes ne lisent que le certificat du signataire. Sans les DLL enregistrées, WinVerifyTrust rendait `0x80070057` et le scénario aurait passé. | `1026f1c` : la sonde s'arrête si `trust` n'est pas 0, et le scénario attend `[auth] WinVerifyTrust: 0`. |
+| idem (Codex, P2) | La même. | Fondé | Voir la ligne précédente. | `1026f1c`. |
+
+Aucun défaut manqué vérifié.
