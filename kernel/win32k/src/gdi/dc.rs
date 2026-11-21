@@ -202,6 +202,9 @@ pub fn ext_select_clip_rgn(hdc: u32, region: Option<&Region>, mode: i32) -> Resu
 /// Un DC.
 pub struct Dc {
     state: KSpinLock<DcState>,
+    /// Les états que [`save_dc`] a posés, du plus récent au plus ancien
+    /// (`dclevel.hdcSave` et `dclevel.lSaveDepth` de ReactOS).
+    saves: KSpinLock<Vec<DcState>>,
     /// Un DC en mémoire (DCTYPE_MEMORY).
     memory: bool,
 }
@@ -209,7 +212,7 @@ pub struct Dc {
 impl Default for Dc {
     /// Un DC de l'écran à personne, qui ne peint rien.
     fn default() -> Self {
-        Self { state: KSpinLock::new(DcState::default()), memory: false }
+        Self { state: KSpinLock::new(DcState::default()), saves: KSpinLock::new(Vec::new()), memory: false }
     }
 }
 
@@ -228,6 +231,56 @@ impl Dc {
     /// <= DISPATCH_LEVEL.
     pub fn change<R>(&self, change: impl FnOnce(&mut DcState) -> R) -> R {
         change(&mut self.state.lock())
+    }
+
+    /// NtGdiSaveDC (DC_AllocDcWithHandle + DC_vCopyState de ReactOS, sur une
+    /// pile du DC au lieu d'un DC sauvegardé alloué) : l'état courant posé
+    /// sur la pile ; rend son identifiant (1 : la première pose, 2 : la
+    /// deuxième…).
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn save_state(&self) -> i32 {
+        let state = self.state.lock().clone();
+        let mut saves = self.saves.lock();
+        saves.push(state);
+        saves.len() as i32
+    }
+
+    /// NtGdiRestoreDC (DC_vRestoreDC de ReactOS) : l'état courant remis
+    /// comme à l'identifiant `level` — négatif, depuis le haut de la pile
+    /// (-1 : la dernière pose), les poses d'après dépilées et leur DC
+    /// effacé. La région visible ne fait pas partie de l'état sauvé
+    /// (« Get/SetDCState() don't change hVisRgn field », DC_vCopyState), et
+    /// le bitmap ne change que pour un DC en mémoire. Faux si
+    /// `level` ne désigne rien de la pile.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn restore_state(&self, mut level: i32) -> bool {
+        let mut saves = self.saves.lock();
+        if level < 0 {
+            level += saves.len() as i32 + 1;
+        }
+        if level <= 0 || level as usize > saves.len() {
+            return false;
+        }
+        let index = level as usize - 1;
+        let state = saves[index].clone();
+        saves.truncate(index);
+        drop(saves);
+        let memory = self.memory;
+        self.change(|current| {
+            current.origin = state.origin;
+            current.clip = state.clip;
+            current.fill = state.fill;
+            current.pen = state.pen;
+            current.position = state.position;
+            if memory {
+                current.bitmap = state.bitmap;
+            }
+        });
+        true
     }
 }
 
@@ -481,7 +534,7 @@ pub fn create_memory_dc() -> Result<u32, NtStatus> {
         lfnt_new: super::brush::stock_object(stock::SYSTEM_FONT),
         ..DcAttr32::initial(white, 0, width, height)
     };
-    let dc = Arc::new(Dc { state: KSpinLock::new(state), memory: true });
+    let dc = Arc::new(Dc { state: KSpinLock::new(state), saves: KSpinLock::new(Vec::new()), memory: true });
     let inserted = copy_to_user(u64::from(attr), attrs.as_bytes())
         .and_then(|()| handles::insert_with_user_data(Object::Dc(dc), LO_DC_TYPE, objt::DC, pid, attr));
     if inserted.is_err() {
@@ -575,6 +628,30 @@ pub fn lock(hdc: u32) -> Option<Arc<Dc>> {
         Object::Dc(dc) => Some(dc),
         _ => None,
     }
+}
+
+/// NtGdiSaveDC : l'état du DC `hdc` posé sur sa pile de sauvegardes ; rend
+/// son identifiant (1 : la première pose), 0 pour un DC qui n'est pas au
+/// processus (`ERROR_INVALID_HANDLE`).
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn save_dc(hdc: u32) -> Result<i32, u32> {
+    let dc = lock(hdc).ok_or(abi::winerror::ERROR_INVALID_HANDLE)?;
+    Ok(dc.save_state())
+}
+
+/// NtGdiRestoreDC : l'état du DC `hdc` remis comme à l'identifiant `level`
+/// (négatif : depuis le haut de la pile, -1 la dernière pose), les poses
+/// d'après effacées ; `Ok(false)` si `level` ne désigne rien de la pile
+/// (`ERROR_INVALID_PARAMETER`), `Err` pour un DC qui n'est pas au
+/// processus.
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn restore_dc(hdc: u32, level: i32) -> Result<bool, u32> {
+    let dc = lock(hdc).ok_or(abi::winerror::ERROR_INVALID_HANDLE)?;
+    Ok(dc.restore_state(level))
 }
 
 /// Les octets du début des attributs : `pvLDC`, `ulDirty_`, `hbrush`.
@@ -1383,5 +1460,67 @@ mod tests {
             count += 1;
         }
         assert_eq!(count, 0x1_0000 / 0x18, "2730 places in a block");
+    }
+
+    #[test]
+    fn a_saved_state_comes_back_and_drops_the_later_saves() {
+        let dc = Dc::default();
+        dc.change(|state| {
+            state.clip = Some(Region::from_rect(Rect::new(0, 0, 40, 40)));
+            state.position = (3, 4);
+        });
+        // The first pose: its identifier is 1. The state drawn after it
+        // changes, and the restore puts it back.
+        assert_eq!(dc.save_state(), 1);
+        dc.change(|state| {
+            state.clip = Some(Region::from_rect(Rect::new(5, 5, 30, 30)));
+            state.position = (9, 9);
+        });
+        assert!(dc.restore_state(-1), "the last pose restores");
+        let state = dc.state();
+        assert_eq!(
+            state.clip.map(|clip| clip.bounds()),
+            Some(Rect::new(0, 0, 40, 40)),
+            "the clipping of the save came back"
+        );
+        assert_eq!(state.position, (3, 4), "the position too");
+
+        // Two poses, a restore to the first: the second is dropped with it.
+        dc.change(|state| state.position = (1, 1));
+        assert_eq!(dc.save_state(), 1);
+        dc.change(|state| state.position = (2, 2));
+        assert_eq!(dc.save_state(), 2);
+        dc.change(|state| state.position = (5, 5));
+        assert!(dc.restore_state(1), "the first pose restores");
+        assert_eq!(dc.state().position, (1, 1), "the state of the first pose");
+        assert!(!dc.restore_state(2), "the second pose is gone from the stack");
+
+        // The negative levels, from the top of the stack.
+        dc.change(|state| state.position = (7, 7));
+        assert_eq!(dc.save_state(), 1);
+        dc.change(|state| state.position = (8, 8));
+        assert_eq!(dc.save_state(), 2);
+        assert!(dc.restore_state(-2), "the second pose from the top");
+        assert_eq!(dc.state().position, (7, 7), "two poses dropped: the first pose's state");
+        assert!(!dc.restore_state(-1), "nothing left on the stack");
+
+        // The visible region never comes back with the state: the window
+        // owns it.
+        assert_eq!(dc.save_state(), 1);
+        dc.change(|state| {
+            state.vis = Region::from_rect(Rect::new(0, 0, 5, 5));
+            state.clip = Some(Region::from_rect(Rect::new(1, 1, 9, 9)));
+        });
+        assert!(dc.restore_state(1), "back to the first pose");
+        assert_eq!(
+            dc.state().vis,
+            Region::from_rect(Rect::new(0, 0, 5, 5)),
+            "the visible region kept: the window owns it"
+        );
+        assert_eq!(
+            dc.state().clip.map(|clip| clip.bounds()),
+            Some(Rect::new(0, 0, 40, 40)),
+            "the clipping of the first pose came back"
+        );
     }
 }

@@ -1,5 +1,29 @@
 # Notes de passation
 
+- **La page de progression des installeurs NSIS : SaveDC/RestoreDC, ExtCreatePen, l'effacement parent**
+  (`claude/dc-save-restore`, sur la PR 158, M7,
+  [`compat/applications.md`](compat/applications.md#la-page-de-progression-des-nsis-le-2026-11-21) ; demandé le
+  2026-11-21 après un essai sous VirtualBox : « la page de progression est abîmée : l'en-tête blanc vide, des
+  restes de l'image de la page d'accueil à gauche, la barre de progression au début »). Reproduit dans un
+  scénario : `app-npp-interactive` (la clé `interactive = yes` de `xtask` : le PROBE.TXT de l'installeur sans
+  `/S`, l'installateur visible dans la session, son wizard poussé par la souris de QEMU jusqu'à la page de
+  progression ; les captures en screen.ppm, lues comme PNG par un petit convertisseur). La mesure (la trace
+  temporaire des services win32k, 52 526 appels journalisés) montre les dessins qui passent par les services
+  déjà faits (BitBlt 398, StretchDIBits 149, IntersectClipRect 717) et les services manquants du symptôme :
+  SaveDC, RestoreDC, ExtCreatePen, GetTransform, SetLayout, SetClassLong… Win32k : **NtGdiSaveDC et
+  NtGdiRestoreDC** (`gdi::dc::save_state`/`restore_state` : la pile d'états du DC sur `Vec<DcState>`, les
+  niveaux relatifs comme DC_vRestoreDC, la région visible hors de l'état sauvé, le bitmap seulement pour un DC
+  en mémoire) et **NtGdiExtCreatePen** (`Pen::ext_create` : PS_NULL et BS_NULL rendent le stylo nul, un
+  cosmétique d'un pinceau non plein refusé, les longs de style d'utilisateur lus puis jetés — les pointillés
+  se dessinent en approximations). **L'effacement parent** (`paint::expose`) : ce qu'un enfant découvre dans
+  son parent s'efface avec le fond de sa classe (`paint::expose` ne le faisait que pour le bureau — le
+  « erasing what a child window uncovers in its parent » tirait à chaque wizard). **La page de progression
+  reste abîmée après tout cela** (l'en-tête vide, la barre au début) : les captures et la trace sont
+  consignées ; la suite du diagnostic (les coordonnées des exposes de l'installeur, les restes du bitmap hors
+  du rectangle de la page) passe à la session suivante. Tests hôte : `a_saved_state_comes_back_and_drops_the_
+  later_saves` (la pile : les niveaux relatifs, les poses d'après effacées, la région visible jamais rendue).
+  Scénario `app-npp-interactive`.
+
 - **Les sous-menus du menu Démarrer : NtUserSetParent** (`claude/start-menu-speed`, sur la PR 157, M7,
   [`compat/m6-logon.md`](compat/m6-logon.md) ; demandé le 2026-11-21 après un essai sous VirtualBox : « l'affichage
   des sous-menus Programs prend du temps et affiche parfois une liste vide figée »). La liste vide : NtUserSetParent

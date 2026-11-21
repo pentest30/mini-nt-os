@@ -11,7 +11,7 @@
 use alloc::sync::Arc;
 
 use abi::gdi::{objt, LO_PEN_TYPE};
-use abi::ntstatus::NtStatus;
+use abi::ntstatus::{NtStatus, STATUS_INVALID_PARAMETER};
 
 use super::dib::ColorRef;
 use super::handles::{self, Object};
@@ -20,6 +20,16 @@ use super::handles::{self, Object};
 pub const PS_SOLID: u32 = 0;
 /// PS_NULL : le stylo ne dessine rien.
 pub const PS_NULL: u32 = 5;
+/// PS_TYPE_MASK et PS_STYLE_MASK (les quatre bits du style), et son type
+/// cosmétique (le géométrique : le bit 0x10).
+pub const PS_TYPE_MASK: u32 = 0x000F_0000;
+pub const PS_STYLE_MASK: u32 = 0x0000_000F;
+pub const PS_COSMETIC: u32 = 0;
+/// Les styles de pinceau de ExtCreatePen : plein, rien, hachuré, à motif.
+pub const BS_SOLID: u32 = 0;
+pub const BS_NULL: u32 = 1;
+pub const BS_HATCHED: u32 = 2;
+pub const BS_PATTERN: u32 = 3;
 
 /// Un stylo : son style (`PS_*`), sa largeur en pixels (0 et 1 : un pixel),
 /// sa couleur.
@@ -47,5 +57,33 @@ impl Pen {
         let pen = Self { style, width: width.max(1), color: ColorRef(color & 0x00FF_FFFF) };
         let pid = super::dc::current_pid();
         handles::insert(Object::Pen(Arc::new(pen)), LO_PEN_TYPE, objt::PEN, pid)
+    }
+
+    /// NtGdiExtCreatePen (IntGdiExtCreatePen de ReactOS, comme spécification)
+    /// : un stylo au processus courant, d'un style étendu. `PS_NULL` et
+    /// `BS_NULL` rendent le stylo nul ; un stylo cosmétique d'un pinceau qui
+    /// n'est pas plein, et un style de pinceau inconnu, sont refusés
+    /// (`STATUS_INVALID_PARAMETER`). Les longs de style d'utilisateur sont
+    /// lus puis jetés par l'appelant : les pointillés se dessinent en
+    /// approximations, comme ceux de `CreatePen` ; `BS_HATCHED` et
+    /// `BS_PATTERN` se dessinent pleins.
+    ///
+    /// # Errors
+    /// `STATUS_INVALID_PARAMETER` pour un style ou un pinceau refusé ;
+    /// `STATUS_NO_MEMORY` sans place dans la table.
+    ///
+    /// # IRQL
+    /// PASSIVE_LEVEL, dans un service système.
+    pub fn ext_create(style: u32, width: i32, brush_style: u32, color: u32) -> Result<u32, NtStatus> {
+        if (style & PS_TYPE_MASK) == PS_COSMETIC && brush_style != BS_SOLID {
+            return Err(STATUS_INVALID_PARAMETER);
+        }
+        if (style & PS_STYLE_MASK) == PS_NULL || brush_style == BS_NULL {
+            return Self::create(PS_NULL, 1, 0);
+        }
+        if brush_style != BS_SOLID && brush_style != BS_HATCHED && brush_style != BS_PATTERN {
+            return Err(STATUS_INVALID_PARAMETER);
+        }
+        Self::create(style, width.max(1), color)
     }
 }

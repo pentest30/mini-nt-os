@@ -975,6 +975,10 @@ pub fn draw_frame_ops(window: &Window, state: &WindowState, ops: &[crate::gdi::d
 ///
 /// # IRQL
 /// PASSIVE_LEVEL.
+/// Le dernier index de couleur système des pinceaux de classe
+/// (`COLOR_MENUBAR`, `class.rs`).
+const COLOR_MENUBAR: u32 = 30;
+
 pub fn expose(window: &Window, exposed: &Region) {
     if exposed.is_empty() {
         return;
@@ -992,8 +996,32 @@ pub fn expose(window: &Window, exposed: &Region) {
         child = window::get(state.next);
     }
     if !parent.is_desktop_window() {
-        static REPORTED: AtomicBool = AtomicBool::new(false);
-        report_missing("erasing what a child window uncovers in its parent", &REPORTED);
+        // What the child uncovered in its parent is erased with the
+        // parent's class background, where the parent is actually visible
+        // (its visible children come off: the erase cannot paint over
+        // them), and the children repaint what they hold there. The
+        // bitmap of a wizard's welcome page stayed over the frame's
+        // background without it (the progress page of the installers).
+        let uncovered = exposed.intersect(&visible_region(&parent, false, true, false));
+        if uncovered.is_empty() {
+            return;
+        }
+        let background = parent.class.as_ref().map(|class| class.info.background).unwrap_or(0);
+        let color = if background != 0 && background <= COLOR_MENUBAR + 1 {
+            system_color(background as usize - 1)
+        } else if background != 0 {
+            match crate::gui::process_id_of(parent.pti).and_then(|pid| crate::gdi::handles::get(background, pid)) {
+                Some(crate::gdi::handles::Object::Brush(brush)) => brush.color,
+                _ => return,
+            }
+        } else {
+            return;
+        };
+        crate::display::draw(|screen| {
+            for &rect in uncovered.rects() {
+                screen.fill_rect(rect, color);
+            }
+        });
         return;
     }
     // What of the desktop shows there now: not under a visible window.

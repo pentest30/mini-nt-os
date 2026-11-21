@@ -473,7 +473,7 @@ fn test(ws: &Workspace, mut args: Args) -> Result<()> {
                 } else if let (Some(app), Some(installer)) = (app, &installer) {
                     // The installer and the probe's command file.
                     let probe = run_dir.join("probe.txt");
-                    std::fs::write(&probe, apps::probe_commands(app))
+                    std::fs::write(&probe, apps::probe_commands_for(app, sc.interactive))
                         .map_err(|e| format!("{}: {e}", probe.display()))?;
                     let in_apps = [(installer.clone(), app.file.to_string()), (probe, apps::PROBE_FILE.to_string())];
                     println!("xtask: {}: {} MiB free on C: for {}", app.id, app.free_mib, app.name);
