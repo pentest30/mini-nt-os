@@ -5,10 +5,16 @@
   des sous-menus Programs prend du temps et affiche parfois une liste vide figée »). La liste vide : NtUserSetParent
   sans handler, la barre d'outils du sous-menu restait sous le pager qui devait la contenir
   (`win32k::winpos::set_parent`, co_IntSetParent ; `sys::window::nt_user_set_parent`). Scénario `start-programs`.
-  **Pas encore mesuré** : la lenteur. Pistes vues dans le journal de la VM : NtGdiSetDIBitsToDeviceInternal sans
-  handler (le cache d'icônes de `shell32` : « SetBIBits failed!, 120 » à chaque icône), NtNotifyChangeDirectoryFile
-  (ReadDirectoryChangesW échoue sur chaque dossier suivi), le démarrage de RpcSs qui échoue. Mesurer avant de
-  corriger (le profileur temporaire de l'étape 32).
+  **La lenteur de l'explorateur, mesurée** (2026-11-21, trace temporaire de NtCreateSection, jamais commitée ; disque
+  d'`app = openoffice`, Win+R `C:\APPS`) : pour l'icône de l'installeur d'OpenOffice (143 Mo), `explorer` crée trois
+  sections de données sur le fichier, et chacune le relit en entier (`File::contents`) : 99 s, 84 s, 86 s, 4 min 30
+  pour une icône. `io::section_cache` ne sert pas : il ne retient rien (`Weak`), et aucune section ne tient le
+  fichier entre deux extractions (`shell32.dll`, chargé, sort du cache en 0 ms). Le cache d'icônes de `shell32`
+  échoue aussi (NtGdiSetDIBitsToDeviceInternal sans handler : « SetBIBits failed!, 120 ») : il réextrait. **Suite** :
+  les sections de fichiers paginées à la demande (une faute de page lit la page du fichier ; NtCreateSection ne lit
+  plus rien) — un changement de Mm et d'Io, voir s'il demande une ADR ; NtGdiSetDIBitsToDeviceInternal (le cache
+  d'icônes : une extraction au lieu de trois). Les autres pistes (NtNotifyChangeDirectoryFile, RpcSs) n'ont pas pesé
+  dans cette mesure.
 
 - **Authenticode : le banc dans une vraie session ; Notepad++ ouvre sa fenêtre** (`claude/authenticode`, M7,
   [`compat/applications.md`](compat/applications.md#authenticode-le-banc-dans-une-session-le-2026-11-21) ;
