@@ -393,6 +393,17 @@ pub(super) fn nt_user_set_window_long(arguments: &[u32]) -> NtStatus {
     }
 }
 
+/// NtUserGetCPD(hWnd, Flags, ProcIn) : la procédure d'appel de la classe de
+/// `hWnd` pour `ProcIn` (`win32k::window::call_procedure`, UserGetCPD), que
+/// `user32` demande quand GetWindowLong(GWLP_WNDPROC) ou
+/// GetClassLong(GCLP_WNDPROC) voit une procédure de l'autre jeu de caractères
+/// (IntGetWndProc, IntGetClsWndProc) ; 0 sans elle, et `user32` rend alors la
+/// procédure même, comme ReactOS.
+pub(super) fn nt_user_get_cpd(arguments: &[u32]) -> NtStatus {
+    let [handle, flags, procedure] = arguments[..3] else { unreachable!("3 arguments") };
+    NtStatus(win32k::window::call_procedure(handle, flags, procedure).unwrap_or(0))
+}
+
 /// NtUserBeginPaint(hWnd, lpPaint) : `hWnd` se peint (IntBeginPaint) ; le
 /// `PAINTSTRUCT` écrit, rend son DC, NULL sans DC. NULL pour une fenêtre
 /// inconnue (`ERROR_INVALID_WINDOW_HANDLE`) ou un `lpPaint` qu'on ne peut

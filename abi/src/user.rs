@@ -299,6 +299,48 @@ pub const TYPE_WINDOW: u8 = 1;
 /// TYPE_MENU: a handle entry of a menu (`HANDLE_TYPE`).
 pub const TYPE_MENU: u8 = 2;
 
+/// TYPE_CALLPROC: a handle entry of a call procedure (`HANDLE_TYPE`), a
+/// [`CallProcData32`] in the desktop's heap.
+pub const TYPE_CALLPROC: u8 = 7;
+
+/// GETCPD, `CALLPROCDATA.wType`: what a call procedure converts and what it
+/// was asked for. `CPD_A2U` (UserGetCPDA2U): an ANSI caller of a Unicode
+/// procedure; `CPD_U2A` (UserGetCPDU2A): a Unicode caller of an ANSI one.
+pub const CPD_A2U: u32 = 0x01;
+pub const CPD_U2A: u32 = 0x02;
+/// UserGetCPDClass: the procedure of a class (GetClassInfo).
+pub const CPD_CLASS: u32 = 0x10;
+/// UserGetCPDWindow: the procedure of a window (GetWindowLong).
+pub const CPD_WINDOW: u32 = 0x20;
+/// UserGetCPDDialog: the procedure of a dialog.
+pub const CPD_DIALOG: u32 = 0x40;
+/// UserGetCPDWndtoCls: the procedure of a window's class (GetClassLong).
+pub const CPD_WND_TO_CLS: u32 = 0x80;
+
+/// CALLPROCDATA, 32-bit, ReactOS's (`ntuser.h`), in the heap of its desktop:
+/// a procedure asked in the other character set. The client gets its
+/// handle with the high word `0xFFFF` (GetCallProcHandle), which
+/// CallWindowProcA and CallWindowProcW recognize (IsCallProcHandle) and read
+/// here (ValidateCallProc).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CallProcData32 {
+    pub head: crate::menu::ProcDeskHead32,
+    /// The next one of its class (`spcpdNext`).
+    pub spcpd_next: u32,
+    /// The procedure it calls (`pfnClientPrevious`).
+    pub pfn_client_previous: u32,
+    /// `CPD_*` (`GETCPD`).
+    pub w_type: u32,
+}
+
+const _: () = {
+    assert!(size_of::<CallProcData32>() == 32);
+    assert!(offset_of!(CallProcData32, spcpd_next) == 20);
+    assert!(offset_of!(CallProcData32, pfn_client_previous) == 24);
+    assert!(offset_of!(CallProcData32, w_type) == 28);
+};
+
 /// FNID_*: the window function identifiers of the system classes; those
 /// up to `FNID_SWITCH` have a server procedure.
 pub const FNID_SCROLLBAR: u32 = 0x029A;
@@ -317,6 +359,9 @@ pub const FNID_EDIT: u32 = 0x02A5;
 /// DLGWINDOWEXTRA: the extra bytes of a dialog's window (the dialog
 /// class's), the least SetDialogPointer accepts.
 pub const DLGWINDOWEXTRA: u32 = 30;
+/// FNID_IME: the IME window, the last control that an ANSI creator makes an
+/// ANSI window (IntCreateWindow).
+pub const FNID_IME: u32 = 0x02A9;
 pub const FNID_GHOST: u32 = 0x02AA;
 /// FNID_SENDMESSAGE, FNID_SENDMESSAGEWTOOPTION, FNID_SENDNOTIFYMESSAGE: the
 /// kinds of NtUserMessageCall behind SendMessage, SendMessageTimeout (its
@@ -2492,6 +2537,7 @@ macro_rules! as_bytes {
 }
 
 as_bytes!(
+    CallProcData32,
     NonClientMetricsW32,
     Msg32,
     UserHandleEntry32,

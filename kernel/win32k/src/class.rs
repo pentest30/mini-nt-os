@@ -27,25 +27,26 @@
 //! `CLSMENUNAME`), le noyau en garde une copie pour charger le menu d'une
 //! fenêtre (`lpszMenuName`) ; le compte des fenêtres d'une classe
 //! (`cWndReferenceCount`) n'est pas tenu dans le `CLS` ; pas de
-//! `atomSysClass` dans le `SERVERINFO` ; ni désenregistrement, ni
-//! procédures d'appel (une classe Unicode demandée en ANSI rend sa
-//! procédure, journalisé).
+//! `atomSysClass` dans le `SERVERINFO` ; pas de désenregistrement. Une
+//! procédure demandée dans l'autre jeu de caractères se donne par une
+//! procédure d'appel de la classe (`crate::callproc`, [`Class::procedure`]).
 
 use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
 use core::mem::size_of;
-use core::sync::atomic::{AtomicBool, Ordering};
 
 use abi::ntstatus::NtStatus;
 use abi::user::{
-    Cls32, CLS_GLOBAL, CLS_MENU_NAME_IS_STRING, CLS_UNICODE, CSF_ANSIPROC, CSF_SERVERSIDEPROC, CSF_WOWDEFERDESTROY,
-    CS_DBLCLKS, CS_GLOBALCLASS, CS_HREDRAW, CS_VREDRAW, FNID_DESKTOP, FNID_ICONTITLE, FNID_MENU, FNID_MESSAGEWND,
-    FNID_SCROLLBAR, FNID_SWITCH, WC_DESKTOP, WC_ICONTITLE, WC_MENU, WC_SWITCH,
+    Cls32, CLS_GLOBAL, CLS_MENU_NAME_IS_STRING, CLS_UNICODE, CPD_A2U, CPD_CLASS, CPD_U2A, CSF_ANSIPROC,
+    CSF_SERVERSIDEPROC, CSF_WOWDEFERDESTROY, CS_DBLCLKS, CS_GLOBALCLASS, CS_HREDRAW, CS_VREDRAW, FNID_BUTTON,
+    FNID_DESKTOP, FNID_GHOST, FNID_ICONTITLE, FNID_MENU, FNID_MESSAGEWND, FNID_SCROLLBAR, FNID_SWITCH, WC_DESKTOP,
+    WC_ICONTITLE, WC_MENU, WC_SWITCH,
 };
 use abi::winerror::{dos_error, ERROR_CLASS_ALREADY_EXISTS};
 use hal::sync::KSpinLock;
 
 use crate::atom::{self, AtomName};
+use crate::callproc::Seen;
 use crate::desktop::DesktopHeap;
 
 /// CS_* que les classes du système emploient.
@@ -210,33 +211,61 @@ impl Class {
         size_of::<Cls32>() as u32 + self.info.cls_extra.max(0) as u32
     }
 
+    /// L'identité de la classe, pour ses procédures d'appel
+    /// (`crate::callproc`) : son adresse, qui ne change pas (elle vit dans un
+    /// `Arc`).
+    pub fn key(&self) -> usize {
+        self as *const Self as usize
+    }
+
     /// IntGetClassWndProc : la procédure que le client voit, ANSI ou non
     /// (`ansi`) : pour une procédure du serveur, celle du client du même
-    /// FNID.
+    /// FNID ; pour un contrôle (de FNID_BUTTON à FNID_GHOST) dont c'est la
+    /// procédure du client dans l'autre jeu de caractères, celle de ce
+    /// jeu-ci ; une autre procédure de l'autre jeu de caractères, une
+    /// procédure d'appel de la classe (UserGetCPD, `crate::callproc` ; sans
+    /// elle, la procédure même). Ainsi le Delphi d'Inno Setup 5.4, ANSI,
+    /// reçoit de GetClassInfoA(« Edit ») — l'Edit Unicode de `comctl32` 6 que
+    /// son manifeste désigne — un handle que CallWindowProcA convertit : avec
+    /// la procédure elle-même, le contrôle lisait son texte ANSI en UTF-16, et
+    /// son WM_GETTEXT écrivait deux octets par caractère dans un tampon ANSI
+    /// du tas de Delphi.
+    ///
+    /// # IRQL
+    /// PASSIVE_LEVEL, dans un service système (une procédure d'appel se crée
+    /// dans le tas du bureau du thread courant).
     pub fn procedure(&self, ansi: bool) -> u32 {
+        let kind = (if ansi { CPD_A2U } else { CPD_U2A }) | CPD_CLASS;
+        self.seen_procedure(ansi).for_client(self.key(), kind)
+    }
+
+    /// [`procedure`](Self::procedure), sans créer la procédure d'appel :
+    /// une procédure de l'autre jeu de caractères est [`Seen::Crossed`].
+    pub fn seen_procedure(&self, ansi: bool) -> Seen {
         if self.flags & CSF_SERVERSIDEPROC != 0 {
             let fnid = (abi::user::FNID_FIRST..=FNID_SWITCH)
                 .find(|&fnid| crate::client::server_procedure(fnid) == Some(self.info.wnd_proc));
-            if let Some(procedure) = fnid.and_then(|fnid| crate::client::client_procedure(fnid, ansi)) {
-                return procedure;
+            let client = fnid.and_then(|fnid| crate::client::client_procedure(fnid, ansi));
+            return Seen::Procedure(client.unwrap_or(self.info.wnd_proc));
+        }
+        if (FNID_BUTTON..=FNID_GHOST).contains(&self.fnid)
+            && crate::client::client_procedure(self.fnid, !ansi) == Some(self.info.wnd_proc)
+        {
+            if let Some(procedure) = crate::client::client_procedure(self.fnid, ansi) {
+                return Seen::Procedure(procedure);
             }
-            return self.info.wnd_proc;
         }
         if ansi == self.unicode() {
-            static REPORTED: AtomicBool = AtomicBool::new(false);
-            if !REPORTED.swap(true, Ordering::Relaxed) {
-                log::warn!(
-                    "win32k: the procedure of class {:#x} asked in the other character set: no call procedure yet",
-                    self.nv_atom
-                );
-            }
+            Seen::Crossed(self.info.wnd_proc)
+        } else {
+            Seen::Procedure(self.info.wnd_proc)
         }
-        self.info.wnd_proc
     }
 }
 
 impl Drop for Class {
     fn drop(&mut self) {
+        crate::callproc::destroy_class(self.key());
         let images = core::mem::take(&mut *self.images.lock());
         for (heap, at) in images {
             if let Some(heap) = heap.upgrade() {
@@ -465,6 +494,7 @@ fn create(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use abi::user::FNID_EDIT;
 
     fn name(text: &str) -> ClassName {
         ClassName::String(text.encode_utf16().collect())
@@ -580,6 +610,53 @@ mod tests {
         let name = self::name("TestButton");
         lists.register(&name, &name, button, MenuName::default(), 0, 0).unwrap();
         assert_eq!(lists.find(&name, 0x40_0000, 0).unwrap().flags, 0, "the button has no server procedure");
+    }
+
+    #[test]
+    fn a_control_class_is_seen_through_the_client_procedure_of_the_asked_set() {
+        // user32 registers Edit (FNID_EDIT, the twelfth) with its Unicode
+        // procedure; Delphi asks it in ANSI (GetClassInfoA, CreateSubClass)
+        // and calls what it gets with ANSI messages.
+        client_procedures();
+        let mut lists = ClassLists::default();
+        let edit = ClassInfo { wnd_proc: 0x7100_000B, instance: 0x40_0000, ..ClassInfo::default() };
+        let name = name("TestEditControl");
+        lists.register(&name, &name, edit, MenuName::default(), FNID_EDIT, 0).unwrap();
+        let class = lists.find(&name, 0x40_0000, 0).unwrap();
+        assert_eq!(class.seen_procedure(true), Seen::Procedure(0x7000_000B), "ANSI: the client's ANSI Edit procedure");
+        assert_eq!(class.seen_procedure(false), Seen::Procedure(0x7100_000B));
+        // The same control registered in ANSI, asked in Unicode.
+        let button = ClassInfo { wnd_proc: 0x7000_0007, instance: 0x40_0000, ..ClassInfo::default() };
+        let name = self::name("TestButtonControl");
+        lists.register(&name, &name, button, MenuName::default(), FNID_BUTTON, CSF_ANSIPROC).unwrap();
+        let class = lists.find(&name, 0x40_0000, 0).unwrap();
+        assert_eq!(
+            class.seen_procedure(false),
+            Seen::Procedure(0x7100_0007),
+            "Unicode: the client's Unicode Button procedure"
+        );
+        assert_eq!(class.seen_procedure(true), Seen::Procedure(0x7000_0007));
+        // A control class whose procedure is the application's: no swap; in
+        // the other character set, a call procedure wraps it.
+        let own = ClassInfo { wnd_proc: 0x0040_2000, instance: 0x40_0000, ..ClassInfo::default() };
+        let name = self::name("TestOwnEdit");
+        lists.register(&name, &name, own, MenuName::default(), FNID_EDIT, 0).unwrap();
+        let class = lists.find(&name, 0x40_0000, 0).unwrap();
+        assert_eq!(class.seen_procedure(true), Seen::Crossed(0x0040_2000));
+        assert_eq!(class.seen_procedure(false), Seen::Procedure(0x0040_2000));
+        // comctl32 6's Edit (Unicode, no FNID), asked by Inno Setup in ANSI.
+        let comctl = ClassInfo { wnd_proc: 0x7BDF_40E8, instance: 0x7BD0_0000, ..ClassInfo::default() };
+        let name = self::name("TestComctlEdit");
+        lists.register(&name, &name, comctl, MenuName::default(), 0, 0).unwrap();
+        let class = lists.find(&name, 0x7BD0_0000, 0).unwrap();
+        assert_eq!(class.seen_procedure(true), Seen::Crossed(0x7BDF_40E8), "ANSI: a call procedure");
+        assert_eq!(class.seen_procedure(false), Seen::Procedure(0x7BDF_40E8));
+        let ansi = ClassInfo { wnd_proc: 0x0040_3000, instance: 0x40_0000, ..ClassInfo::default() };
+        let name = self::name("TestAnsiClass");
+        lists.register(&name, &name, ansi, MenuName::default(), 0, CSF_ANSIPROC).unwrap();
+        let class = lists.find(&name, 0x40_0000, 0).unwrap();
+        assert_eq!(class.seen_procedure(false), Seen::Crossed(0x0040_3000), "an ANSI class asked in Unicode");
+        assert_eq!(class.seen_procedure(true), Seen::Procedure(0x0040_3000));
     }
 
     #[test]
