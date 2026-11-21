@@ -6,7 +6,10 @@
    first window and how it closes. It judges nothing: the kernel logs each
    service without a handler at its first call, and each exception that
    ends a process; the scenario's markers say how far an application goes.
-   Taking WinSta0\Default, it replaces winlogon (initial-command). */
+   Taking WinSta0\Default, it replaces winlogon (initial-command); or,
+   started with /session as the shell of the logged-on user (a scenario's
+   `session`), it runs in that user's session, on the user's desktop, under
+   the user's token, with lsass and the user's profile. */
 #include "app_probe.h"
 
 #define TAG "[appbench] "
@@ -18,6 +21,18 @@ static DWORD timeout_seconds = 300;
 static unsigned int length(const char *s) { unsigned int n = 0; while (s[n]) ++n; return n; }
 static unsigned int wlength(const WCHAR *s) { unsigned int n = 0; while (s[n]) ++n; return n; }
 static BOOL prefix(const char *s, const char *p) { while (*p) if (*s++ != *p++) return FALSE; return TRUE; }
+
+/* /session on the command line: userinit started the bench as the shell. */
+static BOOL in_session(void)
+{
+    const WCHAR *line = GetCommandLineW();
+    for (; *line; ++line) {
+        const WCHAR *word = L"/session", *at = line;
+        while (*word && *at == *word) ++at, ++word;
+        if (!*word) return TRUE;
+    }
+    return FALSE;
+}
 
 /* A wide string as ANSI for DbgPrint, cut to the buffer. */
 static const char *narrow(const WCHAR *w, char *out, int size)
@@ -414,9 +429,10 @@ DWORD WINAPI GuiStartup(void)
 {
     char line[300];
     WCHAR temp[MAX_PATH];
-    app_desktop();
+    BOOL session = in_session();
+    if (!session) app_desktop();
     read_commands();
-    DbgPrint(TAG "%s: the bench starts\n", name);
+    DbgPrint(TAG "%s: the bench starts%s\n", name, session ? " in the user's session" : "");
     /* The installers unpack in %TEMP%: the system's own, created. */
     CreateDirectoryW(L"C:\\WINDOWS\\TEMP", 0);
     if (!GetEnvironmentVariableW(L"TEMP", temp, MAX_PATH)) {

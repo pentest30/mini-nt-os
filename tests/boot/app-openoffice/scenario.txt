@@ -1,13 +1,15 @@
 # M7 bench: Apache OpenOffice 4.1.17 (NSIS, then its MSI), installed silently by APPBENCH.EXE
-# (tests/native/appbench.c) from C:\APPS, then started and closed.
+# (tests/native/appbench.c) from C:\APPS, then started and closed; the
+# bench runs as the shell of the logged-on user (session).
 # The markers say how far it goes; docs/compat/applications.md has the
 # report.
 features = test-smss, interactive
 requires = userland, native
-initial-command = APPBENCH.EXE
+session = APPBENCH.EXE
+boots = 2
 app = openoffice
 cpus = default
-timeout = 1800
+timeout = 2100
 # What works today, a floor: the installer starts.
 expect = [appbench] installer started
 expect = [appbench] Apache OpenOffice 4.1.17: report done

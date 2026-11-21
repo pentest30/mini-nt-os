@@ -1,13 +1,15 @@
 # M7 bench: Dev-C++ 4.9.9.2 (NSIS), installed silently by APPBENCH.EXE
-# (tests/native/appbench.c) from C:\APPS, then started and closed.
+# (tests/native/appbench.c) from C:\APPS, then started and closed; the
+# bench runs as the shell of the logged-on user (session).
 # The markers say how far it goes; docs/compat/applications.md has the
 # report.
 features = test-smss, interactive
 requires = userland, native
-initial-command = APPBENCH.EXE
+session = APPBENCH.EXE
+boots = 2
 app = devcpp
 cpus = default
-timeout = 900
+timeout = 1200
 # What works today, a floor: NSIS makes its plug-ins directory (a
 # temporary file deleted, FileDispositionInformation, then a directory of
 # its name), its files are copied, its questions answered (the default

@@ -424,6 +424,9 @@ fn test(ws: &Workspace, mut args: Args) -> Result<()> {
         if let Some(program) = &sc.initial_command {
             put_initial_command(&mut extra_files, program)?;
         }
+        if let Some(program) = &sc.session {
+            put_session_shell(ws, &sc.name, &mut extra_files, program)?;
+        }
         // An application of the M7 bench: its installer, checked by
         // `fetch-apps`.
         let app = sc.app.as_deref().map(|id| apps::find(id).expect("checked when the scenario was read"));
@@ -638,6 +641,36 @@ fn put_initial_command(files: &mut Vec<String>, program: &str) -> Result<()> {
     Ok(())
 }
 
+/// The SOFTWARE hive of the disk, among `files` (`HOST:FAT_PATH`, already
+/// under the Mino layer), names the test program `program` as the shell
+/// that userinit starts once the user is logged on (`session`), with
+/// `/session` on its command line; it is written for the scenario `name`.
+fn put_session_shell(ws: &Workspace, name: &str, files: &mut [String], program: &str) -> Result<()> {
+    if !files.iter().any(|file| file.ends_with(&format!(":{program}"))) {
+        return Err(format!("session: no test program {program} at the root of the boot disk"));
+    }
+    let suffix = ":WINDOWS/SYSTEM32/CONFIG/SOFTWARE";
+    let entry =
+        files.iter_mut().find(|file| file.ends_with(suffix)).ok_or("session: the boot disk has no SOFTWARE hive")?;
+    let host = PathBuf::from(entry.strip_suffix(suffix).expect("the matching suffix"));
+    let base = std::fs::read(&host).map_err(|e| format!("{}: {e}", host.display()))?;
+    let layer = mkhive::parse(&session_layer(program))?;
+    let layered = mkhive::layered(mkhive::Hive::Software, &base, &layer, "\\SystemRoot\\System32\\Config\\SOFTWARE")?;
+    let out = ws.target.join("xtask").join("hives").join(format!("session-{name}"));
+    std::fs::create_dir_all(&out).map_err(|e| format!("{}: {e}", out.display()))?;
+    let path = out.join("SOFTWARE");
+    std::fs::write(&path, layered).map_err(|e| format!("{}: {e}", path.display()))?;
+    *entry = format!("{}{suffix}", path.display());
+    Ok(())
+}
+
+/// The layer that makes `program`, at the root of `C:`, the user's shell.
+fn session_layer(program: &str) -> String {
+    format!(
+        "[AddReg]\nHKLM,\"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon\",\"Shell\",0x00000000,\"C:\\{program} /session\"\n"
+    )
+}
+
 /// The programs of an image, among its `files`: the startup choice (or an
 /// explicitly selected probe), `initial_command`, boots as winlogon.exe,
 /// smss's initial command, with every native program; `system` keeps
@@ -818,6 +851,18 @@ fn parse_number(s: &str, option: &str) -> Result<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_session_program_is_the_shell_of_the_layered_software_hive() {
+        let layer = mkhive::parse(&session_layer("APPBENCH.EXE")).unwrap();
+        let mut hives = std::collections::BTreeMap::from([(mkhive::Hive::Software, mkhive::KeyNode::new("SOFTWARE"))]);
+        mkhive::apply(&layer, &mut hives).unwrap();
+        let shell =
+            mkhive::value(&hives[&mkhive::Hive::Software], "Microsoft\\Windows NT\\CurrentVersion\\Winlogon", "Shell")
+                .unwrap();
+        let text: Vec<u8> = "C:\\APPBENCH.EXE /session\0".encode_utf16().flat_map(u16::to_le_bytes).collect();
+        assert_eq!(shell.data, text);
+    }
 
     #[test]
     fn a_test_program_takes_the_place_of_winlogon() {

@@ -1,0 +1,25 @@
+# Authenticode as Notepad++ 7.9.2 checks its DLLs (tests/native/auth1.c), on
+# the installer of Notepad++ (signed by the same certificate), in the session
+# of the logged-on user: minoinit registers the cryptographic and trust
+# providers (first boot), userinit starts AUTH1.EXE as the shell (second
+# boot). Without lsass, rsaenh's CryptAcquireContext fails (GetUserNameW),
+# and CryptQueryObject with it (CRYPT_E_NO_MATCH).
+features = test-smss, interactive
+requires = userland, native
+session = AUTH1.EXE
+app = notepadpp
+boots = 2
+cpus = default
+timeout = 600
+expect = [minoinit] DllRegisterServer rsaenh.dll: 0
+expect = [minoinit] DllRegisterServer wintrust.dll: 0
+expect = [minoinit] done; rebooting
+expect = We are logged on
+expect = [auth] user: Administrator
+expect = [auth] CryptAcquireContextW: the default provider
+expect = [auth] CryptQueryObject: the embedded signature
+expect = [auth] signer: Notepad++
+expect = [auth] PASS
+forbid = [auth] FAIL
+forbid = [minoinit] stopped:
+forbid = *** STOP:
