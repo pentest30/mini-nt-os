@@ -25,6 +25,30 @@ pub const SYSTEM_FLAGS_INFORMATION: u32 = 9;
 /// starts (MmSystemRangeStart), a ULONG_PTR.
 pub const SYSTEM_RANGE_START_INFORMATION: u32 = 50;
 
+/// SystemNumaProcessorMap: the highest NUMA node, then the processors of
+/// each node ([`numa_processor_map`]); kernel32's GetNumaHighestNodeNumber,
+/// GetNumaNodeProcessorMask and GetNumaProcessorNode read it.
+pub const SYSTEM_NUMA_PROCESSOR_MAP: u32 = 55;
+
+/// Where SYSTEM_NUMA_INFORMATION keeps its processor masks (a ULONGLONG per
+/// node), after `HighestNodeNumber` and `Reserved`.
+pub const NUMA_PROCESSOR_MASKS_AT: u32 = 8;
+
+/// What SystemNumaProcessorMap writes in a buffer of `length` bytes on a
+/// system of `nodes` nodes, as ReactOS's `ex/sysinfo.c`: `None` under a
+/// ULONG (STATUS_INFO_LENGTH_MISMATCH); else the number of processor masks
+/// that fit after `HighestNodeNumber` (at most `nodes`), and the length
+/// returned: the masks written, or `HighestNodeNumber` alone (4) when none
+/// fits. `Reserved` is not written.
+pub fn numa_processor_map(length: u32, nodes: u32) -> Option<(u32, u32)> {
+    if length < 4 {
+        return None;
+    }
+    let masks = if length >= NUMA_PROCESSOR_MASKS_AT { ((length - NUMA_PROCESSOR_MASKS_AT) / 8).min(nodes) } else { 0 };
+    let returned = if masks == 0 { 4 } else { NUMA_PROCESSOR_MASKS_AT + masks * 8 };
+    Some((masks, returned))
+}
+
 /// SystemFirmwareTableInformation: the ACPI, SMBIOS and firmware tables that
 /// kernel32's EnumSystemFirmwareTables and GetSystemFirmwareTable read.
 pub const SYSTEM_FIRMWARE_TABLE_INFORMATION: u32 = 76;
@@ -318,5 +342,21 @@ impl SystemProcessInformation32 {
         // SAFETY: integer fields without padding (size checked above): every
         // byte is initialised.
         unsafe { core::slice::from_raw_parts((self as *const Self).cast::<u8>(), size_of::<Self>()) }
+    }
+}
+
+#[cfg(test)]
+mod numa_tests {
+    use super::*;
+
+    #[test]
+    fn the_numa_map_writes_what_fits_as_reactos() {
+        // GetNumaHighestNodeNumber: two ULONGs, the node number alone.
+        assert_eq!(numa_processor_map(8, 1), Some((0, 4)));
+        // GetNumaNodeProcessorMask: the whole structure (16 nodes), one mask.
+        assert_eq!(numa_processor_map(8 + 16 * 8, 1), Some((1, 16)));
+        assert_eq!(numa_processor_map(15, 1), Some((0, 4)));
+        assert_eq!(numa_processor_map(4, 1), Some((0, 4)));
+        assert_eq!(numa_processor_map(3, 1), None);
     }
 }

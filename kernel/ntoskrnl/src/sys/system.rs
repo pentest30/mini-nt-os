@@ -8,10 +8,10 @@ use abi::system_information::{
     SystemBasicInformation32, SystemProcessInformation32, SystemProcessorInformation32, SystemThreadInformation32,
     MAXIMUM_USER_MODE_ADDRESS, MINIMUM_USER_MODE_ADDRESS, PROCESSOR_ARCHITECTURE_INTEL, SYSTEM_BASIC_INFORMATION,
     SYSTEM_EXTEND_SERVICE_TABLE_INFORMATION, SYSTEM_FILECACHE_INFORMATION, SYSTEM_FIRMWARE_TABLE_INFORMATION,
-    SYSTEM_FLAGS_INFORMATION, SYSTEM_HANDLE_INFORMATION, SYSTEM_PERFORMANCE_INFORMATION, SYSTEM_PROCESSOR_INFORMATION,
-    SYSTEM_PROCESSOR_PERFORMANCE_INFORMATION, SYSTEM_PROCESS_INFORMATION, SYSTEM_PROCESS_INFORMATION_NAME_AT,
-    SYSTEM_RANGE_START, SYSTEM_RANGE_START_INFORMATION, SYSTEM_SESSION_CREATE, SYSTEM_SESSION_DETACH,
-    SYSTEM_THREAD_INFORMATION_SIZE, SYSTEM_TIME_OF_DAY_INFORMATION,
+    SYSTEM_FLAGS_INFORMATION, SYSTEM_HANDLE_INFORMATION, SYSTEM_NUMA_PROCESSOR_MAP, SYSTEM_PERFORMANCE_INFORMATION,
+    SYSTEM_PROCESSOR_INFORMATION, SYSTEM_PROCESSOR_PERFORMANCE_INFORMATION, SYSTEM_PROCESS_INFORMATION,
+    SYSTEM_PROCESS_INFORMATION_NAME_AT, SYSTEM_RANGE_START, SYSTEM_RANGE_START_INFORMATION, SYSTEM_SESSION_CREATE,
+    SYSTEM_SESSION_DETACH, SYSTEM_THREAD_INFORMATION_SIZE, SYSTEM_TIME_OF_DAY_INFORMATION,
 };
 use core::sync::atomic::{AtomicBool, Ordering};
 use ke::usermem::UserPtr;
@@ -99,6 +99,7 @@ pub(super) fn nt_shutdown_system(arguments: &[u32]) -> NtStatus {
 /// | `SystemFileCacheInformation` (21) | les caches de fichiers, nuls |
 /// | `SystemFlagsInformation` (9) | les drapeaux globaux (`NtGlobalFlag`), aucun |
 /// | `SystemRangeStartInformation` (50) | le début de la moitié système, `0x80000000` |
+/// | `SystemNumaProcessorMap` (55) | un seul nœud (le plus haut : 0) et ses processeurs ([`numa_processor_map`]) |
 ///
 /// Les autres classes rendent `STATUS_INVALID_INFO_CLASS` (ce que NT rend),
 /// journalisé à leur premier appel ; `SystemFirmwareTableInformation` (76),
@@ -140,6 +141,7 @@ pub(super) fn nt_query_system_information(arguments: &[u32]) -> NtStatus {
         SYSTEM_FLAGS_INFORMATION => {
             super::return_information(&NT_GLOBAL_FLAG.to_le_bytes(), buffer, length, return_length)
         }
+        SYSTEM_NUMA_PROCESSOR_MAP => numa_processor_map(buffer, length, return_length),
         // A class ReactOS knows without implementing it: kernel32 turns
         // STATUS_NOT_IMPLEMENTED into ERROR_INVALID_FUNCTION, which its
         // SystemFirmware apitest accepts, and not the ERROR_INVALID_PARAMETER
@@ -248,6 +250,41 @@ pub(crate) fn processor_information() -> SystemProcessorInformation32 {
 
 /// SYSTEM_BASIC_INFORMATION : un processeur, les pages de la base PFN, la
 /// plage du mode utilisateur d'XP.
+/// SystemNumaProcessorMap (55), as ReactOS's `ex/sysinfo.c`: one node, the
+/// highest number 0, its processors those of SystemBasicInformation; the
+/// masks that fit after `HighestNodeNumber` (`abi::system_information::
+/// numa_processor_map`). kernel32's GetNumaHighestNodeNumber failed
+/// without it, and the C++ runtime of Notepad++ 7.9.2 threw in its
+/// WM_CREATE.
+fn numa_processor_map(buffer: u32, length: u32, return_length: u32) -> NtStatus {
+    let Some((masks, returned)) = abi::system_information::numa_processor_map(length, NUMA_NODES) else {
+        return STATUS_INFO_LENGTH_MISMATCH;
+    };
+    let written = (|| {
+        ke::usermem::probe_for_write(u64::from(buffer), length as usize, 4)?;
+        if return_length != 0 {
+            ke::usermem::probe_for_write(u64::from(return_length), 4, 4)?;
+        }
+        UserPtr::<u32>::new(buffer).write(&0)?;
+        let mask = u64::from(basic_information().active_processors_affinity_mask);
+        for node in 0..masks {
+            let at = buffer + abi::system_information::NUMA_PROCESSOR_MASKS_AT + node * 8;
+            ke::usermem::copy_to_user(u64::from(at), &mask.to_le_bytes())?;
+        }
+        if return_length != 0 {
+            UserPtr::<u32>::new(return_length).write(&returned)?;
+        }
+        Ok::<(), NtStatus>(())
+    })();
+    match written {
+        Ok(()) => STATUS_SUCCESS,
+        Err(status) => status,
+    }
+}
+
+/// The NUMA nodes of the system: one.
+const NUMA_NODES: u32 = 1;
+
 fn basic_information() -> SystemBasicInformation32 {
     let pages = mm::pfn::stats();
     let mut info = SystemBasicInformation32::default();
