@@ -29,10 +29,11 @@ traite l'une d'elles y ajoute la section de sa PR (voir « Ajouter une évaluati
 | [149](https://github.com/pentest30/mini-nt-os/pull/149) | 3 | 1 | 1 | 1 | 0 | 0 | 2 |
 | [152](https://github.com/pentest30/mini-nt-os/pull/152) | 7 | 7 | 0 | 0 | 0 | 0 | 1 |
 | [155](https://github.com/pentest30/mini-nt-os/pull/155) | 3 | 3 | 0 | 0 | 0 | 0 | 0 |
-| [156](https://github.com/pentest30/mini-nt-os/pull/156) | 3 | 3 | 0 | 0 | 0 | 0 | 0 |
-| **Total** | **65** | **38** | **6** | **4** | **1** | **16** | **4** |
+| [156](https://github.com/pentest30/mini-nt-os/pull/156) | 7 | 3 | 0 | 0 | 2 | 2 | 0 |
+| [157](https://github.com/pentest30/mini-nt-os/pull/157) | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
+| **Total** | **71** | **40** | **6** | **4** | **3** | **18** | **4** |
 
-Toutes les remarques jusqu'à la PR 156 sont évaluées.
+Toutes les remarques jusqu'à la PR 157 sont évaluées.
 
 Ce qui ressort :
 
@@ -233,14 +234,31 @@ Commit relu par le bot : `d3aa0c8` (puis `6db467c`, hors des lignes changées). 
 
 ## PR 156 : les verrous de plages d'octets (NtLockFile)
 
-Commit relu par les bots : `d3ea9a6`. Évalué le 2026-11-21. Vortex a posté deux fois la même remarque (en
-ligne, puis parmi celles « hors des lignes changées ») ; Codex l'a postée aussi.
+Commits relus par les bots : `d3ea9a6`, puis `4ca2cae` et `a68386b` (Vortex seul). Évalué le 2026-11-21. Sur
+`d3ea9a6`, Vortex a posté deux fois la même remarque (en ligne, puis parmi celles « hors des lignes changées ») ;
+Codex l'a postée aussi. Sur les deux commits suivants, Vortex a ajouté une remarque, en ligne puis en double, et
+a reposté deux fois la première, déjà corrigée.
 
 | Où | Remarque | Verdict | Pourquoi | Suite |
 |---|---|---|---|---|
 | `kernel/ntoskrnl/src/sys/file.rs:475` | Le neuvième argument de NtReadFile et NtWriteFile est un `PULONG Key` optionnel : son adresse sert de clé, et un processus voit refuser ses propres E/S sur une plage qu'il a verrouillée avec cette clé. | Fondé | `transfer` passait `key`, l'adresse, à `File::lock_owner`. ReactOS 0.4.16 (`io/iomgr/iofunc.c`, NtReadFile et NtWriteFile : `IN PULONG Key OPTIONAL`, `if (Key) CapturedKey = ProbeForReadUlong(Key)`). Le cas « read with another key » de `lock1.c` ne passait que parce que l'adresse diffère de 0. `kernel32` passe NULL : aucune application touchée. | `4ca2cae` : la clé lue par `UserPtr::<u32>` (0 sans pointeur). `LOCK1.EXE` verrouille avec la clé 7 puis lit et écrit par un pointeur vers 7 (accepté ; refusé sans le correctif, vérifié), sans clé et par un pointeur vers 8 (refusés). |
 | idem (hors des lignes changées) | La même, en double. | Fondé | Voir la ligne précédente. | `4ca2cae`. |
 | idem (Codex, P2) | La même. | Fondé | Voir la première ligne. | `4ca2cae`. |
+| `kernel/ntoskrnl/src/sys/file.rs:483` (sur `4ca2cae`) | Une E/S refusée par un verrou rend `STATUS_FILE_LOCK_CONFLICT` sans écrire le bloc d'état : y écrire l'échec et 0 octet. | Sans suite | ReactOS 0.4.16 : `vfatfs` (`rw.c`, VfatRead et VfatWrite) rend `STATUS_FILE_LOCK_CONFLICT` de façon synchrone, et `IopCompleteRequest` (`io/iomgr/irp.c`) ne copie `IoStatus` dans l'IOSB de l'appelant que si le statut n'est pas une erreur, ou pour une E/S en attente d'un fichier asynchrone : le bloc reste tel quel. | Rien. |
+| idem (hors des lignes changées, sur `a68386b`) | La même. | Sans suite | Voir la ligne précédente. | Rien. |
+| `kernel/ntoskrnl/src/sys/file.rs:481` (hors des lignes changées, sur `4ca2cae`) | La clé de NtReadFile et NtWriteFile prise comme une valeur, reposté. | Faux | Corrigé à ce commit : `transfer` lit la clé par `UserPtr::<u32>` (0 sans pointeur) avant `lock_owner`. Vortex a lui-même répondu « Fixed in 4ca2cae » à sa remarque d'origine. | Rien. |
+| idem (sur `a68386b`) | La même, encore. | Faux | Voir la ligne précédente. | Rien. |
 
 Aucun défaut manqué vérifié. Les dettes que la PR déclare (un verrou refusé sans FailImmediately n'attend pas ; le
 mode de partage de CreateFile pas vérifié) ne sont pas des défauts du diff, et le bot ne les a pas relevées.
+
+## PR 157 : Authenticode et le banc en session
+
+Commit relu par les bots : `4cb8cad`. Évalué le 2026-11-21. Une remarque, postée par Vortex et par Codex.
+
+| Où | Remarque | Verdict | Pourquoi | Suite |
+|---|---|---|---|---|
+| `tests/native/auth1.c:100` | Le résultat de WinVerifyTrust est imprimé, jamais vérifié, et le scénario ne l'attend pas : une régression de la vérification de confiance laisse `authenticode` vert, alors que la PR dit WinVerifyTrust à 0 vérifié. | Fondé | La sonde allait jusqu'à « PASS » quel que soit `trust` ; les étapes suivantes ne lisent que le certificat du signataire. Sans les DLL enregistrées, WinVerifyTrust rendait `0x80070057` et le scénario aurait passé. | `1026f1c` : la sonde s'arrête si `trust` n'est pas 0, et le scénario attend `[auth] WinVerifyTrust: 0`. |
+| idem (Codex, P2) | La même. | Fondé | Voir la ligne précédente. | `1026f1c`. |
+
+Aucun défaut manqué vérifié.

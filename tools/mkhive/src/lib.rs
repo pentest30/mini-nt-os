@@ -27,7 +27,7 @@
 
 use std::collections::BTreeMap;
 
-use regf::builder::{KeyNode, ValueNode};
+pub use regf::builder::{KeyNode, ValueNode};
 
 /// La couche Mino des ruches (ADR-023).
 pub const MINO_LAYER: &str = include_str!("../mino.inf");

@@ -272,12 +272,16 @@ static void make_the_profiles(WCHAR *profile, DWORD size)
  * in HKCR (SOFTWARE\Classes), before the hive of Default User is saved
  * (shell32 also writes the user's shell folders). explorer needs them: the
  * Start menu and the taskbar's band site are browseui's, the desktop's
- * folders shell32's. A DLL that does not load or fails is reported; it does
+ * folders shell32's; Authenticode (WinVerifyTrust, CryptQueryObject) needs
+ * the cryptographic providers (rsaenh), the trust providers and the SIPs
+ * (wintrust, softpub, mscat32, msisip), which the pinned SOFTWARE hive does
+ * not have. A DLL that does not load or fails is reported; it does
  * not stop the setup (as syssetup). */
 static void register_the_dlls(void)
 {
     static const WCHAR *const dlls[] = {
-        L"browseui.dll", L"oleaut32.dll", L"rpcrt4.dll", L"shdocvw.dll", L"shell32.dll", L"urlmon.dll", L"wininet.dll",
+        L"browseui.dll", L"cryptnet.dll", L"mscat32.dll", L"msisip.dll", L"oleaut32.dll", L"rpcrt4.dll", L"rsabase.dll",
+        L"rsaenh.dll", L"shdocvw.dll", L"shell32.dll", L"softpub.dll", L"urlmon.dll", L"wininet.dll", L"wintrust.dll",
     };
     HMODULE ole32 = LoadLibraryW(L"ole32.dll");
     CoInitializeFn co_initialize = ole32 ? (CoInitializeFn)GetProcAddress(ole32, "CoInitialize") : 0;

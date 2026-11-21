@@ -1,29 +1,38 @@
 # M7 bench: AbiWord 2.4.1 (NSIS), installed silently by APPBENCH.EXE
-# (tests/native/appbench.c) from C:\APPS, then started and closed.
+# (tests/native/appbench.c) from C:\APPS, then started and closed; the
+# bench runs as the shell of the logged-on user (session).
 # The markers say how far it goes; docs/compat/applications.md has the
 # report.
 features = test-smss, interactive
 requires = userland, native
-initial-command = APPBENCH.EXE
+session = APPBENCH.EXE
+boots = 2
 app = abiword
 cpus = default
-timeout = 600
+timeout = 900
 # What works today, a floor: NSIS makes its plug-ins directory (a
 # temporary file deleted, FileDispositionInformation, then a directory of
 # its name) and installs; the program starts. The font metrics it asks
 # (GetCharWidth32W, GetOutlineTextMetricsW) are answered: it passes
 # libAbiWord.dll's missing services. ProcessDebugPort now reports no debugger;
 # the exception reporter prints the original fault in libAbiWord.dll
-# (0x102b119f, reading 0x3c). The application still exits with 0xC0000005:
-# this floor does not certify a usable editor.
+# (0x102b119f, reading 0x3c) without a session. This floor does not certify
+# a usable editor: its path (bold, .rtf) is still to do.
 expect = [appbench] installer started
 expect = [appbench] installer ended: exit code 0
 expect = [appbench] installed: C:\Program Files\AbiSuite2\AbiWord\bin\AbiWord.exe
 expect = [appbench] program started
+# In the user's session, with SystemNumaProcessorMap answered, its window
+# opens and it closes with 0 (which of the two removed the fault is not
+# measured).
+expect = [appbench] program window after
+expect = - AbiWord"
+expect = [appbench] program closed: exit code 0
 expect = [appbench] AbiWord 2.4.1: report done
 forbid = Can't initialize plug-ins directory
 forbid = [appbench] installer still running after
 forbid = NtGdiGetCharWidthW (0x10a2) is not implemented
 forbid = NtGdiGetOutlineTextMetricsInternalW (0x10bc) is not implemented
 forbid = sys: NtQueryInformationProcess class 0x7 is not implemented
+forbid = [appbench] program ended by itself: exit code c0000005
 forbid = *** STOP:

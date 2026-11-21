@@ -80,3 +80,5 @@ GlobalUnlock@4
 LockFile@20
 LockFileEx@24
 UnlockFile@20
+FormatMessageW@28
+LocalAlloc@8

@@ -637,6 +637,10 @@ cargo build -p mino-loader --target x86_64-unknown-uefi --profile kernel
   disque, et `smss` le lance comme commande initiale (avec `requires = userland, native`).
 - `memory = MiB` : la mémoire de QEMU (256 Mio sinon) ; `high-memory` en donne 8 Gio, comme un PC dont le firmware
   charge le chargeur au-dessus de 4 Gio.
+- `session = PROGRAMME.EXE` : le vrai `winlogon` installe le système (`minoinit`, premier démarrage), ouvre la
+  session d'Administrator (second), et `userinit` lance ce programme de `tests/native/` comme shell, avec
+  `/session` : sous le jeton de l'utilisateur, avec `lsass` et son profil (avec `requires = userland, native`,
+  un disque système et `boots = 2`). Le banc des applications (`app-*`) tourne ainsi.
 - `disk = system` attache l'image du disque RAM comme disque système ATA (`C:`), `boots = N` démarre QEMU N fois sur
   elle (scénario `persistence`) ; `fsck.vfat` (paquet `dosfstools`) vérifie ensuite l'image.
 - `power-cut = N => MARQUEUR => …` : le démarrage N finit par une coupure de courant (QEMU tué) une fois ces

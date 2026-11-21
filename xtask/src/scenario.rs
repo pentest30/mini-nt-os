@@ -87,6 +87,13 @@
 //!   `tests/native/` (or of the rostests) takes the place of `winlogon.exe` on the ramdisk, so
 //!   that `smss` starts it as its initial command (with `requires =
 //!   userland, native`).
+//! - `session = PROGRAM.EXE` (with `requires = userland, native`, a system
+//!   disk and `boots` from 2): the real `winlogon` sets the system up
+//!   (minoinit, first boot), then logs Administrator on (autologon), and
+//!   `userinit` starts this test program of `tests/native/` as the shell,
+//!   with `/session` on its command line: it runs in the user's session,
+//!   under the user's token, with `lsass` and the user's profile. The SOFTWARE
+//!   hive of the disk names it (`Winlogon\Shell`).
 //! - `shell = explorer` (with `requires = userland`): the boot disk also
 //!   takes the shell, `explorer.exe` in `WINDOWS`, and the DLLs it imports
 //!   that the other scenarios' disk does not have (`browseui`, `shdocvw`),
@@ -138,6 +145,9 @@ pub struct Scenario {
     pub initial_command: Option<String>,
     /// The boot disk takes the shell, `explorer.exe`, and its imports.
     pub shell: bool,
+    /// The test program that userinit starts as the shell, in the session
+    /// of the logged-on user (`session`).
+    pub session: Option<String>,
     /// Keys to type once a marker is in the serial log, in order.
     pub keys: Vec<Keys>,
     /// An application of the M7 bench (`app = ID`, `xtask/src/apps.rs`):
@@ -306,6 +316,7 @@ impl Scenario {
             screen_wait: Duration::ZERO,
             screen_size: None,
             initial_command: None,
+            session: None,
             shell: false,
             keys: Vec::new(),
             app: None,
@@ -348,6 +359,7 @@ impl Scenario {
                 "forbid" => sc.forbid.push(value.to_string()),
                 "forbid-line-start" => sc.forbid_line_start.push(value.to_string()),
                 "initial-command" => sc.initial_command = Some(value.to_string()),
+                "session" => sc.session = Some(value.to_string()),
                 "shell" => match value {
                     "explorer" => sc.shell = true,
                     _ => return Err(format!("{}: unknown shell `{value}`", at())),
@@ -434,6 +446,19 @@ impl Scenario {
         }
         if sc.initial_command.is_some() && !(sc.requires_userland && sc.requires_native) {
             return Err(format!("{name}/{SCENARIO_FILE}: `initial-command` needs `requires = userland, native`"));
+        }
+        if let Some(program) = &sc.session {
+            if !(sc.requires_userland && sc.requires_native) {
+                return Err(format!("{name}/{SCENARIO_FILE}: `session` needs `requires = userland, native`"));
+            }
+            if sc.initial_command.is_some() {
+                return Err(format!("{name}/{SCENARIO_FILE}: `session` keeps winlogon: no `initial-command`"));
+            }
+            if !sc.system_disk || sc.boots < 2 {
+                return Err(format!(
+                    "{name}/{SCENARIO_FILE}: `session = {program}` sets up then logs on: a system disk and `boots` from 2"
+                ));
+            }
         }
         if sc.screen_size.is_some() && sc.screen.is_empty() {
             return Err(format!("{name}/{SCENARIO_FILE}: `screen-size` without `screen` pixels"));
@@ -608,6 +633,15 @@ requires = userland
         assert_eq!(gui.initial_command.as_deref(), Some("GUI1.EXE"));
         assert_eq!(sc.initial_command, None);
         assert!(Scenario::parse("x", "expect = a\ninitial-command = GUI1.EXE").is_err(), "without the userland");
+        let session = "expect = a\nrequires = userland, native\ndisk = system\nboots = 2\nsession = APPBENCH.EXE";
+        assert_eq!(Scenario::parse("x", session).unwrap().session.as_deref(), Some("APPBENCH.EXE"));
+        assert_eq!(sc.session, None);
+        let without = |line: &str| session.replace(line, "");
+        assert!(Scenario::parse("x", &without("\nboots = 2")).is_err(), "one boot: no logon");
+        assert!(Scenario::parse("x", &without("\ndisk = system")).is_err(), "the setup's reboot needs a disk");
+        assert!(Scenario::parse("x", &without(", native")).is_err(), "a test program needs native");
+        assert!(Scenario::parse("x", &format!("{session}\ninitial-command = GUI1.EXE")).is_err(), "keeps winlogon");
+        assert!(Scenario::parse("x", &session.replace("disk = system", "app = notepadpp")).is_ok(), "an app's disk");
         let shell = Scenario::parse("x", "expect = a\nrequires = userland\nshell = explorer").unwrap();
         assert!(shell.shell && !sc.shell);
         assert!(Scenario::parse("x", "expect = a\nshell = explorer").is_err(), "a shell without the userland");

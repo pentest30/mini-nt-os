@@ -1,5 +1,28 @@
 # Notes de passation
 
+- **Authenticode : le banc dans une vraie session ; Notepad++ ouvre sa fenêtre** (`claude/authenticode`, M7,
+  [`compat/applications.md`](compat/applications.md#authenticode-le-banc-dans-une-session-le-2026-11-21) ;
+  demandé le 2026-11-20). Notepad++ montrait « DLL signature verification failed », puis « Authenticode check
+  failed ». Cause (une sonde, `tests/native/auth1.c`, et une trace temporaire jamais commitée) : le banc remplaçait
+  `winlogon` ; sans `lsass`, GetUserNameW échoue (1722), `rsaenh` refuse CryptAcquireContext même en
+  CRYPT_VERIFYCONTEXT, `crypt32` ne décode pas le PKCS#7 de la DLL (CRYPT_E_NO_MATCH), et Notepad++ plante sur le
+  message d'erreur (FormatMessage de ReactOS ne connaît pas `0x80092009` : un tampon nul, attrapé par son
+  `catch (...)`). Et la ruche SOFTWARE épinglée n'a aucune clé `Cryptography` : `minoinit` enregistre maintenant
+  aussi les DLL cryptographiques de `syssetup.inf` (cryptnet, mscat32, msisip, rsabase, rsaenh, softpub,
+  wintrust). Choix du mainteneur : le banc tourne dans une vraie session. Clé de scénario `session = PROGRAMME.EXE`
+  (`xtask` : le vrai `winlogon`, `minoinit` au premier démarrage, l'ouverture de session automatique au second, et
+  `Winlogon\Shell = C:\PROGRAMME.EXE /session` dans la ruche SOFTWARE du scénario, que `userinit` lance sous le jeton
+  d'Administrator) ; `APPBENCH.EXE /session` ne se crée pas de bureau. Les scénarios `app-*` passent en session
+  (deux démarrages, 300 s de plus au délai) ; la branche part de la PR 156 (`ProgramFilesDir`, NtLockFile).
+  Notepad++ s'arrêtait ensuite sur « Exception On WM_CREATE » : NtQuerySystemInformation(SystemNumaProcessorMap,
+  55) manquait (GetNumaHighestNodeNumber de `kernel32`), fait comme `ex/sysinfo.c` de ReactOS (un nœud ;
+  `abi::system_information::numa_processor_map`). Notepad++ ouvre « new 1 - Notepad++ » et se ferme avec 0 ;
+  plancher relevé. Scénario `authenticode` (AUTH1.EXE en session : utilisateur, fournisseur par défaut,
+  WinVerifyTrust, CryptQueryObject, signataire « Notepad++ »). Tests hôte : `numa_tests`,
+  `a_session_program_is_the_shell_of_the_layered_software_hive`, `scenario` (clé `session`). **Suite** : le
+  parcours de Notepad++ ; SumatraPDF en session : son installeur rend 0 et écrit ~10 Mio, mais ni dans
+  `C:\Program Files` (absent) ni où le banc le cherche (à trouver) ; GIMP en session : l'échec d'Inno 5.4 est une
+  boîte de Delphi que le banc ferme après 900 s (le seuil n'interdit plus « still running »).
 - **NtLockFile : 7-Zip s'installe et s'ouvre** (`claude/nt-lock-file`, M7, troisième point du bilan ;
   [`compat/applications.md`](compat/applications.md#ntlockfile-7-zip-sinstalle-le-2026-11-20) ; demandé le
   2026-11-20). Io : `io::file_lock` (le FILE_LOCK du FCB, d'après FsRtl de ReactOS : un verrou exclusif ne chevauche
