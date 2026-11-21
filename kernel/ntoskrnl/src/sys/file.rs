@@ -19,6 +19,12 @@
 //! Un nom sous `\Device\NamedPipe` ouvre un tube, et les services d'un
 //! fichier de tube passent par [`super::pipe`] (NPFS).
 //!
+//! Les verrous de plages d'octets : NtLockFile et NtUnlockFile (ceux du FCB,
+//! `io_manager::file_lock`), que NtReadFile et NtWriteFile respectent
+//! (`STATUS_FILE_LOCK_CONFLICT`). Un verrou refusé sans FailImmediately
+//! attendrait sa plage (STATUS_PENDING de FsRtl) : pas encore, il rend le
+//! conflit, journalisé une fois.
+//!
 //! L'effacement : FileDispositionInformation (NtSetInformationFile) ou
 //! FILE_DELETE_ON_CLOSE (NtCreateFile) le mettent en attente, et le fichier
 //! part avec le dernier handle de ses ouvertures (`io_manager::File`).
@@ -46,11 +52,11 @@ use abi::file::{
 };
 use abi::ntstatus::{
     NtStatus, STATUS_ACCESS_DENIED, STATUS_BUFFER_OVERFLOW, STATUS_DEVICE_BUSY, STATUS_DEVICE_NOT_READY,
-    STATUS_DISK_FULL, STATUS_EAS_NOT_SUPPORTED, STATUS_END_OF_FILE, STATUS_INFO_LENGTH_MISMATCH,
-    STATUS_INVALID_DEVICE_REQUEST, STATUS_INVALID_INFO_CLASS, STATUS_INVALID_PARAMETER, STATUS_IO_DEVICE_ERROR,
-    STATUS_NOT_IMPLEMENTED, STATUS_NO_MORE_FILES, STATUS_NO_SUCH_DEVICE, STATUS_OBJECT_NAME_COLLISION,
-    STATUS_OBJECT_NAME_INVALID, STATUS_OBJECT_NAME_NOT_FOUND, STATUS_OBJECT_TYPE_MISMATCH, STATUS_REVISION_MISMATCH,
-    STATUS_SUCCESS,
+    STATUS_DISK_FULL, STATUS_EAS_NOT_SUPPORTED, STATUS_END_OF_FILE, STATUS_FILE_LOCK_CONFLICT,
+    STATUS_INFO_LENGTH_MISMATCH, STATUS_INVALID_DEVICE_REQUEST, STATUS_INVALID_INFO_CLASS, STATUS_INVALID_PARAMETER,
+    STATUS_IO_DEVICE_ERROR, STATUS_NOT_IMPLEMENTED, STATUS_NO_MORE_FILES, STATUS_NO_SUCH_DEVICE,
+    STATUS_OBJECT_NAME_COLLISION, STATUS_OBJECT_NAME_INVALID, STATUS_OBJECT_NAME_NOT_FOUND,
+    STATUS_OBJECT_TYPE_MISMATCH, STATUS_REVISION_MISMATCH, STATUS_SUCCESS,
 };
 use abi::object::OBJ_INHERIT;
 use abi::pipe::{FilePipeInformation, FilePipeLocalInformation, FILE_PIPE_INFORMATION, FILE_PIPE_LOCAL_INFORMATION};
@@ -62,6 +68,7 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::mem::size_of;
 use core::sync::atomic::{AtomicBool, Ordering};
+use ex::event::{Event, EVENT_MODIFY_STATE, EVENT_TYPE};
 use io_manager::{File, FILE_TYPE};
 use ke::usermem::UserPtr;
 use ob::{AccessMask, Handle, HandleAttributes, Object};
@@ -99,15 +106,6 @@ struct Open {
     ea_length: u32,
 }
 
-/// Le répertoire d'un nom, son `\` final compris (`\??\C:\` pour la
-/// racine), et son dernier composant ; un nom sans `\` est relatif.
-fn split_last(name: &str) -> (&str, &str) {
-    match name.rfind('\\') {
-        Some(at) => (&name[..=at], &name[at + 1..]),
-        None => ("", name),
-    }
-}
-
 /// IoCreateFile : ouvre le fichier que désignent les attributs en
 /// `attributes` selon `open`, met son handle en `out` (0 d'abord) et le bloc
 /// d'état en `iosb`.
@@ -141,6 +139,10 @@ fn create_file(out: u32, attributes: u32, iosb: u32, open: Open) -> Result<(), N
                 return super::pipe::open(pipe, &out, iosb, open.desired, open.options, attributes);
             }
             let file = ob::downcast::<File>(&object).ok_or(STATUS_OBJECT_TYPE_MISMATCH)?;
+            // A trailing `\` names a directory only (vfatfs's VfatCreateFile).
+            if name.ends_with('\\') && !file.is_directory() {
+                return Err(STATUS_OBJECT_NAME_INVALID);
+            }
             let granted = file.granted_access(AccessMask(open.desired))?;
             // Counted before the disposition is applied: a last close that
             // deletes the file waits for it, or it finds the file gone.
@@ -151,10 +153,7 @@ fn create_file(out: u32, attributes: u32, iosb: u32, open: Open) -> Result<(), N
         }
         Err(STATUS_OBJECT_NAME_NOT_FOUND) if io_manager::creates(open.disposition) => {
             io_manager::check_disposition(open.disposition, open.options)?;
-            let (directory, last) = split_last(&name);
-            if last.is_empty() {
-                return Err(STATUS_OBJECT_NAME_INVALID);
-            }
+            let (directory, last) = io_manager::split_to_create(&name, open.options)?;
             // The directory exists: without it, the name's own lookup would
             // have found its path missing (STATUS_OBJECT_PATH_NOT_FOUND).
             let directory = namespace.open(directory, root, Some(&FILE_TYPE), attributes)?;
@@ -433,12 +432,14 @@ fn write_iosb(iosb: u32, status: NtStatus, information: u32) -> Result<(), NtSta
 }
 
 /// NtReadFile et NtWriteFile(FileHandle, Event, ApcRoutine, ApcContext,
-/// IoStatusBlock, Buffer, Length, ByteOffset, Key) : la position vient de
+/// IoStatusBlock, Buffer, Length, ByteOffset, Key) : `Key` est un `PULONG`
+/// optionnel (la clé des verrous, 0 sans lui), à la différence de celui,
+/// par valeur, de NtLockFile ; la position vient de
 /// `ByteOffset`, ou de celle du fichier s'il est synchrone (sans
 /// `ByteOffset`, ou `FILE_USE_FILE_POINTER_POSITION`) ;
 /// `FILE_WRITE_TO_END_OF_FILE` écrit à la fin.
 fn transfer(arguments: &[u32], write: bool) -> Result<(), NtStatus> {
-    let [handle, event, apc_routine, _apc_context, iosb, buffer, length, byte_offset, _key] = arguments[..9] else {
+    let [handle, event, apc_routine, _apc_context, iosb, buffer, length, byte_offset, key] = arguments[..9] else {
         unreachable!("9 arguments")
     };
     if event != 0 || apc_routine != 0 {
@@ -472,6 +473,16 @@ fn transfer(arguments: &[u32], write: bool) -> Result<(), NtStatus> {
     };
     if !granted.intersects(AccessMask(needed)) {
         return Err(STATUS_ACCESS_DENIED);
+    }
+    let key = match key {
+        0 => 0,
+        at => UserPtr::<u32>::new(at).read()?,
+    };
+    let owner = file.lock_owner(super::current_process().pid(), key);
+    if write {
+        file.check_write(offset, u64::from(length), owner)?;
+    } else {
+        file.check_read(offset, u64::from(length), owner)?;
     }
     let length = length as usize;
     if write {
@@ -842,4 +853,111 @@ fn query_directory_file(arguments: &[u32]) -> Result<NtStatus, NtStatus> {
         }
         Err(status) => Err(status),
     }
+}
+
+/// Un verrou refusé sans FailImmediately a déjà été demandé.
+static LOCK_WAIT_REPORTED: AtomicBool = AtomicBool::new(false);
+
+/// Le fichier d'un volume que désigne `handle` pour NtLockFile et
+/// NtUnlockFile, et les droits de son handle : un tube n'a pas de verrous
+/// (`STATUS_INVALID_DEVICE_REQUEST`), un handle sans FILE_READ_DATA ni
+/// FILE_WRITE_DATA n'en prend pas (`STATUS_ACCESS_DENIED`, comme ReactOS).
+fn lock_target(handle: u32) -> Result<Arc<Object<File>>, NtStatus> {
+    if let Some(_pipe) = super::pipe::pipe_file(handle, AccessMask::NONE)? {
+        return Err(STATUS_INVALID_DEVICE_REQUEST);
+    }
+    let table = &super::current_process().handle_table;
+    let file = table.reference_as::<File>(Handle(handle), &FILE_TYPE, AccessMask::NONE)?;
+    let (granted, _) = table.query(Handle(handle))?;
+    if !granted.intersects(AccessMask(FILE_READ_DATA | FILE_WRITE_DATA)) {
+        return Err(STATUS_ACCESS_DENIED);
+    }
+    Ok(file)
+}
+
+/// NtLockFile(FileHandle, Event, ApcRoutine, ApcContext, IoStatusBlock,
+/// ByteOffset, Length, Key, FailImmediately, ExclusiveLock) : verrouille
+/// `[*ByteOffset, *ByteOffset + *Length)` pour l'objet fichier, le processus
+/// et la clé (`io_manager::file_lock`). Le verrou est pris ou refusé tout de
+/// suite, comme le chemin rapide de ReactOS : le bloc d'état reçoit le
+/// résultat, et l'événement (EVENT_MODIFY_STATE), remis à zéro au début, est
+/// signalé. Une APC de fin n'est pas encore faite (`STATUS_NOT_IMPLEMENTED`,
+/// journalisé une fois ; `kernel32` n'en passe pas).
+pub(super) fn nt_lock_file(arguments: &[u32]) -> NtStatus {
+    match lock_file(arguments) {
+        Ok(status) | Err(status) => status,
+    }
+}
+
+fn lock_file(arguments: &[u32]) -> Result<NtStatus, NtStatus> {
+    let [handle, event, apc_routine, _apc_context, iosb, byte_offset, length, key, fail_immediately, exclusive] =
+        arguments[..10]
+    else {
+        unreachable!("10 arguments")
+    };
+    let file = lock_target(handle)?;
+    if apc_routine != 0 {
+        if !ASYNC_REPORTED.swap(true, Ordering::Relaxed) {
+            log::warn!("sys: NtLockFile with an APC is not implemented");
+        }
+        return Err(STATUS_NOT_IMPLEMENTED);
+    }
+    ke::usermem::probe_for_write(u64::from(iosb), size_of::<IoStatusBlock32>(), 4)?;
+    let offset = UserPtr::<u64>::new(byte_offset).read()?;
+    let length = UserPtr::<u64>::new(length).read()?;
+    let event = match event {
+        0 => None,
+        handle => Some(super::current_process().handle_table.reference_as::<Event>(
+            Handle(handle),
+            &EVENT_TYPE,
+            EVENT_MODIFY_STATE,
+        )?),
+    };
+    if let Some(event) = &event {
+        event.reset();
+    }
+    let owner = file.lock_owner(super::current_process().pid(), key);
+    // BOOLEAN : l'octet de poids faible de l'emplacement de la pile.
+    let status = match file.lock(offset, length, exclusive & 0xFF != 0, owner) {
+        Ok(()) => STATUS_SUCCESS,
+        Err(status) => {
+            if status == STATUS_FILE_LOCK_CONFLICT
+                && fail_immediately & 0xFF == 0
+                && !LOCK_WAIT_REPORTED.swap(true, Ordering::Relaxed)
+            {
+                log::warn!("sys: NtLockFile without FailImmediately does not wait for the range yet");
+            }
+            status
+        }
+    };
+    let written = write_iosb(iosb, status, 0);
+    if let Some(event) = &event {
+        event.set();
+    }
+    written?;
+    Ok(status)
+}
+
+/// NtUnlockFile(FileHandle, IoStatusBlock, ByteOffset, Length, Key) : retire
+/// le verrou du processus et de la clé qui couvre exactement la plage
+/// (`STATUS_RANGE_NOT_LOCKED` sinon) ; le bloc d'état reçoit le résultat.
+pub(super) fn nt_unlock_file(arguments: &[u32]) -> NtStatus {
+    match unlock_file(arguments) {
+        Ok(status) | Err(status) => status,
+    }
+}
+
+fn unlock_file(arguments: &[u32]) -> Result<NtStatus, NtStatus> {
+    let [handle, iosb, byte_offset, length, key] = arguments[..5] else { unreachable!("5 arguments") };
+    let file = lock_target(handle)?;
+    ke::usermem::probe_for_write(u64::from(iosb), size_of::<IoStatusBlock32>(), 4)?;
+    let offset = UserPtr::<u64>::new(byte_offset).read()?;
+    let length = UserPtr::<u64>::new(length).read()?;
+    let owner = file.lock_owner(super::current_process().pid(), key);
+    let status = match file.unlock(offset, length, owner) {
+        Ok(()) => STATUS_SUCCESS,
+        Err(status) => status,
+    };
+    write_iosb(iosb, status, 0)?;
+    Ok(status)
 }

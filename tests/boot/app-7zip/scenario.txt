@@ -8,7 +8,15 @@ initial-command = APPBENCH.EXE
 app = 7zip
 cpus = default
 timeout = 600
-# What works today, a floor: the installer starts.
+# What works today, a floor: msiexec installs it in C:\Program Files
+# (NtLockFile for ole32's structured storage, CreateDirectoryW of
+# C:\WINDOWS\Installer\, ProgramFilesDir in mino.inf), and its file
+# manager opens and closes.
 expect = [appbench] installer started
+expect = [appbench] installer ended: exit code 0
+expect = [appbench] installed: C:\Program Files\7-Zip\7zFM.exe
+expect = [appbench] program window after
+expect = [appbench] program closed: exit code 0
 expect = [appbench] 7-Zip 9.20: report done
+forbid = NtLockFile (0x0069) is not implemented
 forbid = *** STOP:

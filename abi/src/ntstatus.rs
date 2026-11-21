@@ -165,6 +165,11 @@ pub const STATUS_UNKNOWN_REVISION: NtStatus = NtStatus(0xC000_0058);
 pub const STATUS_INVALID_OWNER: NtStatus = NtStatus(0xC000_005A);
 pub const STATUS_INVALID_PRIMARY_GROUP: NtStatus = NtStatus(0xC000_005B);
 pub const STATUS_PRIVILEGE_NOT_HELD: NtStatus = NtStatus(0xC000_0061);
+/// NtLockFile: the range overlaps a lock it may not share; NtReadFile,
+/// NtWriteFile: the range is locked by another caller (FsRtl).
+pub const STATUS_FILE_LOCK_CONFLICT: NtStatus = NtStatus(0xC000_0054);
+/// NtUnlockFile: no lock of the caller has exactly this range.
+pub const STATUS_RANGE_NOT_LOCKED: NtStatus = NtStatus(0xC000_007E);
 /// An open of a file whose deletion is pending.
 pub const STATUS_DELETE_PENDING: NtStatus = NtStatus(0xC000_0056);
 /// FileDispositionInformation, FILE_DELETE_ON_CLOSE: a read-only file, the

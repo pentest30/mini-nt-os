@@ -8,7 +8,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 
 | Table | Implémentés | Services |
 |---|---:|---:|
-| ntoskrnl | 133 | 296 |
+| ntoskrnl | 135 | 296 |
 | win32k | 218 | 737 |
 
 ## ntoskrnl
@@ -120,7 +120,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x0066` | `NtLoadKey` | 2 | ✅ |
 | `0x0067` | `NtLoadKey2` | 3 |  |
 | `0x0068` | `NtLoadKeyEx` | 4 |  |
-| `0x0069` | `NtLockFile` | 10 |  |
+| `0x0069` | `NtLockFile` | 10 | ✅ |
 | `0x006a` | `NtLockProductActivationKeys` | 2 |  |
 | `0x006b` | `NtLockRegistryKey` | 1 |  |
 | `0x006c` | `NtLockVirtualMemory` | 4 |  |
@@ -290,7 +290,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x0110` | `NtUnloadKey` | 1 | ✅ |
 | `0x0111` | `NtUnloadKey2` | 2 |  |
 | `0x0112` | `NtUnloadKeyEx` | 2 |  |
-| `0x0113` | `NtUnlockFile` | 5 |  |
+| `0x0113` | `NtUnlockFile` | 5 | ✅ |
 | `0x0114` | `NtUnlockVirtualMemory` | 4 |  |
 | `0x0115` | `NtUnmapViewOfSection` | 2 | ✅ |
 | `0x0116` | `NtVdmControl` | 2 |  |

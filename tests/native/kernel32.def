@@ -77,3 +77,6 @@ GlobalAlloc@8
 GlobalLock@4
 GlobalSize@4
 GlobalUnlock@4
+LockFile@20
+LockFileEx@24
+UnlockFile@20

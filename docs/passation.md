@@ -1,5 +1,31 @@
 # Notes de passation
 
+- **NtLockFile : 7-Zip s'installe et s'ouvre** (`claude/nt-lock-file`, M7, troisième point du bilan ;
+  [`compat/applications.md`](compat/applications.md#ntlockfile-7-zip-sinstalle-le-2026-11-20) ; demandé le
+  2026-11-20). Io : `io::file_lock` (le FILE_LOCK du FCB, d'après FsRtl de ReactOS : un verrou exclusif ne chevauche
+  rien, un partagé aucun exclusif, quel que soit le propriétaire ; plage vide ; déverrouillage exact du même
+  processus et de la même clé ; lecture refusée sur un exclusif d'un autre, écriture sur tout partagé et sur un
+  exclusif d'un autre : `STATUS_FILE_LOCK_CONFLICT`) ; `Volume::lock`, `unlock`, `unlock_all` à la fermeture du
+  dernier handle d'un objet fichier, `check_read`, `check_write` ; NtLockFile (événement, bloc d'état ; pas d'APC,
+  journalisée), NtUnlockFile, et NtReadFile, NtWriteFile qui respectent les verrous (`sys::file`). Deux autres
+  blocages de `msiexec`, trouvés par une trace temporaire des services de `MSIEXEC.EXE` (jamais commitée) : NtCreateFile
+  refusait le `\` final d'un répertoire à créer (CreateDirectoryW de `C:\WINDOWS\Installer\`), maintenant permis
+  à FILE_DIRECTORY_FILE seul, comme vfatfs (`io_manager::split_to_create`) ; et `ProgramFilesDir`,
+  `CommonFilesDir`, que syssetup écrit à l'installation de ReactOS, manquaient à `mino.inf` : `msi` installait
+  dans son répertoire courant (`System32`). 7-Zip s'installe dans `C:\Program Files\7-Zip`, `7zFM.exe` ouvre sa
+  fenêtre et se ferme avec 0 ; plancher de `app-7zip` relevé. Scénario `file-lock` (`tests/native/lock1.c` : LockFile,
+  LockFileEx, UnlockFile, les services, les E/S refusées, les verrous partis avec le handle, CreateDirectoryW avec
+  `\` final, le stockage structuré d'`ole32` qui partage et refuse par ses verrous), AMD et Intel ; il échoue sans le
+  handler de NtLockFile. Tests hôte : `file_lock::tests`,
+  `write_tests::the_locks_of_a_file_are_seen_by_each_of_its_opens_and_go_with_the_last_handle`,
+  `file::name_tests::a_trailing_backslash_names_a_directory_to_create_only`, `mkhive` (ProgramFilesDir). **Dettes** :
+  un verrou refusé sans FailImmediately rend le conflit au lieu d'attendre la plage (STATUS_PENDING de FsRtl,
+  journalisé une fois) ; le mode de partage de CreateFile n'est toujours pas vérifié (IoCheckShareAccess) : un
+  lecteur `ole32` en « deny write » ne prend aucun verrou et ne protège rien ; `C:\WINDOWS\TEMP` manque au disque
+  des scénarios sans le banc (le mode transacté d'`ole32` y échoue : GetTempFileNameW). Les tests de
+  `ntoskrnl` ne tournent pas (`test = false`) : le module `tests` de `sys::display` est lettre morte. **Suite** :
+  le parcours de 7-Zip (archiver, extraire, comparer), OpenOffice (son MSI), Authenticode (Notepad++).
+
 - **L'ordre d'écriture de la FAT** (`claude/fat-write-order`, 2026-11-20 ; vu sur la PR 153). Le scénario
   `logon` finissait parfois avec une chaîne FAT incomplète dans `C:\RECYCLED` (fsck.vfat) : QEMU est tué dès les
   marqueurs, et `explorer` venait d'écrire sa corbeille. Depuis l'écrivain paresseux (PR 151), les entrées des

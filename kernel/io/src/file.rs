@@ -28,6 +28,11 @@
 //! (`Volume::cleanup`). Une ouverture d'un tel fichier rend
 //! `STATUS_DELETE_PENDING` ([`check_open`]).
 //!
+//! Les verrous de plages d'octets (NtLockFile, NtUnlockFile) sont ceux du
+//! FCB (`Volume::lock`, [`crate::file_lock`]) ; un objet fichier les désigne
+//! par son adresse ([`File::lock_owner`]), et ils partent avec son dernier
+//! handle.
+//!
 //! Pas encore : les IRP (les lectures et les écritures vont droit au volume,
 //! synchrones), le partage (IoCheckShareAccess), le renommage, l'ouverture
 //! d'un volume comme fichier.
@@ -61,6 +66,7 @@ use hal::sync::KSpinLock;
 use ob::{create_object, downcast, AccessMask, GenericMapping, Object, ObjectRef, ObjectType, Parsed};
 
 use crate::directory;
+use crate::file_lock::LockOwner;
 use crate::volume::{Listed, Node, Space, Volume, VolumeLabel};
 
 const MUTATION_ACCESS: AccessMask = AccessMask(
@@ -354,9 +360,64 @@ impl File {
     /// # IRQL
     /// PASSIVE_LEVEL; may write the device.
     fn cleanup(&self) {
+        self.volume.unlock_all(&self.opened, self.object_id());
         if self.counted.swap(false, Ordering::AcqRel) {
             let _ = self.volume.cleanup(&self.opened, self.delete_on_close.load(Ordering::Relaxed));
         }
+    }
+
+    /// Ce qui désigne cet objet fichier parmi les propriétaires des verrous :
+    /// son adresse, stable tant qu'il vit.
+    fn object_id(&self) -> usize {
+        core::ptr::from_ref(self) as usize
+    }
+
+    /// Le propriétaire d'un verrou pris par cet objet fichier, pour le
+    /// processus `process` avec la clé `key`.
+    pub fn lock_owner(&self, process: u32, key: u32) -> LockOwner {
+        LockOwner { file_object: self.object_id(), process, key }
+    }
+
+    /// NtLockFile : verrouille `[offset, offset + length)` (voir
+    /// [`crate::file_lock::FileLocks::lock`]) ; un répertoire ne se verrouille
+    /// pas (`STATUS_INVALID_PARAMETER`, comme vfatfs).
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL; allocates from the non-paged pool.
+    pub fn lock(&self, offset: u64, length: u64, exclusive: bool, owner: LockOwner) -> Result<(), NtStatus> {
+        if self.opened.directory {
+            return Err(STATUS_INVALID_PARAMETER);
+        }
+        self.volume.lock(&self.opened, offset, length, exclusive, owner)
+    }
+
+    /// NtUnlockFile : retire le verrou de `owner` sur exactement cette plage.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn unlock(&self, offset: u64, length: u64, owner: LockOwner) -> Result<(), NtStatus> {
+        if self.opened.directory {
+            return Err(STATUS_INVALID_PARAMETER);
+        }
+        self.volume.unlock(&self.opened, offset, length, owner)
+    }
+
+    /// Une lecture de `length` octets en `offset` par `owner` : les verrous
+    /// la permettent-ils ? `STATUS_FILE_LOCK_CONFLICT` sinon.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn check_read(&self, offset: u64, length: u64, owner: LockOwner) -> Result<(), NtStatus> {
+        self.volume.check_read(&self.opened, offset, length, owner)
+    }
+
+    /// Une écriture de `length` octets en `offset` par `owner` : les verrous
+    /// la permettent-ils ? `STATUS_FILE_LOCK_CONFLICT` sinon.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn check_write(&self, offset: u64, length: u64, owner: LockOwner) -> Result<(), NtStatus> {
+        self.volume.check_write(&self.opened, offset, length, owner)
     }
 
     /// FILE_ATTRIBUTE_TAG_INFORMATION : ses attributs, et l'étiquette 0 :
@@ -613,6 +674,35 @@ fn close_file(object: &ObjectRef, handles_left: u32) {
     }
 }
 
+/// Le répertoire d'un nom à créer et son dernier composant
+/// ([`split_last`], NtCreateFile). Comme vfatfs (VfatCreateFile), un `\` final est permis à
+/// un répertoire (FILE_DIRECTORY_FILE) : CreateDirectoryW de `kernel32` le
+/// garde, et `msi` crée ainsi `C:\WINDOWS\Installer\`. Un fichier ainsi
+/// nommé, deux `\` finaux ou un nom vide rendent
+/// `STATUS_OBJECT_NAME_INVALID`.
+pub fn split_to_create(name: &str, options: u32) -> Result<(&str, &str), NtStatus> {
+    let (directory, last) = split_last(name);
+    if !last.is_empty() {
+        return Ok((directory, last));
+    }
+    if options & FILE_DIRECTORY_FILE == 0 {
+        return Err(STATUS_OBJECT_NAME_INVALID);
+    }
+    match split_last(&name[..name.len().saturating_sub(1)]) {
+        (directory, last) if !last.is_empty() => Ok((directory, last)),
+        _ => Err(STATUS_OBJECT_NAME_INVALID),
+    }
+}
+
+/// Le répertoire d'un nom, son `\` final compris (`\??\C:\` pour la
+/// racine), et son dernier composant ; un nom sans `\` est relatif.
+pub fn split_last(name: &str) -> (&str, &str) {
+    match name.rfind('\\') {
+        Some(at) => (&name[..=at], &name[at + 1..]),
+        None => ("", name),
+    }
+}
+
 /// La disposition `disposition` crée le fichier s'il manque.
 pub fn creates(disposition: u32) -> bool {
     matches!(disposition, FILE_CREATE | FILE_OPEN_IF | FILE_OVERWRITE_IF | FILE_SUPERSEDE)
@@ -705,5 +795,27 @@ pub struct FileObject {
 impl FileObject {
     pub fn new(path: &str, flags: u32) -> Self {
         Self { path: path.into(), current_offset: 0, flags }
+    }
+}
+
+#[cfg(test)]
+mod name_tests {
+    use super::*;
+    use abi::ntstatus::STATUS_OBJECT_NAME_INVALID;
+
+    #[test]
+    fn a_trailing_backslash_names_a_directory_to_create_only() {
+        // CreateDirectoryW keeps it: msi creates `C:\WINDOWS\Installer\`.
+        let installer = r"\??\C:\WINDOWS\Installer\";
+        assert_eq!(split_to_create(installer, FILE_DIRECTORY_FILE), Ok((r"\??\C:\WINDOWS\", "Installer")));
+        assert_eq!(split_to_create(installer, FILE_NON_DIRECTORY_FILE), Err(STATUS_OBJECT_NAME_INVALID));
+        assert_eq!(split_to_create(installer, 0), Err(STATUS_OBJECT_NAME_INVALID));
+        assert_eq!(
+            split_to_create(r"\??\C:\WINDOWS\Installer\\", FILE_DIRECTORY_FILE),
+            Err(STATUS_OBJECT_NAME_INVALID)
+        );
+        assert_eq!(split_to_create(r"\", FILE_DIRECTORY_FILE), Err(STATUS_OBJECT_NAME_INVALID));
+        assert_eq!(split_to_create(r"\??\C:\a.txt", 0), Ok((r"\??\C:\", "a.txt")));
+        assert_eq!(split_to_create("relative", 0), Ok(("", "relative")));
     }
 }

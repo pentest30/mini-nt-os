@@ -417,6 +417,29 @@ que personne du banc ne demande, attendent. Le scénario `app-abiword` interdit 
 non faits ; tests hôtes `fontobj::tests::char_widths_are_the_advances_of_the_glyphs` et
 `an_outline_text_metric_carries_its_names_and_numbers`.
 
+### NtLockFile : 7-Zip s'installe, le 2026-11-20
+
+`msiexec` ouvre son paquet par le stockage structuré d'`ole32` (StgOpenStorage), qui verrouille des plages
+d'octets loin derrière la fin du fichier (`0x7FFFFF00` et au-delà, LockFileEx avec LOCKFILE_FAIL_IMMEDIATELY) et
+boucle tant qu'elles sont en conflit. NtLockFile et NtUnlockFile sont faits : `io::file_lock`, le FILE_LOCK du FCB
+de chaque fichier, d'après FsRtl de ReactOS (`fsrtl/filelock.c`) et la documentation publique de LockFileEx, sans
+portage de code ; NtReadFile et NtWriteFile respectent les verrous ; ceux d'un objet fichier partent avec son
+dernier handle.
+
+`msiexec` allait alors plus loin et s'arrêtait encore deux fois (une trace temporaire de ses services, non
+commitée) :
+
+- CreateDirectoryW de `C:\WINDOWS\Installer\`, où il copie le paquet : `kernel32` garde le `\` final, et
+  NtCreateFile rendait `STATUS_OBJECT_NAME_INVALID` (un dernier composant vide). Comme vfatfs, un `\` final est
+  permis à un répertoire (FILE_DIRECTORY_FILE) et refusé à un fichier (`io_manager::split_to_create`).
+- `ProgramFilesFolder` vide : `msi` le lit dans `ProgramFilesDir`, que syssetup écrit à l'installation de
+  ReactOS (InitializeProgramFilesDir) ; `mino.inf` ne l'avait pas, et 7-Zip s'installait dans le répertoire
+  courant de `msiexec`, `C:\WINDOWS\System32\7-Zip`. `ProgramFilesDir` et `CommonFilesDir` sont dans `mino.inf`.
+
+Sur la branche, AMD : `msiexec` rend 0 en 11 s, `C:\Program Files\7-Zip` tient ses programmes, `7z.dll` et ses langues, `7zFM.exe`
+ouvre « 7-Zip File Manager » et se ferme avec 0. Le parcours (archiver un fichier, l'extraire, comparer) reste à
+faire. OpenOffice, dont l'installeur NSIS lance un MSI, n'a pas été remesuré (1 500 s de banc).
+
 ### La suite
 
 **Mise à jour du 2026-11-20 : ProcessDebugPort** (`fix/ps-process-debug-port`).
