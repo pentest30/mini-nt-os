@@ -975,10 +975,6 @@ pub fn draw_frame_ops(window: &Window, state: &WindowState, ops: &[crate::gdi::d
 ///
 /// # IRQL
 /// PASSIVE_LEVEL.
-/// Le dernier index de couleur système des pinceaux de classe
-/// (`COLOR_MENUBAR`, `class.rs`).
-const COLOR_MENUBAR: u32 = 30;
-
 pub fn expose(window: &Window, exposed: &Region) {
     if exposed.is_empty() {
         return;
@@ -1007,7 +1003,7 @@ pub fn expose(window: &Window, exposed: &Region) {
             return;
         }
         let background = parent.class.as_ref().map(|class| class.info.background).unwrap_or(0);
-        let color = if background != 0 && background <= COLOR_MENUBAR + 1 {
+        let color = if background != 0 && background <= crate::class::COLOR_MENUBAR + 1 {
             system_color(background as usize - 1)
         } else if background != 0 {
             match crate::gui::process_id_of(parent.pti).and_then(|pid| crate::gdi::handles::get(background, pid)) {

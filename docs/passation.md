@@ -22,7 +22,12 @@
   consignées ; la suite du diagnostic (les coordonnées des exposes de l'installeur, les restes du bitmap hors
   du rectangle de la page) passe à la session suivante. Tests hôte : `a_saved_state_comes_back_and_drops_the_
   later_saves` (la pile : les niveaux relatifs, les poses d'après effacées, la région visible jamais rendue).
-  Scénario `app-npp-interactive`.
+  Scénario `app-npp-interactive`. Les revues (Vortex, Codex — six remarques, toutes fondées, évaluées dans
+[`revues/mergestorm-vortex.md`](revues/mergestorm-vortex.md)) : le style d'un stylo étendu ne garde que ses
+quatre bits (PS_GEOMETRIC | PS_SOLID se dessinait pointillé) ; une pose emporte aussi les octets des attributs
+du propriétaire (la position courante et les origines se lisent chez lui) ; la pile se vide quand le DC change
+de mains (take, disown) ; le bitmap d'un DC en mémoire revient par la sélection ; la doc de `paint::expose`
+revenait sur la fonction ; et les clics du scénario ne répètent plus le même déplacement relatif.
 
 - **Les sous-menus du menu Démarrer : NtUserSetParent** (`claude/start-menu-speed`, sur la PR 157, M7,
   [`compat/m6-logon.md`](compat/m6-logon.md) ; demandé le 2026-11-21 après un essai sous VirtualBox : « l'affichage

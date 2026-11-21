@@ -204,7 +204,7 @@ pub struct Dc {
     state: KSpinLock<DcState>,
     /// Les états que [`save_dc`] a posés, du plus récent au plus ancien
     /// (`dclevel.hdcSave` et `dclevel.lSaveDepth` de ReactOS).
-    saves: KSpinLock<Vec<DcState>>,
+    saves: KSpinLock<Vec<SavedState>>,
     /// Un DC en mémoire (DCTYPE_MEMORY).
     memory: bool,
 }
@@ -235,53 +235,107 @@ impl Dc {
 
     /// NtGdiSaveDC (DC_AllocDcWithHandle + DC_vCopyState de ReactOS, sur une
     /// pile du DC au lieu d'un DC sauvegardé alloué) : l'état courant posé
-    /// sur la pile ; rend son identifiant (1 : la première pose, 2 : la
+    /// sur la pile, avec les attributs du propriétaire (DC_vCopyState copie
+    /// tout le `pdcattr` : la position courante et les origines se lisent
+    /// chez lui) ; rend son identifiant (1 : la première pose, 2 : la
     /// deuxième…).
     ///
     /// # IRQL
     /// <= DISPATCH_LEVEL.
     pub fn save_state(&self) -> i32 {
         let state = self.state.lock().clone();
+        let attrs = state.owner.and_then(|(_, attr)| {
+            let mut bytes = alloc::vec![0; size_of::<DcAttr32>()];
+            copy_from_user(&mut bytes, u64::from(attr)).ok().map(|()| bytes)
+        });
         let mut saves = self.saves.lock();
-        saves.push(state);
+        saves.push(SavedState { state, attrs });
         saves.len() as i32
+    }
+
+    /// La pile de sauvegardes vide : un DC repris du cache ( [`take`] ) ou
+    /// rendu à personne ([`disown`]) repart sans celle de qui l'a tenu.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn clear_saves(&self) {
+        self.saves.lock().clear();
     }
 
     /// NtGdiRestoreDC (DC_vRestoreDC de ReactOS) : l'état courant remis
     /// comme à l'identifiant `level` — négatif, depuis le haut de la pile
-    /// (-1 : la dernière pose), les poses d'après dépilées et leur DC
-    /// effacé. La région visible ne fait pas partie de l'état sauvé
-    /// (« Get/SetDCState() don't change hVisRgn field », DC_vCopyState), et
-    /// le bitmap ne change que pour un DC en mémoire. Faux si
-    /// `level` ne désigne rien de la pile.
+    /// (-1 : la dernière pose), les poses d'après dépilées. La région
+    /// visible ne fait pas partie de l'état sauvé (« Get/SetDCState() don't
+    /// change hVisRgn field », DC_vCopyState : le champ revient à ce qu'il
+    /// est), les attributs du propriétaire reviennent entiers, et le bitmap
+    /// d'un DC en mémoire par la sélection ([`select_bitmap`] : la surface
+    /// reprend sa place, la région visible sa taille). Faux si `level` ne
+    /// désigne rien de la pile.
     ///
     /// # IRQL
-    /// <= DISPATCH_LEVEL.
-    pub fn restore_state(&self, mut level: i32) -> bool {
-        let mut saves = self.saves.lock();
-        if level < 0 {
-            level += saves.len() as i32 + 1;
-        }
-        if level <= 0 || level as usize > saves.len() {
-            return false;
-        }
-        let index = level as usize - 1;
-        let state = saves[index].clone();
-        saves.truncate(index);
-        drop(saves);
+    /// PASSIVE_LEVEL (écrit chez le propriétaire).
+    pub fn restore_state(&self, hdc: u32, mut level: i32) -> bool {
+        let saved = {
+            let mut saves = self.saves.lock();
+            if level < 0 {
+                level += saves.len() as i32 + 1;
+            }
+            if level <= 0 || level as usize > saves.len() {
+                return false;
+            }
+            let index = level as usize - 1;
+            let saved = saves[index].clone();
+            saves.truncate(index);
+            saved
+        };
         let memory = self.memory;
         self.change(|current| {
-            current.origin = state.origin;
-            current.clip = state.clip;
-            current.fill = state.fill;
-            current.pen = state.pen;
-            current.position = state.position;
-            if memory {
-                current.bitmap = state.bitmap;
+            // Le bitmap d'un DC en mémoire revient par la sélection : la
+            // surface marquée choisie, l'ancienne libérée, la région visible
+            // à sa taille — pas une affectation directe, qui laisserait la
+            // surface d'un côté et les comptes de l'autre.
+            if memory
+                && current.bitmap.as_ref().map(|old| old.handle) != saved.state.bitmap.as_ref().map(|new| new.handle)
+            {
+                if let Some(new) = &saved.state.bitmap {
+                    if new.surface.select(hdc) {
+                        if let Some(old) = &current.bitmap {
+                            old.surface.deselect(hdc);
+                        }
+                        let (width, height) = new.surface.size();
+                        current.vis = Region::from_rect(Rect::new(0, 0, width as i32, height as i32));
+                        current.bitmap = Some(new.clone());
+                    }
+                }
             }
+            current.origin = saved.state.origin;
+            current.clip = saved.state.clip;
+            current.fill = saved.state.fill;
+            current.pen = saved.state.pen;
+            current.position = saved.state.position;
         });
+        // Les attributs du propriétaire reviennent entiers, sauf la région
+        // visible, qui reste celle d'aujourd'hui.
+        if let (Some(bytes), Some((_, attr))) = (&saved.attrs, self.state.lock().owner) {
+            let written = copy_to_user(u64::from(attr), bytes).and_then(|()| {
+                let at = u64::from(attr) + offset_of!(DcAttr32, vis_rect_region) as u64;
+                copy_to_user(at, self.state.lock().vis_rect_region().as_bytes())
+            });
+            if written.is_err() {
+                return false;
+            }
+        }
         true
     }
+}
+
+/// Une pose de la pile de sauvegardes d'un DC : son état du noyau, et les
+/// octets des attributs de son propriétaire (`DcAttr32`), sans attributs
+/// pour un DC à personne.
+#[derive(Clone, Debug)]
+struct SavedState {
+    state: DcState,
+    attrs: Option<alloc::vec::Vec<u8>>,
 }
 
 /// Les octets d'un bloc d'attributs.
@@ -432,6 +486,9 @@ pub fn take(handle: u32, dc: &Dc, vis: Region, origin: (i32, i32)) -> Result<(),
         return Err(status);
     }
     dc.change(|current| *current = state);
+    // A DC taken again starts without a save: the saves of the one before
+    // would leak into it (RestoreDC(-1) of the previous borrower).
+    dc.clear_saves();
     Ok(())
 }
 
@@ -499,6 +556,9 @@ pub fn give_back(handle: u32, dc: &Dc) {
 /// <= DISPATCH_LEVEL.
 pub fn disown(handle: u32, dc: &Dc) -> Option<(u32, u32)> {
     let old = dc.change(core::mem::take);
+    // The DC goes back to the cache: its saves go with its state, or the
+    // next borrower inherits them.
+    dc.clear_saves();
     let _ = handles::set_owner(handle, OWNER_NONE, 0);
     old.owner
 }
@@ -651,7 +711,7 @@ pub fn save_dc(hdc: u32) -> Result<i32, u32> {
 /// <= DISPATCH_LEVEL.
 pub fn restore_dc(hdc: u32, level: i32) -> Result<bool, u32> {
     let dc = lock(hdc).ok_or(abi::winerror::ERROR_INVALID_HANDLE)?;
-    Ok(dc.restore_state(level))
+    Ok(dc.restore_state(hdc, level))
 }
 
 /// Les octets du début des attributs : `pvLDC`, `ulDirty_`, `hbrush`.
@@ -1476,7 +1536,7 @@ mod tests {
             state.clip = Some(Region::from_rect(Rect::new(5, 5, 30, 30)));
             state.position = (9, 9);
         });
-        assert!(dc.restore_state(-1), "the last pose restores");
+        assert!(dc.restore_state(0, -1), "the last pose restores");
         let state = dc.state();
         assert_eq!(
             state.clip.map(|clip| clip.bounds()),
@@ -1491,18 +1551,18 @@ mod tests {
         dc.change(|state| state.position = (2, 2));
         assert_eq!(dc.save_state(), 2);
         dc.change(|state| state.position = (5, 5));
-        assert!(dc.restore_state(1), "the first pose restores");
+        assert!(dc.restore_state(0, 1), "the first pose restores");
         assert_eq!(dc.state().position, (1, 1), "the state of the first pose");
-        assert!(!dc.restore_state(2), "the second pose is gone from the stack");
+        assert!(!dc.restore_state(0, 2), "the second pose is gone from the stack");
 
         // The negative levels, from the top of the stack.
         dc.change(|state| state.position = (7, 7));
         assert_eq!(dc.save_state(), 1);
         dc.change(|state| state.position = (8, 8));
         assert_eq!(dc.save_state(), 2);
-        assert!(dc.restore_state(-2), "the second pose from the top");
+        assert!(dc.restore_state(0, -2), "the second pose from the top");
         assert_eq!(dc.state().position, (7, 7), "two poses dropped: the first pose's state");
-        assert!(!dc.restore_state(-1), "nothing left on the stack");
+        assert!(!dc.restore_state(0, -1), "nothing left on the stack");
 
         // The visible region never comes back with the state: the window
         // owns it.
@@ -1511,7 +1571,7 @@ mod tests {
             state.vis = Region::from_rect(Rect::new(0, 0, 5, 5));
             state.clip = Some(Region::from_rect(Rect::new(1, 1, 9, 9)));
         });
-        assert!(dc.restore_state(1), "back to the first pose");
+        assert!(dc.restore_state(0, 1), "back to the first pose");
         assert_eq!(
             dc.state().vis,
             Region::from_rect(Rect::new(0, 0, 5, 5)),
