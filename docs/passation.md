@@ -22,7 +22,10 @@
   écriture, l'écriture partagée vue d'une autre section, un fichier de 5000 octets ; une mutation qui relit le
   fichier entier le fait échouer), `folder-apps` (nouveau : l'icône de l'installeur dans `C:\APPS`, ses pixels ; la
   même mutation le fait échouer : l'icône n'est pas là 60 s après l'ouverture du dossier). Tests hôte : `section::tests` (sur une base PFN de l'hôte,
-  `pfn::init_for_host_tests`), `section_cache::tests`, `write_tests` (segments, octets d'image). **Dettes** :
+  `pfn::init_for_host_tests`), `section_cache::tests`, `write_tests` (segments, octets d'image). Vérifié : lint,
+  1 263 tests hôte (`cargo test --release --workspace`) ; `section-cache`, `smoke`, `smss`, `native`, `gui`,
+  `notepad`, `notepad-save` (AMD et Intel), `folder-apps`, `logon`, `start-programs`, `app-7zip`, `app-notepadpp`,
+  `rostests` (AMD) passent. **Dettes** :
   cohérence avec les écritures du fichier (une page déjà lue garde l'ancien contenu, une page lue après voit le
   nouveau ; NT est cohérent), pas de retour au fichier des pages modifiées, pages d'image toujours copiées à la
   création (sans le refus d'écrire une image chargée, MmFlushImageSection, une DLL paginée changerait sous ses vues),
