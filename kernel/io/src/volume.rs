@@ -67,7 +67,7 @@ impl Volume {
     /// read of it (`crate::section_cache`); what a section read while it
     /// changed is not kept.
     fn changed(&self, node: &Node) {
-        crate::section_cache::CACHE.invalidate(self.cache_id(), node.identity());
+        crate::section_cache::invalidate(self.cache_id(), node.identity());
     }
 
     /// What designates this volume in `crate::section_cache`: its address.

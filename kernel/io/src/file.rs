@@ -544,30 +544,84 @@ impl File {
         Ok((filled.bytes, if filled.overflow { STATUS_BUFFER_OVERFLOW } else { STATUS_SUCCESS }))
     }
 
-    /// Le contenu du fichier pour une section (NtCreateSection) : celui que
-    /// tient déjà une section du même fichier inchangé, sinon lu en entier
-    /// (`crate::section_cache`).
-    ///
-    /// # IRQL
-    /// PASSIVE_LEVEL for filesystem I/O; may allocate and perform device reads.
-    pub fn contents(&self) -> Result<Arc<[u8]>, NtStatus> {
-        let node = self.node()?;
-        let cache = &crate::section_cache::CACHE;
-        let key = node.identity().filter(|_| !node.directory).map(|identity| crate::section_cache::Key {
+    /// Ce qui désigne le contenu du fichier `node` dans les caches des
+    /// sections (`crate::section_cache`) ; `None` pour un répertoire ou un
+    /// fichier sans identité.
+    fn cache_key(&self, node: &Node) -> Option<crate::section_cache::Key> {
+        node.identity().filter(|_| !node.directory).map(|identity| crate::section_cache::Key {
             volume: self.volume.cache_id(),
             identity,
             size: node.size,
             first_cluster: node.first_cluster,
-        });
-        if let Some(bytes) = key.as_ref().and_then(|key| cache.lookup(key)) {
-            return Ok(bytes);
+        })
+    }
+
+    /// Le segment des sections de données du fichier (NtCreateSection, le
+    /// `DataSectionObject` de NT) : celui que tient déjà une section du même
+    /// fichier inchangé, sinon celui que `create` fait pour un fichier de
+    /// cette taille, gardé pour les suivantes (`crate::section_cache::DATA`).
+    /// Rien n'est lu du fichier.
+    ///
+    /// # IRQL
+    /// PASSIVE_LEVEL for filesystem I/O; may allocate and perform device reads.
+    pub fn data_segment<T: core::any::Any + Send + Sync>(
+        &self,
+        create: impl FnOnce(u64) -> Result<Arc<T>, NtStatus>,
+    ) -> Result<Arc<T>, NtStatus> {
+        let node = self.node()?;
+        let cache = &crate::section_cache::DATA;
+        let key = self.cache_key(&node);
+        if let Some(found) = key.as_ref().and_then(|key| cache.lookup(key)) {
+            if let Ok(segment) = found.downcast::<T>() {
+                return Ok(segment);
+            }
         }
-        let read_at = cache.generation();
-        let bytes: Arc<[u8]> = Arc::from(self.read_all()?);
+        let made_at = cache.generation(self.volume.cache_id());
+        let segment = create(node.size)?;
+        if let Some(key) = key {
+            let shared: Arc<dyn core::any::Any + Send + Sync> = segment.clone();
+            cache.insert(key, &shared, made_at);
+        }
+        Ok(segment)
+    }
+
+    /// Les octets du fichier pour une section d'image (NtCreateSection), et
+    /// la taille du fichier : ceux que tient déjà une section d'image du même
+    /// fichier inchangé, sinon son début, que `extent` mesure d'après ses
+    /// premiers 64 Kio et la taille du fichier (`mm::section::ImageLayout::extent` :
+    /// ses en-têtes et les données de ses sections, pas ce qu'un installeur
+    /// y ajoute) ; gardés pour les suivantes (`crate::section_cache::IMAGES`).
+    ///
+    /// # IRQL
+    /// PASSIVE_LEVEL for filesystem I/O; may allocate and perform device reads.
+    pub fn image_contents(&self, extent: impl FnOnce(&[u8], u64) -> u64) -> Result<(Arc<[u8]>, u64), NtStatus> {
+        const HEAD: u64 = 64 * 1024;
+        let node = self.node()?;
+        let cache = &crate::section_cache::IMAGES;
+        let key = self.cache_key(&node);
+        if let Some(bytes) = key.as_ref().and_then(|key| cache.lookup(key)) {
+            return Ok((bytes, node.size));
+        }
+        let read_at = cache.generation(self.volume.cache_id());
+        let mut bytes = vec![0u8; node.size.min(HEAD) as usize];
+        if self.read(0, &mut bytes)? != bytes.len() {
+            return Err(STATUS_FILE_CORRUPT_ERROR);
+        }
+        let wanted = extent(&bytes, node.size).min(node.size) as usize;
+        if wanted > bytes.len() {
+            let start = bytes.len();
+            bytes.resize(wanted, 0);
+            if self.read(start as u64, &mut bytes[start..])? != wanted - start {
+                return Err(STATUS_FILE_CORRUPT_ERROR);
+            }
+        } else {
+            bytes.truncate(wanted);
+        }
+        let bytes: Arc<[u8]> = Arc::from(bytes);
         if let Some(key) = key {
             cache.insert(key, &bytes, read_at);
         }
-        Ok(bytes)
+        Ok((bytes, node.size))
     }
 
     /// Le fichier en entier.

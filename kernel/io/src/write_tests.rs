@@ -670,27 +670,84 @@ fn file_reads_take_runs_of_contiguous_clusters() {
 }
 
 #[test]
-fn sections_share_the_bytes_of_an_unchanged_file() {
+fn image_sections_share_the_bytes_of_an_unchanged_file() {
     use crate::File;
 
     let (volume, _disk) = mounted(256);
     let root = File::open(&volume, "\\").unwrap();
     let file = root.create_child("SHELL32.DLL", false, 0).unwrap();
     file.write(0, b"first").unwrap();
-    let held = file.contents().unwrap();
-    assert_eq!(&held[..], b"first");
-    let again = File::open(&volume, "\\shell32.dll").unwrap().contents().unwrap();
+    let whole = |_: &[u8], size: u64| size;
+    let (held, size) = file.image_contents(whole).unwrap();
+    assert_eq!((&held[..], size), (&b"first"[..], 5));
+    let (again, _) = File::open(&volume, "\\shell32.dll").unwrap().image_contents(whole).unwrap();
     assert!(alloc::sync::Arc::ptr_eq(&held, &again), "another open, the same bytes: not read again");
     file.write(0, b"FIRST").unwrap();
-    let written = file.contents().unwrap();
+    let (written, _) = file.image_contents(whole).unwrap();
     assert_eq!(&written[..], b"FIRST", "a write of the same size: read again");
     assert_eq!(&held[..], b"first", "a section keeps what it read");
     file.set_size(3).unwrap();
-    assert_eq!(&file.contents().unwrap()[..], b"FIR", "a new size");
+    assert_eq!(&file.image_contents(whole).unwrap().0[..], b"FIR", "a new size");
     let other = root.create_child("OTHER.DLL", false, 0).unwrap();
     other.write(0, b"FIR").unwrap();
-    let other_bytes = other.contents().unwrap();
-    assert!(!alloc::sync::Arc::ptr_eq(&other_bytes, &file.contents().unwrap()), "another file, its own bytes");
+    let (other_bytes, _) = other.image_contents(whole).unwrap();
+    assert!(!alloc::sync::Arc::ptr_eq(&other_bytes, &file.image_contents(whole).unwrap().0), "its own bytes");
+}
+
+#[test]
+fn an_image_section_reads_the_extent_of_its_image_only() {
+    use crate::File;
+
+    let (volume, _disk) = mounted(256);
+    let root = File::open(&volume, "\\").unwrap();
+    let file = root.create_child("SETUP.EXE", false, 0).unwrap();
+    let bytes: alloc::vec::Vec<u8> = (0..100_000u32).map(|i| (i % 251) as u8).collect();
+    file.write(0, &bytes).unwrap();
+    // The image ends at 70000: what follows (an installer's payload) is not read.
+    let (image, size) = file
+        .image_contents(|head, size| {
+            assert_eq!((head.len(), size), (64 * 1024, 100_000), "the first 64 KiB, and the file's size");
+            70_000
+        })
+        .unwrap();
+    assert_eq!((image.len(), size), (70_000, 100_000));
+    assert!(image[..] == bytes[..70_000]);
+    let (small, _) = File::open(&volume, "\\SETUP.EXE").unwrap().image_contents(|_, _| unreachable!()).unwrap();
+    assert!(alloc::sync::Arc::ptr_eq(&image, &small), "taken from the first section");
+    let other = root.create_child("SMALL.EXE", false, 0).unwrap();
+    other.write(0, &bytes[..3000]).unwrap();
+    let (head, _) = other.image_contents(|head, _| head.len() as u64 - 1000).unwrap();
+    assert!(head[..] == bytes[..2000], "less than the first bytes read");
+}
+
+#[test]
+fn data_sections_share_the_segment_of_an_unchanged_file_and_read_nothing() {
+    use crate::File;
+    use alloc::sync::Arc;
+
+    /// What `mm::section::FileSegment` is to Io: a `dyn Any`, made for the
+    /// size of the file.
+    struct Segment(u64);
+
+    let (volume, _disk) = mounted(256);
+    let root = File::open(&volume, "\\").unwrap();
+    let file = root.create_child("BIG.BIN", false, 0).unwrap();
+    file.write(0, &[7u8; 10_000]).unwrap();
+    let made = core::cell::Cell::new(0);
+    let make = |size: u64| {
+        made.set(made.get() + 1);
+        Ok(Arc::new(Segment(size)))
+    };
+    let first = file.data_segment(make).unwrap();
+    assert_eq!((first.0, made.get()), (10_000, 1), "made for the size of the file");
+    let again = File::open(&volume, "\\big.bin").unwrap().data_segment(make).unwrap();
+    assert!(Arc::ptr_eq(&first, &again) && made.get() == 1, "another open, the same segment");
+    file.write(0, b"x").unwrap();
+    let written = file.data_segment(make).unwrap();
+    assert!(!Arc::ptr_eq(&first, &written) && made.get() == 2, "a write: a new segment");
+    drop((first, again, written));
+    let _ = file.data_segment(make).unwrap();
+    assert_eq!(made.get(), 3, "gone with its last section");
 }
 
 /// The 8.3 entry of `name` in the directory at `dir`, and how many long-name

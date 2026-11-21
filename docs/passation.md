@@ -1,5 +1,39 @@
 # Notes de passation
 
+- **Les sections de fichiers paginées à la demande** (`claude/demand-paged-sections`, sur la PR 158, M7 ;
+  [ADR-024](03-decisions.md#adr-024--sections-de-fichiers--les-pages-dune-section-de-données-lues-à-la-faute-partagées-par-le-segment-du-fichier),
+  proposée ; [`compat/m6-logon.md`](compat/m6-logon.md) ; demandé le 2026-11-21 après la mesure de l'entrée
+  suivante). NtCreateSection ne lit plus rien pour une section de données : ses pages sont celles du segment du
+  fichier (`mm::section::FileSegment`, partagé par toutes les sections du fichier inchangé, `io::section_cache::DATA`),
+  que la première faute lit par Io, verrou de la VAD relâché, 64 Kio alignés à la fois, puis la faute reprend
+  (MmNotPresentFaultSectionView et MmMakeSegmentResident de ReactOS ; `AddressSpace::access_fault` et la copie de
+  MmCopyVirtualMemory). La faute est une région critique (`sys::exceptions::page_fault_hook`, branché aussi dans
+  `hal::idt`), le lecteur (`sys::section::FilePages`) permet les interruptions le temps de la lecture, `hal::idt` ne
+  prend plus la faute d'un autre thread pendant ce temps pour une faute imbriquée ; `STATUS_IN_PAGE_ERROR` (nouveau
+  dans `abi`) si la lecture échoue ou si le fichier est effacé. Une section d'image ne lit que ses en-têtes et les
+  données de ses sections (`ImageLayout::extent`, `io::File::image_contents`), pas les données ajoutées d'un
+  installeur ; `ImageLayout` refuse un fichier coupé dans ses en-têtes au lieu de paniquer dans `Pe32`. La génération
+  du cache est celle de chaque volume (le test hôte qui échouait parfois sous charge, noté plus bas). **Mesure**
+  (trace temporaire de NtCreateSection, jamais commitée ; `app = openoffice`, Win+R `C:\APPS`) : les trois sections
+  de l'installeur (143 Mo) prennent 0, 10 et 0 ms (99 s, 84 s, 86 s avant) et leurs fautes lisent 80 pages (320 Kio) ; l'icône est à
+  l'écran dans les 60 s de `screen-wait` (scénario entier : 127 s pour deux démarrages). `shell32.dll` en données :
+  ~112 pages par extraction au lieu de 10,9 Mo. Scénarios : `section-cache` récrit (`SECTION1.EXE` : 3 Mio, la
+  section et la faute d'une page en moins du quart de la lecture du reste, le partage entre sections, la copie sur
+  écriture, l'écriture partagée vue d'une autre section, un fichier de 5000 octets ; une mutation qui relit le
+  fichier entier le fait échouer), `folder-apps` (nouveau : l'icône de l'installeur dans `C:\APPS`, ses pixels ; la
+  même mutation le fait échouer : l'icône n'est pas là 60 s après l'ouverture du dossier). Tests hôte : `section::tests` (sur une base PFN de l'hôte,
+  `pfn::init_for_host_tests`), `section_cache::tests`, `write_tests` (segments, octets d'image). Vérifié : lint,
+  1 263 tests hôte (`cargo test --release --workspace`) ; `section-cache`, `smoke`, `smss`, `native`, `gui`,
+  `notepad`, `notepad-save` (AMD et Intel), `folder-apps`, `logon`, `start-programs`, `app-7zip`, `app-notepadpp`,
+  `rostests` (AMD) passent. **Dettes** :
+  cohérence avec les écritures du fichier (une page déjà lue garde l'ancien contenu, une page lue après voit le
+  nouveau ; NT est cohérent), pas de retour au fichier des pages modifiées, pages d'image toujours copiées à la
+  création (sans le refus d'écrire une image chargée, MmFlushImageSection, une DLL paginée changerait sous ses vues),
+  les pages d'un segment ne se libèrent qu'avec lui, un segment non tenu entre deux extractions est relu (le cache
+  ne retient rien : `shell32` relit ~112 pages par icône), la pile noyau (24 Kio) porte la lecture d'Io quand un
+  appel système touche une vue d'un fichier. **Suite** : NtGdiSetDIBitsToDeviceInternal (le cache d'icônes de
+  `shell32`).
+
 - **La page de progression des installeurs NSIS : SaveDC/RestoreDC, ExtCreatePen, l'effacement parent**
   (`claude/dc-save-restore`, sur la PR 158, M7,
   [`compat/applications.md`](compat/applications.md#la-page-de-progression-des-nsis-le-2026-11-21) ; demandé le
@@ -34,10 +68,16 @@ revenait sur la fonction ; et les clics du scénario ne répètent plus le même
   des sous-menus Programs prend du temps et affiche parfois une liste vide figée »). La liste vide : NtUserSetParent
   sans handler, la barre d'outils du sous-menu restait sous le pager qui devait la contenir
   (`win32k::winpos::set_parent`, co_IntSetParent ; `sys::window::nt_user_set_parent`). Scénario `start-programs`.
-  **Pas encore mesuré** : la lenteur. Pistes vues dans le journal de la VM : NtGdiSetDIBitsToDeviceInternal sans
-  handler (le cache d'icônes de `shell32` : « SetBIBits failed!, 120 » à chaque icône), NtNotifyChangeDirectoryFile
-  (ReadDirectoryChangesW échoue sur chaque dossier suivi), le démarrage de RpcSs qui échoue. Mesurer avant de
-  corriger (le profileur temporaire de l'étape 32).
+  **La lenteur de l'explorateur, mesurée** (2026-11-21, trace temporaire de NtCreateSection, jamais commitée ; disque
+  d'`app = openoffice`, Win+R `C:\APPS`) : pour l'icône de l'installeur d'OpenOffice (143 Mo), `explorer` crée trois
+  sections de données sur le fichier, et chacune le relit en entier (`File::contents`) : 99 s, 84 s, 86 s, 4 min 30
+  pour une icône. `io::section_cache` ne sert pas : il ne retient rien (`Weak`), et aucune section ne tient le
+  fichier entre deux extractions (`shell32.dll`, chargé, sort du cache en 0 ms). Le cache d'icônes de `shell32`
+  échoue aussi (NtGdiSetDIBitsToDeviceInternal sans handler : « SetBIBits failed!, 120 ») : il réextrait. **Suite** :
+  les sections de fichiers paginées à la demande (une faute de page lit la page du fichier ; NtCreateSection ne lit
+  plus rien) — un changement de Mm et d'Io, voir s'il demande une ADR ; NtGdiSetDIBitsToDeviceInternal (le cache
+  d'icônes : une extraction au lieu de trois). Les autres pistes (NtNotifyChangeDirectoryFile, RpcSs) n'ont pas pesé
+  dans cette mesure.
 
 - **Authenticode : le banc dans une vraie session ; Notepad++ ouvre sa fenêtre** (`claude/authenticode`, M7,
   [`compat/applications.md`](compat/applications.md#authenticode-le-banc-dans-une-session-le-2026-11-21) ;
