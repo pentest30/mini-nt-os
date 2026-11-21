@@ -499,7 +499,7 @@ Le banc après le correctif, AMD, en session :
 | PeaZip | `setup.tmp` finit sur `STATUS_STACK_OVERFLOW` en 11 s | l'installation commence et copie 78 fichiers dans `C:\Program Files\PeaZip`, puis ne peut créer `res\themes\nographic-embedded\fm-theme.bmp` (« The system cannot find the path specified ») et revient en arrière (code 5) : le répertoire, au nom long de 18 caractères, est sur le disque sans son nom long (seule l'entrée 8.3 `NOGRAP~1`), alors que `firecrystal.theme.7z`, de 20 caractères, a le sien |
 | GIMP | la boîte « EAccessViolation », l'installeur terminé par le banc après 900 s | **s'installe** : code 0 en 558 s, « Installation process succeeded », 116 Mio écrits ; `gimp-2.6.exe` démarre puis lit l'adresse `0xC` dans `libgdk-win32-2.0-0.dll` juste après NtUserEnumDisplayMonitors, sans handler (aucun moniteur) |
 | KeePass | son titre se lit « K » | son titre se lit « KeePass » ; il ne se ferme toujours pas sur WM_CLOSE |
-| AbiWord | (le 2026-11-20) `libAbiWord.dll` lit `0x3C` | ouvre « Untitled1 - AbiWord » et se ferme avec 0 — pas comparé à la base de la branche : ce peut être la session de la PR 157 |
+| AbiWord | (le 2026-11-20) `libAbiWord.dll` lit `0x3C` | ouvre « Untitled1 - AbiWord » et se ferme avec 0 — déjà sur la base de la branche (`9014bc5`), pas l'effet de CALLPROCDATA |
 | WinMerge, Dev-C++, Notepad++, SumatraPDF, 7-Zip | — | inchangés : WinMerge et Dev-C++ plantent au lancement de leur programme (0xC0000005, « Application Error »), Notepad++ ouvre « new 1 », SumatraPDF n'est pas trouvé où le banc le cherche, 7-Zip ouvre son gestionnaire |
 
 Les installeurs Inno déplacent chaque fichier par MoveFile, que `kernel32` fait par une copie puis un effacement

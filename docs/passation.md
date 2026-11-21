@@ -23,10 +23,13 @@
   558 s ; `gimp-2.6.exe` lit `0xC` dans `libgdk` juste après NtUserEnumDisplayMonitors, sans handler) ; plancher
   relevé aux lignes de la fin de son journal (le banc n'imprime que les 64 derniers Kio d'un journal plus long :
   le début, la version d'Inno, n'y est plus — à corriger dans `appbench.c`). KeePass se lit « KeePass » (« K »
-  avant) ; AbiWord ouvre « Untitled1 - AbiWord » et se ferme avec 0 (pas comparé à la base). Vérifié : lint,
-  1 252 tests hôte, la suite de démarrage sans `app-openoffice` (99 passés au moment de la PR) ; échec
+  avant) ; AbiWord ouvre « Untitled1 - AbiWord » et se ferme avec 0, déjà sur la base (pas cette branche).
+  Vérifié : lint,
+  1 252 tests hôte, la suite de démarrage sans `app-openoffice` (172 runs passés sur 177) ; échecs
   `display-desktop` (AMD, Intel) : son marqueur `…\Desktop\*.*` est une ligne de listage que le filtre de débogage
-  de la PR 155 n'imprime plus (comme `logon` et `folder-view`, adaptés) — pas encore comparé à la base. **Suite** :
+  de la PR 155 n'imprime plus (comme `logon` et `folder-view`, adaptés), et `keyboard` (AMD, Intel) : le
+  programme va au bout, mais sous le PID 8 quand le marqueur fige le 28 — les deux échouent de même sur la base
+  (`9014bc5`, la PR 158), à corriger à part ; et `app-gimp`, dont l'ancien plancher attendait le début du journal. **Suite** :
   NtUserEnumDisplayMonitors (GIMP) ; ce répertoire à nom
   long de 18 caractères est écrit sans son nom long (seule l'entrée 8.3 `NOGRAP~1` est sur le disque, alors que
   `firecrystal.theme.7z`, 20 caractères, a le sien) — Io, le prochain blocage de PeaZip ; FileRenameInformation
