@@ -1567,3 +1567,98 @@ mod tests {
         assert_eq!(WindowPlacement32::from_bytes(&bytes), placement);
     }
 }
+
+/// L'échec de [`set_parent`] : l'erreur Win32 à mettre, s'il y en a une.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SetParentError(pub Option<u32>);
+
+/// `window` est `ancestor` ou l'un de ses descendants (le test de
+/// co_IntSetParent : IntIsChildWindow, puis le parent qui serait elle-même).
+fn is_self_or_descendant(window: &Window, ancestor: &Window) -> bool {
+    let mut current = Some(window.handle);
+    // Une chaîne plus longue qu'aucune vraie est une boucle.
+    for _ in 0..1024 {
+        let Some(handle) = current else { return false };
+        if handle == ancestor.handle {
+            return true;
+        }
+        current = window::get(handle).map(|w| w.state().parent).filter(|&parent| parent != 0);
+    }
+    false
+}
+
+/// co_IntSetParent : `window` devient l'enfant de `new_parent` (un bureau,
+/// sa fenêtre des messages ou une fenêtre), sans que changent ses styles
+/// `WS_CHILD` et `WS_POPUP`. Comme ReactOS : cachée d'abord (SW_HIDE, ses
+/// WM_SHOWWINDOW), déliée de ses sœurs, liée en tête de ses nouvelles sœurs
+/// (`HWND_TOP` sous le bureau, sinon `HWND_TOPMOST`, qui la met au premier
+/// plan), `WS_CLIPSIBLINGS` sous le bureau, puis placée au même point de la
+/// zone cliente du nouveau parent qu'elle occupait dans celle de l'ancien
+/// (WM_WINDOWPOSCHANGING, WM_WINDOWPOSCHANGED), et remontrée si elle était
+/// visible. Rend l'ancien parent.
+///
+/// Les menus du shell (`shell32`, CMenuToolbarBase::CreateToolbar) mettent
+/// ainsi leur barre d'outils dans le pager qu'ils créent après elle ; sans
+/// lui, la barre restait la sœur du pager, qui la cachait : un sous-menu du
+/// menu Démarrer vide.
+///
+/// Pas encore : UserAttachThreadInput entre les threads d'une fenêtre fille
+/// et de son parent, EVENT_OBJECT_PARENTCHANGE.
+///
+/// # Errors
+/// La fenêtre des messages (`ERROR_ACCESS_DENIED`), un nouveau parent qui
+/// est elle-même ou l'un de ses descendants (`ERROR_INVALID_PARAMETER`), une
+/// fenêtre d'un autre processus (sans erreur, comme ReactOS, après l'avoir
+/// cachée).
+///
+/// # IRQL
+/// PASSIVE_LEVEL, dans un service système, sans rien tenir. Rappelle le mode
+/// utilisateur.
+pub fn set_parent(
+    window: &Arc<Window>,
+    new_parent: &Arc<Window>,
+    current_process: u32,
+) -> Result<Option<Arc<Window>>, SetParentError> {
+    if window.is_message_window() {
+        return Err(SetParentError(Some(abi::winerror::ERROR_ACCESS_DENIED)));
+    }
+    if is_self_or_descendant(new_parent, window) {
+        return Err(SetParentError(Some(abi::winerror::ERROR_INVALID_PARAMETER)));
+    }
+    let was_visible = show_window(window, SW_HIDE);
+    if crate::gui::process_id_of(window.pti) != Some(current_process) {
+        return Err(SetParentError(None));
+    }
+    let state = window.state();
+    let old_parent = window::get(state.parent);
+    let origin = old_parent.as_ref().map_or((0, 0), |parent| {
+        let client = parent.state().client;
+        (client.left, client.top)
+    });
+    let (x, y) = (state.window.left - origin.0, state.window.top - origin.1);
+
+    window::unlink(window);
+    window::change(window, |state| state.parent = new_parent.handle);
+    if state.style & WS_CHILD != 0
+        && window::get(state.owner).is_some_and(|owner| owner.state().ex_style & WS_EX_TOPMOST != 0)
+    {
+        window::change(window, |state| state.ex_style |= WS_EX_TOPMOST);
+    }
+    let topmost = window.state().ex_style & WS_EX_TOPMOST != 0;
+    window::link(window, if !topmost && new_parent.is_desktop_window() { HWND_TOP } else { HWND_TOPMOST });
+    if new_parent.is_desktop_window() && window.state().style & WS_CLIPSIBLINGS == 0 {
+        window::change(window, |state| state.style |= WS_CLIPSIBLINGS);
+        crate::dce::reset_active_dcs(window);
+    }
+
+    let mut flags = SWP_NOSIZE | SWP_NOZORDER;
+    if old_parent.as_ref().is_some_and(|parent| parent.is_message_window()) || new_parent.is_message_window() {
+        flags |= SWP_NOACTIVATE;
+    }
+    let after = if window.state().ex_style & WS_EX_TOPMOST == 0 { HWND_TOP } else { HWND_TOPMOST };
+    set_window_pos(window, after, x, y, 0, 0, flags);
+    if was_visible {
+        show_window(window, SW_SHOWNORMAL);
+    }
+    Ok(old_parent)
+}

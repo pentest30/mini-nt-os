@@ -27,8 +27,8 @@ cpus = default
 timeout = 420
 
 expect = of explorer.exe
-expect = Documents and Settings\Administrator\Desktop\*.*
-keys = Documents and Settings\Administrator\Desktop\*.* => pause:8000 meta_l-r pause:6000 "C:\WINDOWS" ret
+expect = ReadDirectoryChangesW for 'C:\Documents and Settings\Administrator\Desktop'
+keys = ReadDirectoryChangesW for 'C:\Documents and Settings\Administrator\Desktop' => pause:8000 meta_l-r pause:6000 "C:\WINDOWS" ret
 expect = ReadDirectoryChangesW for 'C:\WINDOWS' failed
 screen = 500 90 FFFFFF
 screen = 500 350 FFFFFF

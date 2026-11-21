@@ -1,0 +1,32 @@
+# M7, the Start menu: Start, then Programs. The submenus of the shell's
+# menus (shell32, CMenuToolbarBase::CreateToolbar) put their toolbar into a
+# pager they create after it (SetParent, NtUserSetParent): without it, the
+# toolbar stayed the pager's sibling, under it, and the submenu showed an
+# empty box (the toolbar painted its items, all clipped by its sibling).
+# The disk of `logon` (two boots: the setup by minoinit, then the logon of
+# Administrator and explorer's desktop).
+features = test-smss, interactive
+requires = userland, native
+shell = explorer
+disk = system
+boots = 2
+cpus = default
+timeout = 420
+expect = [minoinit] done; rebooting
+expect = We are logged on
+expect = of explorer.exe
+expect = ReadDirectoryChangesW for 'C:\Documents and Settings\Administrator\Desktop'
+# The mouse of QEMU, from the middle of the screen (640, 400): the Start
+# button (40, 786), a click, then Programs (90, 556); its submenu opens on
+# the right after the hover delay.
+keys = ReadDirectoryChangesW for 'C:\Documents and Settings\Administrator\Desktop' => move:-300,193 move:-300,193 press:1 release pause:8000 move:50,-230 pause:1000 move:5,0
+# The submenu's items, read back from the screen: the folder icon of
+# « Administrative Tools », and a stroke of its « A » and of « Startup »'s
+# « S » (gray, COLOR_MENU D4D0C8, without SetParent).
+screen = 185 548 8CB1D8
+screen = 200 550 1F1E1D
+screen = 201 571 201F1E
+screen-wait = 60
+forbid = NtUserSetParent (0x120e) is not implemented
+forbid = [minoinit] stopped:
+forbid = *** STOP:

@@ -437,6 +437,7 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtUserSetWindowFNID, Handler::Status(user::nt_user_set_window_fnid)),
     (services::NtUserSetWindowLong, Handler::Status(window::nt_user_set_window_long)),
     (services::NtUserSetWindowPlacement, Handler::Status(window::nt_user_set_window_placement)),
+    (services::NtUserSetParent, Handler::Status(window::nt_user_set_parent)),
     (services::NtUserSetWindowPos, Handler::Status(window::nt_user_set_window_pos)),
     (services::NtUserDeferWindowPos, Handler::Status(window::nt_user_defer_window_pos)),
     (services::NtUserEndDeferWindowPosEx, Handler::Status(window::nt_user_end_defer_window_pos_ex)),

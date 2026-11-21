@@ -303,6 +303,18 @@ EnableWindow (NtUserCallTwoParam 0x60, TWOPARAM_ROUTINE_ENABLEWINDOW), NtUserAlt
 Tab dans la boîte « Security » (le focus ne change pas : DefWindowProc de WM_KEYDOWN, journalisé), le texte
 « Logon Information » vide.
 
+**Les sous-menus du menu Démarrer : NtUserSetParent** (le 2026-11-21, vu sous VirtualBox). Programs s'ouvrait en
+une boîte vide, figée. `shell32` (CMenuToolbarBase::CreateToolbar) crée la barre d'outils du sous-menu, puis un pager
+(`WC_PAGESCROLLER`) à côté d'elle, et l'y range par `SetParent(toolbar, pager)` ; NtUserSetParent n'avait pas de
+handler : la barre restait la sœur du pager, qui, créé après elle, la couvrait au même endroit. Elle énumérait bien
+les deux dossiers Programs et peignait ses entrées (icônes, texte), toutes découpées par sa sœur (`WS_CLIPSIBLINGS`).
+Trouvé par une trace temporaire des services d'`explorer` (jamais commitée). NtUserSetParent est fait comme
+co_IntSetParent de ReactOS (`win32k::winpos::set_parent`) : cachée, déliée, liée en tête de ses nouvelles sœurs
+(`HWND_TOP` sous le bureau, sinon `HWND_TOPMOST`), placée au même point de la zone cliente du nouveau parent,
+remontrée ; NULL vaut le bureau, `HWND_MESSAGE` sa fenêtre des messages. Pas encore : UserAttachThreadInput entre les
+threads d'une fille et de son parent. Scénario `start-programs` (Démarrer → Programs : l'icône de dossier et le
+texte d'« Administrative Tools » et de « Startup » lus à l'écran ; il échoue sans le handler).
+
 ## La suite
 
 Le premier critère du M6 est atteint ; restent le changement de résolution (troisième critère : `bochs-dispi`,
@@ -379,3 +391,15 @@ thread) ; Ctrl+Alt+Suppr redevient une touche. Une mutation (aucun raccourci pr�
 `win32k::hotkey` (la SAS, une combinaison par raccourci, les modificateurs seuls au relâchement, les raccourcis d'une
 fenêtre et d'un thread retirés, les modificateurs de l'état du clavier, Ctrl+Échap du shell). Scénario `logon` :
 « WL: Unable to register Ctrl+Alt+Del hotkey » interdit.
+
+Les sections de fichiers paginées à la demande (ADR-024, proposée ; le 2026-11-21). `explorer` ouvrant `C:\APPS`
+crée, pour l'icône de l'installeur d'OpenOffice (143 Mo), trois sections de données du fichier (LoadLibraryEx en
+fichier de données), et NtCreateSection lisait chaque fois le fichier entier : 99 s, 84 s, 86 s. Une section de
+données ne lit plus rien à sa création ; la faute d'une page de sa vue lit les 64 Kio alignés qui la contiennent, et
+les sections du même fichier inchangé partagent ces pages (`mm::section::FileSegment`, `io::section_cache::DATA`).
+Mesuré (trace temporaire de NtCreateSection) : les trois sections en 0, 10 et 0 ms, 80 pages lues (320 Kio) pour
+l'icône ; `shell32.dll` en fichier de données, ~112 pages par extraction au lieu de 10,9 Mo. Une section d'image
+lit ses en-têtes et les données de ses sections, pas ce qui les suit (`ImageLayout::extent`). Scénario
+`folder-apps` : l'icône de l'installeur dans la liste de `C:\APPS` dans les 60 s de `screen-wait`. Écart avec NT :
+une page déjà lue ne voit pas une écriture faite ensuite au fichier, et les pages modifiées d'une vue partagée ne
+retournent pas au fichier.
