@@ -1,13 +1,15 @@
 # M7 bench: 7-Zip 9.20 (MSI, msiexec), installed silently by APPBENCH.EXE
-# (tests/native/appbench.c) from C:\APPS, then started and closed.
+# (tests/native/appbench.c) from C:\APPS, then started and closed; the
+# bench runs as the shell of the logged-on user (session).
 # The markers say how far it goes; docs/compat/applications.md has the
 # report.
 features = test-smss, interactive
 requires = userland, native
-initial-command = APPBENCH.EXE
+session = APPBENCH.EXE
+boots = 2
 app = 7zip
 cpus = default
-timeout = 600
+timeout = 900
 # What works today, a floor: msiexec installs it in C:\Program Files
 # (NtLockFile for ole32's structured storage, CreateDirectoryW of
 # C:\WINDOWS\Installer\, ProgramFilesDir in mino.inf), and its file

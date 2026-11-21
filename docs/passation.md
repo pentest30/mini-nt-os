@@ -13,14 +13,16 @@
   (`xtask` : le vrai `winlogon`, `minoinit` au premier démarrage, l'ouverture de session automatique au second, et
   `Winlogon\Shell = C:\PROGRAMME.EXE /session` dans la ruche SOFTWARE du scénario, que `userinit` lance sous le jeton
   d'Administrator) ; `APPBENCH.EXE /session` ne se crée pas de bureau. Les scénarios `app-*` passent en session
-  (deux démarrages, 300 s de plus au délai), sauf `app-7zip`, modifié par la PR 156 : à convertir après sa fusion.
+  (deux démarrages, 300 s de plus au délai) ; la branche part de la PR 156 (`ProgramFilesDir`, NtLockFile).
   Notepad++ s'arrêtait ensuite sur « Exception On WM_CREATE » : NtQuerySystemInformation(SystemNumaProcessorMap,
   55) manquait (GetNumaHighestNodeNumber de `kernel32`), fait comme `ex/sysinfo.c` de ReactOS (un nœud ;
   `abi::system_information::numa_processor_map`). Notepad++ ouvre « new 1 - Notepad++ » et se ferme avec 0 ;
   plancher relevé. Scénario `authenticode` (AUTH1.EXE en session : utilisateur, fournisseur par défaut,
   WinVerifyTrust, CryptQueryObject, signataire « Notepad++ »). Tests hôte : `numa_tests`,
   `a_session_program_is_the_shell_of_the_layered_software_hive`, `scenario` (clé `session`). **Suite** : le
-  parcours de Notepad++ ; les autres applications du banc en session (résultats dans `compat/applications.md`).
+  parcours de Notepad++ ; SumatraPDF en session : son installeur rend 0 et écrit ~10 Mio, mais ni dans
+  `C:\Program Files` (absent) ni où le banc le cherche (à trouver) ; GIMP en session : l'échec d'Inno 5.4 est une
+  boîte de Delphi que le banc ferme après 900 s (le seuil n'interdit plus « still running »).
 - **NtLockFile : 7-Zip s'installe et s'ouvre** (`claude/nt-lock-file`, M7, troisième point du bilan ;
   [`compat/applications.md`](compat/applications.md#ntlockfile-7-zip-sinstalle-le-2026-11-20) ; demandé le
   2026-11-20). Io : `io::file_lock` (le FILE_LOCK du FCB, d'après FsRtl de ReactOS : un verrou exclusif ne chevauche
