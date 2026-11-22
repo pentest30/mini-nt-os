@@ -24,11 +24,14 @@
 //! Sont appelés : WH_GETMESSAGE (le message que PeekMessage ou GetMessage va
 //! rendre, que le crochet peut changer : `crate::queue::peek`) ;
 //! WH_SYSMSGFILTER puis WH_MSGFILTER ([`call_msg_filter`] : CallMsgFilter,
-//! la boucle d'un menu avec MSGF_MENU). Les autres types se posent, mais ne
-//! sont pas encore appelés (journalisé une fois par type) : WH_CBT,
-//! WH_CALLWNDPROC, WH_CALLWNDPROCRET, WH_KEYBOARD, WH_MOUSE, WH_KEYBOARD_LL,
-//! WH_MOUSE_LL, WH_SHELL, WH_FOREGROUNDIDLE, WH_JOURNALRECORD,
-//! WH_JOURNALPLAYBACK, WH_DEBUG, WH_HARDWARE.
+//! la boucle d'un menu avec MSGF_MENU) ; WH_CBT pour HCBT_CREATEWND
+//! ([`create_window`] : la fenêtre que CreateWindowEx crée, avant tout
+//! message ; MFC y attache son `CWnd` et la sous-classe), pas encore pour
+//! les autres codes de HCBT. Les autres types se posent, mais ne sont pas
+//! encore appelés (journalisé une fois par type) : WH_CALLWNDPROC,
+//! WH_CALLWNDPROCRET, WH_KEYBOARD, WH_MOUSE, WH_KEYBOARD_LL, WH_MOUSE_LL,
+//! WH_SHELL, WH_FOREGROUNDIDLE, WH_JOURNALRECORD, WH_JOURNALPLAYBACK,
+//! WH_DEBUG, WH_HARDWARE.
 //!
 //! Un crochet est rendu par UnhookWindowsHookEx, à la fin du thread qu'il
 //! accroche, à celle du thread qui l'a posé, ou à celle de son processus.
@@ -45,8 +48,8 @@ use core::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 
 use abi::teb32::Teb32;
 use abi::user::{
-    hook_flag, wh, ClientInfo32, DeskInfoHead32, Hook32, HookProcArguments32, Msg32, TIF_CSRSSTHREAD, TIF_SYSTEMTHREAD,
-    TYPE_HOOK, USER32_CALLBACK_HOOKPROC,
+    hcbt, hook_flag, wh, CbtCreateWndExtra32, ClientInfo32, CreateStructW32, DeskInfoHead32, Hook32,
+    HookProcArguments32, Msg32, TIF_CSRSSTHREAD, TIF_SYSTEMTHREAD, TYPE_HOOK, USER32_CALLBACK_HOOKPROC,
 };
 use abi::winerror::{
     ERROR_ACCESS_DENIED, ERROR_GLOBAL_ONLY_HOOK, ERROR_HOOK_NEEDS_HMOD, ERROR_HOOK_TYPE_NOT_ALLOWED,
@@ -205,7 +208,20 @@ static REPORTED: AtomicU32 = AtomicU32::new(0);
 
 /// Le type est appelé par Mino.
 const fn is_called(id: i32) -> bool {
-    matches!(id, wh::GETMESSAGE | wh::MSGFILTER | wh::SYSMSGFILTER)
+    matches!(id, wh::GETMESSAGE | wh::MSGFILTER | wh::SYSMSGFILTER | wh::CBT)
+}
+
+/// Ce que `lParam` désigne pour la procédure d'un crochet, copié après ses
+/// arguments dans le rappel (co_IntCallHookProc), et ce qu'elle peut y
+/// changer.
+pub enum HookParam<'a> {
+    /// Un MSG (WH_GETMESSAGE, WH_MSGFILTER, WH_SYSMSGFILTER) ; WH_GETMESSAGE
+    /// reprend ce que la procédure y laisse.
+    Message(&'a mut Msg32),
+    /// WH_CBT, HCBT_CREATEWND : le CREATESTRUCTW de la fenêtre créée et la
+    /// fenêtre après laquelle elle vient ; la procédure peut changer sa
+    /// place, sa taille et cette fenêtre.
+    CreateWindow(&'a mut CbtCreateWndExtra32),
 }
 
 /// Le type ne se pose que global.
@@ -428,9 +444,10 @@ impl ProcCall {
     }
 }
 
-/// Les arguments du rappel d'une procédure de crochet pour un message
-/// (HOOKPROC_CALLBACK_ARGUMENTS, puis le MSG).
-fn arguments(call: &ProcCall, code: i32, w_param: u32, message: &Msg32) -> Vec<u8> {
+/// Les arguments du rappel d'une procédure de crochet
+/// (HOOKPROC_CALLBACK_ARGUMENTS, puis ce que désigne `lParam` : le MSG, ou
+/// HOOKPROC_CBT_CREATEWND_EXTRA_ARGUMENTS).
+fn arguments(call: &ProcCall, code: i32, w_param: u32, param: &HookParam<'_>) -> Vec<u8> {
     let mut arguments = HookProcArguments32 {
         hook_id: call.id,
         code,
@@ -445,8 +462,35 @@ fn arguments(call: &ProcCall, code: i32, w_param: u32, message: &Msg32) -> Vec<u
     let length = call.module_name.len().min(arguments.module_name.len() - 1);
     arguments.module_name[..length].copy_from_slice(&call.module_name[..length]);
     let mut bytes = arguments.as_bytes().to_vec();
-    bytes.extend_from_slice(message.as_bytes());
+    match param {
+        HookParam::Message(message) => bytes.extend_from_slice(message.as_bytes()),
+        HookParam::CreateWindow(create) => bytes.extend_from_slice(create.as_bytes()),
+    }
     bytes
+}
+
+/// Le HOOKPROC_CBT_CREATEWND_EXTRA_ARGUMENTS que rend le rappel, après les
+/// arguments.
+fn returned_create(output: &[u8]) -> Option<CbtCreateWndExtra32> {
+    let bytes = output.get(size_of::<HookProcArguments32>()..)?.get(..size_of::<CbtCreateWndExtra32>())?;
+    let word = |i: usize| u32::from_le_bytes([bytes[4 * i], bytes[4 * i + 1], bytes[4 * i + 2], bytes[4 * i + 3]]);
+    Some(CbtCreateWndExtra32 {
+        create_struct: CreateStructW32 {
+            create_params: word(0),
+            instance: word(1),
+            menu: word(2),
+            parent: word(3),
+            cy: word(4) as i32,
+            cx: word(5) as i32,
+            y: word(6) as i32,
+            x: word(7) as i32,
+            style: word(8),
+            name: word(9),
+            class: word(10),
+            ex_style: word(11),
+        },
+        insert_after: word(12),
+    })
 }
 
 /// Le MSG que rend le rappel, après les arguments.
@@ -465,11 +509,12 @@ fn returned_message(output: &[u8]) -> Option<Msg32> {
 }
 
 /// co_IntCallHookProc : `user32` appelle la procédure de `call` avec `code`,
-/// `w_param` et le message `message` ; rend ce qu'elle rend (0 si le rappel
-/// échoue). Pour WH_GETMESSAGE, `message` reprend ce que la procédure y a
-/// laissé.
-fn call_proc(call: ProcCall, code: i32, w_param: u32, message: &mut Msg32) -> u32 {
-    let bytes = arguments(&call, code, w_param, message);
+/// `w_param` et `param` ; rend ce qu'elle rend (0 si le rappel échoue). Pour
+/// WH_GETMESSAGE, le message reprend ce que la procédure y a laissé ; pour
+/// HCBT_CREATEWND, la place, la taille et la fenêtre d'avant (ce que
+/// `user32` réécrit).
+fn call_proc(call: ProcCall, code: i32, w_param: u32, param: &mut HookParam<'_>) -> u32 {
+    let bytes = arguments(&call, code, w_param, param);
     let id = call.id;
     drop(call);
     let Ok(output) = ps::callback::user_mode_callback(USER32_CALLBACK_HOOKPROC, &bytes, bytes.len()) else {
@@ -477,23 +522,35 @@ fn call_proc(call: ProcCall, code: i32, w_param: u32, message: &mut Msg32) -> u3
     };
     let at = offset_of!(HookProcArguments32, result);
     let Some(result) = output.get(at..at + 4) else { return 0 };
-    if id == wh::GETMESSAGE {
-        if let Some(changed) = returned_message(&output) {
-            *message = changed;
+    match param {
+        HookParam::Message(message) if id == wh::GETMESSAGE => {
+            if let Some(changed) = returned_message(&output) {
+                **message = changed;
+            }
         }
+        HookParam::CreateWindow(create) => {
+            if let Some(changed) = returned_create(&output) {
+                create.create_struct.x = changed.create_struct.x;
+                create.create_struct.y = changed.create_struct.y;
+                create.create_struct.cx = changed.create_struct.cx;
+                create.create_struct.cy = changed.create_struct.cy;
+                create.insert_after = changed.insert_after;
+            }
+        }
+        HookParam::Message(_) => {}
     }
     u32::from_le_bytes([result[0], result[1], result[2], result[3]])
 }
 
 /// co_HOOK_CallHooks : les crochets de type `id` du thread courant `thread`
-/// sont appelés pour le message `message` avec `code` et `w_param` (sa
-/// chaîne, puis les crochets globaux de son bureau) ; rend ce qu'a rendu le
-/// dernier appelé, 0 sans crochet.
+/// sont appelés avec `code`, `w_param` et `param` (sa chaîne, puis les
+/// crochets globaux de son bureau) ; rend ce qu'a rendu le dernier appelé, 0
+/// sans crochet.
 ///
 /// # IRQL
 /// PASSIVE_LEVEL, dans un service système, sans rien tenir : rappelle le
 /// mode utilisateur.
-pub fn call_hooks(thread: &ThreadInfo, id: i32, code: i32, w_param: u32, message: &mut Msg32) -> u32 {
+pub fn call_hooks(thread: &ThreadInfo, id: i32, code: i32, w_param: u32, param: &mut HookParam<'_>) -> u32 {
     if COUNT.load(Ordering::Relaxed) == 0 {
         return 0;
     }
@@ -519,7 +576,7 @@ pub fn call_hooks(thread: &ThreadInfo, id: i32, code: i32, w_param: u32, message
         let saved_address = saved.as_ref().map_or(0, |saved| saved.address());
         drop(first);
         set_client_current(address);
-        result = call_proc(call, code, w_param, message);
+        result = call_proc(call, code, w_param, param);
         set_client_current(saved_address);
         let (done, first) = {
             let mut table = TABLE.lock();
@@ -540,10 +597,22 @@ pub fn call_hooks(thread: &ThreadInfo, id: i32, code: i32, w_param: u32, message
                 .map(|hook| ProcCall::of(&hook))
         };
         if let Some(call) = call {
-            result = call_proc(call, code, w_param, message);
+            result = call_proc(call, code, w_param, param);
         }
     }
     result
+}
+
+/// WH_CBT, HCBT_CREATEWND (co_UserCreateWindowEx) : la fenêtre `hwnd` que
+/// le thread courant `thread` crée, avant WM_GETMINMAXINFO et WM_NCCREATE,
+/// avec son CREATESTRUCTW et la fenêtre après laquelle elle vient
+/// (`create`, que les crochets peuvent changer : place, taille, fenêtre
+/// d'avant). Rend ce qu'ils rendent : non nul, la création est refusée.
+///
+/// # IRQL
+/// Comme [`call_hooks`].
+pub fn create_window(thread: &ThreadInfo, hwnd: u32, create: &mut CbtCreateWndExtra32) -> u32 {
+    call_hooks(thread, wh::CBT, hcbt::CREATEWND, hwnd, &mut HookParam::CreateWindow(create))
 }
 
 /// WH_GETMESSAGE : le message `message` que PeekMessage ou GetMessage va
@@ -553,7 +622,8 @@ pub fn call_hooks(thread: &ThreadInfo, id: i32, code: i32, w_param: u32, message
 /// # IRQL
 /// Comme [`call_hooks`].
 pub fn get_message(thread: &ThreadInfo, message: &mut Msg32, removed: bool) {
-    let _ = call_hooks(thread, wh::GETMESSAGE, abi::user::HC_ACTION, u32::from(removed), message);
+    let _ =
+        call_hooks(thread, wh::GETMESSAGE, abi::user::HC_ACTION, u32::from(removed), &mut HookParam::Message(message));
 }
 
 /// IntCallMsgFilter : WH_SYSMSGFILTER, puis WH_MSGFILTER si le premier rend
@@ -564,22 +634,22 @@ pub fn get_message(thread: &ThreadInfo, message: &mut Msg32, removed: bool) {
 /// # IRQL
 /// Comme [`call_hooks`].
 pub fn call_msg_filter(thread: &ThreadInfo, message: &mut Msg32, code: i32) -> u32 {
-    match call_hooks(thread, wh::SYSMSGFILTER, code, 0, message) {
-        0 => call_hooks(thread, wh::MSGFILTER, code, 0, message),
+    match call_hooks(thread, wh::SYSMSGFILTER, code, 0, &mut HookParam::Message(message)) {
+        0 => call_hooks(thread, wh::MSGFILTER, code, 0, &mut HookParam::Message(message)),
         handled => handled,
     }
 }
 
 /// NtUserCallNextHookEx : le crochet qui suit le crochet courant du thread
-/// courant `thread` est appelé avec `code`, `w_param` et le message
-/// `message` (lu en `lParam` par l'appelant, réécrit pour WH_GETMESSAGE) ;
+/// courant `thread` est appelé avec `code`, `w_param` et `param` (lu en
+/// `lParam` par l'appelant, réécrit pour WH_GETMESSAGE et HCBT_CREATEWND) ;
 /// il devient le crochet courant. Rend ce qu'il rend ; 0 sans crochet
 /// courant ou sans suivant. Le suivant est celui de la chaîne au moment de
 /// l'appel (ReactOS garde celui de l'appel du crochet courant).
 ///
 /// # IRQL
 /// Comme [`call_hooks`].
-pub fn call_next(thread: &ThreadInfo, code: i32, w_param: u32, message: &mut Msg32) -> u32 {
+pub fn call_next(thread: &ThreadInfo, code: i32, w_param: u32, param: &mut HookParam<'_>) -> u32 {
     let pti = thread.server;
     let next = {
         let mut table = TABLE.lock();
@@ -596,15 +666,15 @@ pub fn call_next(thread: &ThreadInfo, code: i32, w_param: u32, message: &mut Msg
     let call = ProcCall::of(&next);
     drop(next);
     if is_called(call.id) {
-        call_proc(call, code, w_param, message)
+        call_proc(call, code, w_param, param)
     } else {
         0
     }
 }
 
-/// Le crochet courant du thread courant `thread` est d'un type dont
-/// `lParam` est un MSG (WH_GETMESSAGE, WH_MSGFILTER, WH_SYSMSGFILTER) ; rend
-/// son type.
+/// Le type du crochet courant du thread courant `thread`, s'il en a un
+/// (son `lParam` : un MSG pour WH_GETMESSAGE, WH_MSGFILTER et
+/// WH_SYSMSGFILTER, un CBT_CREATEWNDW pour HCBT_CREATEWND de WH_CBT).
 pub fn current_id(thread: &ThreadInfo) -> Option<i32> {
     TABLE.lock().current_of(thread.server).map(|hook| hook.place.id)
 }
@@ -700,13 +770,47 @@ mod tests {
             ansi: false,
             module_name: Vec::new(),
         };
-        let message = Msg32 { hwnd: 0x2_0086, message: 0x201, w_param: 1, l_param: 0x0010_0020, ..Msg32::default() };
-        let bytes = arguments(&call, 0, 1, &message);
+        let mut message =
+            Msg32 { hwnd: 0x2_0086, message: 0x201, w_param: 1, l_param: 0x0010_0020, ..Msg32::default() };
+        let sent = message;
+        let bytes = arguments(&call, 0, 1, &HookParam::Message(&mut message));
         assert_eq!(bytes.len(), 0x428 + 28);
         assert_eq!(bytes[..4], wh::GETMESSAGE.to_le_bytes());
         assert_eq!(bytes[12..16], 0x428u32.to_le_bytes(), "lParam: the MSG's offset");
         assert_eq!(bytes[16..20], 0x7AF1_7F3Cu32.to_le_bytes(), "the procedure");
-        assert_eq!(returned_message(&bytes), Some(message), "the MSG read back");
+        assert_eq!(returned_message(&bytes), Some(sent), "the MSG read back");
         assert_eq!(returned_message(&bytes[..0x428 + 20]), None, "too short");
+    }
+
+    #[test]
+    fn a_cbt_hook_gets_the_created_window_after_its_arguments() {
+        assert!(is_called(wh::CBT), "MFC ties its CWnd to a window in HCBT_CREATEWND");
+        let call =
+            ProcCall { id: wh::CBT, proc_: 0x5F40_1234, module: 0, off_pfn: 0, ansi: true, module_name: Vec::new() };
+        let mut create = CbtCreateWndExtra32 {
+            create_struct: CreateStructW32 {
+                create_params: 0x0012_F000,
+                instance: 0x0040_0000,
+                cx: 300,
+                cy: 200,
+                x: 10,
+                y: 20,
+                style: 0x94C8_00C4,
+                name: 0x0012_FE00,
+                class: 0x8002,
+                ..CreateStructW32::default()
+            },
+            insert_after: 0,
+        };
+        let sent = create;
+        let bytes = arguments(&call, hcbt::CREATEWND, 0x2_0090, &HookParam::CreateWindow(&mut create));
+        assert_eq!(bytes.len(), 0x428 + 0x34, "HOOKPROC_CBT_CREATEWND_EXTRA_ARGUMENTS after the arguments");
+        assert_eq!(bytes[..4], wh::CBT.to_le_bytes());
+        assert_eq!(bytes[4..8], hcbt::CREATEWND.to_le_bytes());
+        assert_eq!(bytes[8..12], 0x2_0090u32.to_le_bytes(), "wParam: the window");
+        assert_eq!(bytes[12..16], 0x428u32.to_le_bytes(), "lParam: the record's offset");
+        assert_eq!(bytes[28..32], 1u32.to_le_bytes(), "an ANSI procedure");
+        assert_eq!(returned_create(&bytes), Some(sent), "the record read back");
+        assert_eq!(returned_create(&bytes[..0x428 + 0x30]), None, "too short");
     }
 }

@@ -1699,6 +1699,42 @@ pub mod wh {
     pub const MAX: i32 = MOUSE_LL;
 }
 
+/// HCBT_*: the codes of a WH_CBT hook.
+pub mod hcbt {
+    pub const MOVESIZE: i32 = 0;
+    pub const MINMAX: i32 = 1;
+    pub const QS: i32 = 2;
+    pub const CREATEWND: i32 = 3;
+    pub const DESTROYWND: i32 = 4;
+    pub const ACTIVATE: i32 = 5;
+    pub const CLICKSKIPPED: i32 = 6;
+    pub const KEYSKIPPED: i32 = 7;
+    pub const SYSCOMMAND: i32 = 8;
+    pub const SETFOCUS: i32 = 9;
+}
+
+/// CBT_CREATEWNDW, 32-bit: what a WH_CBT hook gets in `lParam` for
+/// HCBT_CREATEWND, and passes to CallNextHookEx.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CbtCreateWnd32 {
+    /// `lpcs`: the CREATESTRUCTW.
+    pub create_struct: u32,
+    pub insert_after: u32,
+}
+
+/// HOOKPROC_CBT_CREATEWND_EXTRA_ARGUMENTS, 32-bit: after the
+/// HookProcArguments32 of HCBT_CREATEWND (its `l_param` is the offset of
+/// this record). `user32` makes a CBT_CREATEWNDW of it for the procedure,
+/// then writes back `x`, `y`, `cx`, `cy` and `insert_after`; the names of
+/// the CREATESTRUCTW are pointers that the procedure reads as they are.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CbtCreateWndExtra32 {
+    pub create_struct: CreateStructW32,
+    pub insert_after: u32,
+}
+
 /// HC_ACTION: the code of a hook call about a message or an event.
 pub const HC_ACTION: i32 = 0;
 
@@ -1878,6 +1914,10 @@ const _: () = {
     assert!(offset_of!(HookProcArguments32, result) == 0x20);
     assert!(offset_of!(HookProcArguments32, module_name) == 0x28);
     assert!(size_of::<HookProcArguments32>() == 0x428);
+    assert!(size_of::<CbtCreateWnd32>() == 8);
+    assert!(offset_of!(CbtCreateWnd32, insert_after) == 4);
+    assert!(offset_of!(CbtCreateWndExtra32, insert_after) == 0x30);
+    assert!(size_of::<CbtCreateWndExtra32>() == 0x34);
     assert!(offset_of!(ClientThreadInfo32, time_last_read) == 0x0C);
     assert!(size_of::<ClientThreadInfo32>() == 0x14);
     assert!(size_of::<UserHandleEntry32>() == 12);
@@ -2571,6 +2611,8 @@ as_bytes!(
     ScrollBarInfo32,
     Hook32,
     HookProcArguments32,
+    CbtCreateWnd32,
+    CbtCreateWndExtra32,
     GetClipbData32,
     SetClipbData32
 );

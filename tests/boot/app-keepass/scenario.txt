@@ -15,7 +15,9 @@ timeout = 900
 # administrator (CheckTokenMembership: NtAccessCheck), installs the files
 # and deletes its temporary ones (FileDispositionInformation); the program
 # starts and shows its main window (its FLS fields in the PEB untouched by
-# the heap list). Not yet: it does not close on WM_CLOSE.
+# the heap list). MFC ties its dialog to its CDialog in a WH_CBT hook
+# (HCBT_CREATEWND): OnInitDialog runs (its title, its accelerators), and
+# WM_CLOSE (IDCANCEL, OnCancel) ends it, DoModal giving IDCANCEL (2).
 expect = [appbench] installer started
 expect = Setup version: Inno Setup version 5.3.10
 expect = User privileges: Administrative
@@ -24,9 +26,12 @@ expect = [appbench] installer ended: exit code 0
 expect = [appbench] installed: C:\Program Files\KeePass Password Safe\KeePass.exe
 expect = [appbench] program started
 expect = [appbench] program window after
+expect = "KeePass Password Safe"
+expect = [appbench] program closed: exit code 2
 expect = [appbench] KeePass 1.18: report done
 forbid = Unable to create a temporary file
 forbid = User privileges: None
 forbid = [appbench] program ended by itself: exit code c0000005
 forbid = [appbench] installer still running after
+forbid = [appbench] program still running 15 s after WM_CLOSE
 forbid = *** STOP:
