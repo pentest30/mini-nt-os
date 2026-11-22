@@ -629,13 +629,15 @@ pub fn set_long(window: &Arc<Window>, index: i32, value: u32, ansi: bool) -> Res
         let procedures = crate::client::procedures();
         let fnid = window.class.as_ref().map_or(0, |class| class.fnid);
         // IntSetWindowProc: a call procedure given is its procedure, in its
-        // character set.
-        let (value, ansi) = match crate::callproc::info(value) {
+        // character set; the old one is seen in the caller's.
+        let (procedure, procedure_ansi) = match crate::callproc::info(value) {
             Some((procedure, kind)) => (procedure, kind & CPD_U2A != 0),
             None => (value, ansi),
         };
         let mut old = Seen::Procedure(0);
-        change(window, |state| old = replace_procedure(state, fnid, value, ansi, procedures.as_ref()));
+        change(window, |state| {
+            old = replace_procedure(state, fnid, procedure, procedure_ansi, ansi, procedures.as_ref());
+        });
         return Ok(seen_by_client(window, old, ansi));
     }
     if index == GWLP_HWNDPARENT {
@@ -747,7 +749,10 @@ fn creation_procedure(
 
 /// IntSetWindowProc : `procedure` devient la procédure de la fenêtre
 /// `state` (de la classe de FNID `fnid`), ANSI ou non (`ansi`) ; rend
-/// l'ancienne, vue du client ([`window_procedure`]). La procédure du client
+/// l'ancienne, vue d'un client ANSI ou non (`caller_ansi`,
+/// [`window_procedure`]) : ReactOS la prend avant de lire le jeu de
+/// caractères d'une procédure d'appel donnée, qui peut différer de celui de
+/// l'appelant. La procédure du client
 /// d'un FNID qui a une procédure du serveur rend celle-ci à la fenêtre
 /// (`WNDS_SERVERSIDEWINDOWPROC`, Unicode) ; une autre en fait une procédure
 /// du client, dans son jeu de caractères, et NULL garde la procédure
@@ -760,9 +765,10 @@ fn replace_procedure(
     fnid: u32,
     procedure: u32,
     ansi: bool,
+    caller_ansi: bool,
     procedures: Option<&ClientProcedures>,
 ) -> Seen {
-    let old = window_procedure(state, fnid, ansi, procedures);
+    let old = window_procedure(state, fnid, caller_ansi, procedures);
     let server = procedures.and_then(|procedures| {
         crate::client::server_fnid_in(procedures, procedure)
             .and_then(|fnid| crate::client::server_procedure_in(procedures, fnid))
@@ -2406,13 +2412,13 @@ mod tests {
         let procedures = test_procedures();
         let procedures = Some(&procedures);
         let mut state = WindowState { wnd_proc: 0x401000, unicode: true, ..WindowState::default() };
-        assert_eq!(replace_procedure(&mut state, 0, 0x402000, false, procedures), Seen::Procedure(0x401000));
+        assert_eq!(replace_procedure(&mut state, 0, 0x402000, false, false, procedures), Seen::Procedure(0x401000));
         assert_eq!(state.wnd_proc, 0x402000);
-        assert_eq!(replace_procedure(&mut state, 0, 0x401000, false, procedures), Seen::Procedure(0x402000));
-        assert_eq!(replace_procedure(&mut state, 0, 0, false, procedures), Seen::Procedure(0x401000));
+        assert_eq!(replace_procedure(&mut state, 0, 0x401000, false, false, procedures), Seen::Procedure(0x402000));
+        assert_eq!(replace_procedure(&mut state, 0, 0, false, false, procedures), Seen::Procedure(0x401000));
         assert_eq!(state.wnd_proc, 0x401000, "NULL keeps the procedure");
         assert_eq!(
-            replace_procedure(&mut state, 0, 0x403000, true, procedures),
+            replace_procedure(&mut state, 0, 0x403000, true, true, procedures),
             Seen::Crossed(0x401000),
             "the old Unicode procedure asked in ANSI: the client gets a call procedure"
         );
@@ -2440,25 +2446,25 @@ mod tests {
         assert_eq!(window_procedure(&state, FNID_SCROLLBAR, false, procedures), Seen::Procedure(client(false)));
 
         assert_eq!(
-            replace_procedure(&mut state, FNID_SCROLLBAR, 0x402000, false, procedures),
+            replace_procedure(&mut state, FNID_SCROLLBAR, 0x402000, false, false, procedures),
             Seen::Procedure(client(false))
         );
         assert_eq!((state.wnd_proc, state.unicode, state.state), (0x402000, true, 0), "a client procedure now");
         assert_eq!(
-            replace_procedure(&mut state, FNID_SCROLLBAR, client(false), false, procedures),
+            replace_procedure(&mut state, FNID_SCROLLBAR, client(false), false, false, procedures),
             Seen::Procedure(0x402000),
             "given back"
         );
         assert_eq!((state.wnd_proc, state.state), (server, WNDS_SERVERSIDEWINDOWPROC), "the server's again");
 
         assert_eq!(
-            replace_procedure(&mut state, FNID_SCROLLBAR, 0x403000, true, procedures),
+            replace_procedure(&mut state, FNID_SCROLLBAR, 0x403000, true, true, procedures),
             Seen::Procedure(client(true)),
             "subclassed in ANSI: the client's ANSI procedure, without a CALLPROCDATA"
         );
         assert_eq!((state.unicode, state.state), (false, WNDS_ANSIWINDOWPROC));
         assert_eq!(
-            replace_procedure(&mut state, FNID_SCROLLBAR, client(true), true, procedures),
+            replace_procedure(&mut state, FNID_SCROLLBAR, client(true), true, true, procedures),
             Seen::Procedure(0x403000)
         );
         assert_eq!(
@@ -2471,7 +2477,7 @@ mod tests {
             WindowState { wnd_proc: 0x7fff_0000, state: WNDS_SERVERSIDEWINDOWPROC, ..WindowState::default() };
         assert_eq!(window_procedure(&other, 0, false, procedures), Seen::Procedure(0), "no FNID has it: 0, as ReactOS");
         assert_eq!(
-            replace_procedure(&mut other, 0, 0x402000, false, None),
+            replace_procedure(&mut other, 0, 0x402000, false, false, None),
             Seen::Procedure(0),
             "before the client registers"
         );
@@ -2488,17 +2494,17 @@ mod tests {
         let mut state = WindowState { wnd_proc: button(false), unicode: true, ..WindowState::default() };
         assert_eq!(window_procedure(&state, FNID_BUTTON, true, procedures), Seen::Procedure(button(true)));
         assert_eq!(
-            replace_procedure(&mut state, FNID_BUTTON, 0x402000, true, procedures),
+            replace_procedure(&mut state, FNID_BUTTON, 0x402000, true, true, procedures),
             Seen::Procedure(button(true))
         );
         assert_eq!((state.wnd_proc, state.unicode, state.state), (0x402000, false, WNDS_ANSIWINDOWPROC));
         assert_eq!(
-            replace_procedure(&mut state, FNID_BUTTON, button(true), true, procedures),
+            replace_procedure(&mut state, FNID_BUTTON, button(true), true, true, procedures),
             Seen::Procedure(0x402000)
         );
         assert_eq!(state.wnd_proc, button(true));
         assert_eq!(
-            replace_procedure(&mut state, FNID_BUTTON, button(true), false, procedures),
+            replace_procedure(&mut state, FNID_BUTTON, button(true), false, false, procedures),
             Seen::Procedure(button(false))
         );
         assert_eq!(
@@ -2509,11 +2515,40 @@ mod tests {
 
         let mut state = WindowState { wnd_proc: edit, unicode: true, ..WindowState::default() };
         assert_eq!(
-            replace_procedure(&mut state, FNID_EDIT, 0x402000, true, procedures),
+            replace_procedure(&mut state, FNID_EDIT, 0x402000, true, true, procedures),
             Seen::Crossed(edit),
             "Edit is seen through a call procedure"
         );
         assert_eq!((state.wnd_proc, state.unicode), (0x402000, false));
+    }
+
+    /// IntSetWindowProc takes the old procedure in the caller's character
+    /// set, before a call procedure given sets the new one's: an ANSI subclass
+    /// replaced through a `CPD_A2U` handle (SetWindowLongA of a Unicode
+    /// procedure) is given back to the ANSI caller as itself, not as a call
+    /// procedure of the other set.
+    #[test]
+    fn the_old_procedure_is_seen_in_the_callers_set() {
+        let procedures = test_procedures();
+        let procedures = Some(&procedures);
+        let mut state =
+            WindowState { wnd_proc: 0x403000, unicode: false, state: WNDS_ANSIWINDOWPROC, ..WindowState::default() };
+        assert_eq!(
+            replace_procedure(&mut state, 0, 0x401000, false, true, procedures),
+            Seen::Procedure(0x403000),
+            "the ANSI subclass, to an ANSI caller"
+        );
+        assert_eq!(
+            (state.wnd_proc, state.unicode, state.state),
+            (0x401000, true, 0),
+            "the Unicode procedure installed"
+        );
+        assert_eq!(
+            replace_procedure(&mut state, 0, 0x403000, true, false, procedures),
+            Seen::Procedure(0x401000),
+            "the Unicode procedure, to a Unicode caller"
+        );
+        assert_eq!((state.wnd_proc, state.unicode), (0x403000, false));
     }
 
     /// IntCreateWindow: a system control created in ANSI is an ANSI window
