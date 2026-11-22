@@ -22,7 +22,7 @@ pour que chaque application teste autre chose. Elles sont rangées de la plus si
 | # | Application | Licence | Installeur | Ce qu'elle teste | Parcours |
 |---|---|---|---|---|---|
 | 1 | 7-Zip 9.20 (2010) | LGPL | MSI | `msiexec` de ReactOS, Win32, `msvcrt` | installer, archiver un fichier, l'extraire, comparer (fait par `7z.exe`, le 2026-11-22) |
-| 2 | Notepad++ 7.9.2 (2020) | GPL | NSIS | Scintilla, onglets, Rechercher et Remplacer | taper, remplacer, enregistrer, rouvrir |
+| 2 | Notepad++ 7.9.2 (2020) | GPL | NSIS | Scintilla, onglets, Rechercher et Remplacer | taper, remplacer, enregistrer, rouvrir (fait au clavier, le 2026-11-22) |
 | 3 | KeePass 1.18 (2010) | GPL | Inno Setup | MFC, cryptographie, dialogues | créer une base et une entrée, enregistrer, rouvrir avec le mot de passe |
 | 4 | WinMerge 2.12.4 (2009) | GPL | Inno Setup | MFC, vues côte à côte | comparer deux fichiers, fusionner une différence, enregistrer |
 | 5 | SumatraPDF 2.5.2 (2014) | GPL | le sien | rendu de pages, défilement | ouvrir un PDF fourni, page suivante, zoom |
@@ -642,6 +642,40 @@ en base 16 : `ex::locale::parse_ui_language`), la langue d'installation à défa
 de l'utilisateur en chaîne, en REG_DWORD, effacée, les pointeurs refusés ; sans les handlers, il échoue (`c0000002`,
 `GetUserDefaultUILanguage` rend 0 ce jour-là). Les autres installeurs NSIS (AbiWord, Dev-C++) prenaient leur
 langue de la même façon.
+### Le parcours de Notepad++, le 2026-11-22
+
+Le parcours de la liste (« taper, remplacer, enregistrer, rouvrir ») passe par les fenêtres de Notepad++, au clavier
+de QEMU. Le banc a pour cela des parcours par étapes (`steps` d'`apps::Route`, `route-step=` de `PROBE.TXT`,
+`run_window_route` d'`appbench.c`) : `start` lance la commande du parcours, `close` ferme le programme par WM_CLOSE et
+imprime son code ; `window TEXTE => ÉTIQUETTE` attend une fenêtre visible du programme dont le titre contient le
+texte, `no-window TEXTE => ÉTIQUETTE` qu'il n'y en ait plus, `clipboard => ÉTIQUETTE` que le presse-papiers change,
+puis en imprime le texte. Chaque attente imprime « route step: ÉTIQUETTE », et les `keys` du scénario s'y
+accrochent. Le banc imprime ensuite le fichier que fait le parcours (`route-output=`), ligne à ligne si c'est un
+texte court.
+
+Notepad++ ouvre `C:\APPS\ROUTE.TXT` (« Mino route », écrit par `xtask` ; `notepad++.exe -nosession
+C:\APPS\ROUTE.TXT`) ; Ctrl+Fin et « the quick brown fox jumps »
+(le titre prend son `*`) ; Ctrl+H ouvre « Replace », « fox », Tab, « cat », Alt+A (Replace All), Échap (la boîte se
+cache) ; Ctrl+S (le `*` part) ; fermé avec 0. Rouvert, Ctrl+A et Ctrl+C mettent son texte dans le presse-papiers, que
+le banc lit : « Mino route », « the quick brown cat jumps ». Le fichier fait 37 octets, ces deux lignes. Aucun mot
+tapé ne commence comme un autre du fichier : la complétion des mots de Notepad++ (dès la première lettre) n'en
+propose aucun.
+
+Deux runs ont fait deux corrections. Le deuxième a montré la boîte en néerlandais (« Vervang ») : la langue de
+l'interface, plus haut, corrigée dans le noyau. Le troisième, en anglais, n'a copié que « jumps » : Ctrl+H étend la
+sélection au mot sous le curseur, la session de Notepad++ la garde à la fermeture et la remet au second lancement,
+après que la fenêtre montre son titre ; le Ctrl+A arrivé avant était défait. Les deux lancements prennent donc
+`-nosession` (une option de Notepad++) : le second relit le fichier sur le disque, sans rien de la session ni de ses
+copies de sauvegarde, ce que « rouvrir » demande. Le parcours dure alors 23 s, le scénario 246 s (AMD).
+
+Le banc lit le texte rouvert par le presse-papiers, pas par WM_GETTEXT au contrôle Scintilla : win32k ne traduit pas
+encore les pointeurs d'un message envoyé à un autre processus (`win32k::sent::unmarshalled`, « not yet »). C'est une
+dette de USER, pas du parcours.
+
+Plancher de Notepad++ : son installation, sa fenêtre, puis chaque étape du parcours, le texte du presse-papiers, sa
+fermeture avec 0 et les deux lignes du fichier ; interdits : un parcours qui ne démarre pas, dépasse son délai, un
+programme qui finit seul, « fox » dans le fichier. Vérifié par mutation : sans Alt+A (pas de Replace All), le reste
+du parcours va au bout, mais « fox » reste dans le fichier et le scénario échoue.
 
 ### La suite
 
