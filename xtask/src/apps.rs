@@ -34,6 +34,10 @@ pub struct App {
     pub free_mib: u32,
     /// How long the installation may take, in seconds.
     pub install_seconds: u32,
+    /// How long the probe lets the program run after its first window before
+    /// it closes it, in seconds: GIMP queries its 150 plug-ins at its first
+    /// start, each a process, behind its "GIMP Startup" window.
+    pub program_seconds: u32,
     /// Guest memory, in MiB.
     pub memory_mb: u32,
 }
@@ -70,6 +74,7 @@ pub const APPS: [App; 10] = [
         program: r"C:\Program Files\7-Zip\7zFM.exe",
         free_mib: 64,
         install_seconds: 300,
+        program_seconds: 5,
         memory_mb: 256,
     },
     App {
@@ -83,6 +88,7 @@ pub const APPS: [App; 10] = [
         program: r"C:\Program Files\Notepad++\notepad++.exe",
         free_mib: 64,
         install_seconds: 300,
+        program_seconds: 5,
         memory_mb: 256,
     },
     App {
@@ -96,6 +102,7 @@ pub const APPS: [App; 10] = [
         program: r"C:\Program Files\KeePass Password Safe\KeePass.exe",
         free_mib: 64,
         install_seconds: 300,
+        program_seconds: 5,
         memory_mb: 256,
     },
     App {
@@ -109,6 +116,7 @@ pub const APPS: [App; 10] = [
         program: r"C:\Program Files\WinMerge\WinMergeU.exe",
         free_mib: 64,
         install_seconds: 300,
+        program_seconds: 5,
         memory_mb: 256,
     },
     App {
@@ -122,6 +130,7 @@ pub const APPS: [App; 10] = [
         program: r"C:\Program Files\SumatraPDF\SumatraPDF.exe",
         free_mib: 64,
         install_seconds: 300,
+        program_seconds: 5,
         memory_mb: 256,
     },
     App {
@@ -135,6 +144,7 @@ pub const APPS: [App; 10] = [
         program: r"C:\Program Files\AbiSuite2\AbiWord\bin\AbiWord.exe",
         free_mib: 96,
         install_seconds: 300,
+        program_seconds: 5,
         memory_mb: 256,
     },
     App {
@@ -148,6 +158,7 @@ pub const APPS: [App; 10] = [
         program: r"C:\Program Files\PeaZip\peazip.exe",
         free_mib: 96,
         install_seconds: 300,
+        program_seconds: 5,
         memory_mb: 256,
     },
     App {
@@ -161,6 +172,7 @@ pub const APPS: [App; 10] = [
         program: r"C:\Dev-Cpp\devcpp.exe",
         free_mib: 192,
         install_seconds: 600,
+        program_seconds: 5,
         memory_mb: 256,
     },
     App {
@@ -174,6 +186,7 @@ pub const APPS: [App; 10] = [
         program: r"C:\Program Files\GIMP-2.0\bin\gimp-2.6.exe",
         free_mib: 320,
         install_seconds: 900,
+        program_seconds: 600,
         memory_mb: 512,
     },
     App {
@@ -187,6 +200,7 @@ pub const APPS: [App; 10] = [
         program: r"C:\Program Files\OpenOffice 4\program\soffice.exe",
         free_mib: 1024,
         install_seconds: 1500,
+        program_seconds: 5,
         memory_mb: 768,
     },
 ];
@@ -327,7 +341,10 @@ pub fn probe_commands(app: &App) -> String {
     if app.kind == Kind::Nsis {
         text.push_str(&format!("visible=\"{installer}\"\r\n"));
     }
-    text.push_str(&format!("timeout={}\r\nprogram={}\r\n", app.install_seconds, app.program));
+    text.push_str(&format!(
+        "timeout={}\r\nprogram={}\r\nsettle={}\r\n",
+        app.install_seconds, app.program, app.program_seconds
+    ));
     text
 }
 
@@ -380,7 +397,8 @@ mod tests {
         assert!(!msi.contains("visible="));
         let inno = probe_commands(find("keepass").unwrap());
         assert!(inno.contains(r#"/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /LOG="C:\APPS\INSTALL.LOG""#));
-        assert!(inno.contains("timeout=300\r\nprogram=C:\\Program Files\\KeePass Password Safe\\KeePass.exe\r\n"));
+        assert!(inno
+            .contains("timeout=300\r\nprogram=C:\\Program Files\\KeePass Password Safe\\KeePass.exe\r\nsettle=5\r\n"));
         assert!(probe_commands(find("sumatrapdf").unwrap()).contains(r#"-install.exe" /s"#));
     }
 

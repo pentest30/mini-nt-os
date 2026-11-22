@@ -17,6 +17,8 @@ static char text[4096];
 static WCHAR install[1024], visible[1024], log_path[MAX_PATH], program[MAX_PATH];
 static char name[128];
 static DWORD timeout_seconds = 300;
+/* How long the program runs after its first window before WM_CLOSE. */
+static DWORD settle_seconds = 5;
 
 static unsigned int length(const char *s) { unsigned int n = 0; while (s[n]) ++n; return n; }
 static unsigned int wlength(const WCHAR *s) { unsigned int n = 0; while (s[n]) ++n; return n; }
@@ -75,6 +77,10 @@ static void read_commands(void)
     narrow(value, name, sizeof(name));
     if (!value_of("log", log_path, MAX_PATH)) log_path[0] = 0;
     if (!value_of("visible", visible, 1024)) visible[0] = 0;
+    if (value_of("settle", value, 128)) {
+        settle_seconds = 0;
+        for (WCHAR *d = value; *d >= L'0' && *d <= L'9'; ++d) settle_seconds = settle_seconds * 10 + (*d - L'0');
+    }
     if (value_of("timeout", value, 128)) {
         timeout_seconds = 0;
         for (WCHAR *d = value; *d >= L'0' && *d <= L'9'; ++d) timeout_seconds = timeout_seconds * 10 + (*d - L'0');
@@ -399,8 +405,16 @@ static void run_program(void)
         GetClassNameW(find.window, class_name, 64);
         DbgPrint(TAG "program window after %lu s: class %s, \"%s\"\n", (GetTickCount() - started) / 1000,
                  narrow(class_name, b, sizeof(b)), narrow(title, line, sizeof(line)));
-        Sleep(5000);
-        print_windows(TRUE);
+        /* A slow start (GIMP's plug-ins): its windows every 60 s, until
+           its time is up or it ends by itself. */
+        DWORD waited = 0;
+        while (waited + 60 < settle_seconds && WaitForSingleObject(process.hProcess, 60000) != WAIT_OBJECT_0) {
+            waited += 60;
+            DbgPrint(TAG "program running after %lu s:\n", (GetTickCount() - started) / 1000);
+            print_windows(TRUE);
+        }
+        if (WaitForSingleObject(process.hProcess, (settle_seconds - waited) * 1000) != WAIT_OBJECT_0)
+            print_windows(TRUE);
     }
     DWORD code = 0;
     if (WaitForSingleObject(process.hProcess, 0) == WAIT_OBJECT_0) {
