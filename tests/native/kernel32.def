@@ -85,3 +85,5 @@ LocalAlloc@8
 GetCurrentThread@0
 GetThreadPriority@4
 SetThreadPriority@8
+GetSystemDefaultUILanguage@0
+GetUserDefaultUILanguage@0

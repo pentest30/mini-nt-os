@@ -37,3 +37,8 @@ NtLockFile@40
 NtUnlockFile@20
 NtQueryInformationThread@20
 NtSetInformationProcess@16
+NtCreateKey@28
+NtDeleteValueKey@8
+NtQueryDefaultUILanguage@4
+NtQueryInstallUILanguage@4
+RtlOpenCurrentUser@8
