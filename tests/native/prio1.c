@@ -11,7 +11,14 @@
  *    too: kernel32 passes them as -16 and 16);
  * 2. a priority out of range (3): refused, ERROR_INVALID_PARAMETER, the
  *    previous one kept;
- * 3. another thread's, by its handle.
+ * 3. another thread's, by its handle;
+ * 4. the process's base priority changed under its thread
+ *    (NtSetInformationProcess of ProcessBasePriority, which SetPriorityClass
+ *    does not use in Mino yet): as KeSetPriorityAndQuantumProcess, a
+ *    THREAD_PRIORITY_HIGHEST thread stays two above it, a
+ *    THREAD_PRIORITY_TIME_CRITICAL one (saturated) stays at 15; Mino put
+ *    every thread at the process's priority, and the second still read as
+ *    TIME_CRITICAL.
  * Each result goes to the debug port (DbgPrint), where the scenario looks
  * for it.
  *
@@ -23,13 +30,34 @@ typedef unsigned int UINT;
 typedef unsigned long DWORD;
 typedef int BOOL;
 typedef void *HANDLE;
+typedef long LONG;
+typedef LONG NTSTATUS;
+
+/* THREAD_BASIC_INFORMATION, i386. */
+typedef struct {
+    NTSTATUS ExitStatus;
+    void *TebBaseAddress;
+    HANDLE UniqueProcess;
+    HANDLE UniqueThread;
+    DWORD AffinityMask;
+    LONG Priority;
+    LONG BasePriority;
+} THREAD_BASIC_INFORMATION;
 
 #define THREAD_PRIORITY_IDLE (-15)
 #define THREAD_PRIORITY_TIME_CRITICAL 15
 #define ERROR_INVALID_PARAMETER 87
 #define INFINITE 0xFFFFFFFF
+#define PROCESS_BASE_PRIORITY 5
+#define THREAD_BASIC_INFORMATION_CLASS 0
+#define CURRENT_PROCESS ((HANDLE)-1)
+#define CURRENT_THREAD ((HANDLE)-2)
 
 __declspec(dllimport) unsigned long __cdecl DbgPrint(const char *format, ...);
+__declspec(dllimport) NTSTATUS __stdcall NtQueryInformationThread(HANDLE thread, UINT information_class, void *information,
+                                                                  DWORD length, DWORD *returned);
+__declspec(dllimport) NTSTATUS __stdcall NtSetInformationProcess(HANDLE process, UINT information_class,
+                                                                 void *information, DWORD length);
 
 __declspec(dllimport) BOOL __stdcall CloseHandle(HANDLE handle);
 __declspec(dllimport) HANDLE __stdcall CreateEventW(void *attributes, BOOL manual, BOOL initial, const void *name);
@@ -45,6 +73,16 @@ __declspec(dllimport) BOOL __stdcall SetThreadPriority(HANDLE thread, int priori
 __declspec(dllimport) DWORD __stdcall WaitForSingleObject(HANDLE handle, DWORD milliseconds);
 
 static HANDLE go;
+
+/* The current priority of the calling thread (ThreadBasicInformation), -1 if
+ * the query fails. */
+static LONG current_priority(void)
+{
+    THREAD_BASIC_INFORMATION info;
+    if (NtQueryInformationThread(CURRENT_THREAD, THREAD_BASIC_INFORMATION_CLASS, &info, sizeof info, 0) < 0)
+        return -1;
+    return info.Priority;
+}
 
 static DWORD __stdcall waiting(void *parameter)
 {
@@ -96,6 +134,28 @@ DWORD __stdcall GuiStartup(void)
     WaitForSingleObject(other, INFINITE);
     CloseHandle(other);
     CloseHandle(go);
+
+    /* 4. The process's base priority, lowered under its thread. */
+    {
+        LONG base = 6;
+        NTSTATUS first, second;
+        int highest, critical;
+        LONG highest_at, critical_at;
+
+        SetThreadPriority(self, 2);
+        first = NtSetInformationProcess(CURRENT_PROCESS, PROCESS_BASE_PRIORITY, &base, sizeof base);
+        highest = GetThreadPriority(self);
+        highest_at = current_priority();
+        SetThreadPriority(self, THREAD_PRIORITY_TIME_CRITICAL);
+        base = 4;
+        second = NtSetInformationProcess(CURRENT_PROCESS, PROCESS_BASE_PRIORITY, &base, sizeof base);
+        critical = GetThreadPriority(self);
+        critical_at = current_priority();
+        DbgPrint("[prio] step 4: the process at 6 (%lx): THREAD_PRIORITY_HIGHEST kept %d, at 8 or more %d; at 4 "
+                 "(%lx): THREAD_PRIORITY_TIME_CRITICAL kept %d, at %ld\n",
+                 first, highest == 2, highest_at >= 8, second, critical == THREAD_PRIORITY_TIME_CRITICAL,
+                 critical_at);
+    }
     DbgPrint("[prio] done\n");
     ExitProcess(0);
     return 0;

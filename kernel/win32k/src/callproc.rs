@@ -15,7 +15,13 @@
 //! Une classe garde les siennes (`spcpdFirst`) : une même procédure demandée
 //! de la même façon rend le même handle (UserSearchForCallProc), et elles
 //! partent avec la classe ([`destroy_class`]) ou avec le processus
-//! ([`destroy`], `crate::destroy`).
+//! ([`destroy`], `crate::destroy`). Le handle n'est rendu qu'au processus qui
+//! l'a eu, sur le bureau où il est : `user32` d'un autre processus le refuse
+//! (ValidateCallProc), et un thread d'un autre bureau ne le lit pas (le tas
+//! d'un autre bureau ne lui est pas projeté). ReactOS ne compare ni l'un ni
+//! l'autre (UserSearchForCallProc) : GetClassLong(GCLP_WNDPROC) de la fenêtre
+//! d'un autre processus (NtUserGetCPD ne regarde pas le processus) y fait une
+//! procédure d'appel de l'autre, que la classe rend ensuite à son processus.
 //!
 //! Écart : `spcpdNext` reste nul dans le tas (`user32` ne le lit pas ; win32k
 //! garde la liste chez lui).
@@ -43,12 +49,14 @@ pub const fn is_call_proc(procedure: u32) -> bool {
 }
 
 /// Une procédure d'appel : son handle, la classe qui la garde (son adresse),
-/// sa procédure (`pfnClientPrevious`), son `wType`, et sa place dans le tas.
+/// sa procédure (`pfnClientPrevious`), son `wType`, le `PROCESSINFO` de son
+/// processus (celui de son handle), et sa place dans le tas.
 struct CallProc {
     handle: u32,
     class: usize,
     procedure: u32,
     kind: u32,
+    owner: u32,
     heap: Arc<DesktopHeap>,
     at: u32,
 }
@@ -85,8 +93,8 @@ static CALL_PROCS: KSpinLock<Vec<CallProc>> = KSpinLock::new(Vec::new());
 /// UserGetCPD : la procédure d'appel de la classe `class` (son adresse,
 /// celle de son `Class`) pour `procedure` et `kind` (`wType` : `CPD_A2U` ou
 /// `CPD_U2A`, et `CPD_CLASS`, `CPD_WINDOW`… selon la demande), celle qu'elle
-/// a déjà ou une neuve dans le tas du bureau du thread courant, au processus
-/// courant ; rend la valeur à donner au client ([`handle_value`]).
+/// a déjà pour le processus courant dans le tas du bureau du thread courant,
+/// ou une neuve ; rend la valeur à donner au client ([`handle_value`]).
 /// `None` hors d'un thread GUI sur un bureau, ou si le tas ou la table des
 /// handles sont pleins : l'appelant rend alors la procédure elle-même, comme
 /// ReactOS.
@@ -94,18 +102,24 @@ static CALL_PROCS: KSpinLock<Vec<CallProc>> = KSpinLock::new(Vec::new());
 /// # IRQL
 /// PASSIVE_LEVEL, dans un service système.
 pub fn get(class: usize, kind: u32, procedure: u32) -> Option<u32> {
-    let found = CALL_PROCS
-        .lock()
-        .iter()
-        .find(|cpd| cpd.class == class && cpd.procedure == procedure && cpd.kind == kind)
-        .map(|cpd| cpd.handle);
-    if let Some(handle) = found {
-        return Some(handle_value(handle));
-    }
     let thread = ps::ethread::current_thread()?;
     let info = thread.win32_thread().map(crate::gui::thread_info)?;
     let owner = crate::existing_process_info(thread.process())?.server;
     let heap = info.desktop()?.desktop.heap.clone();
+    let found = CALL_PROCS
+        .lock()
+        .iter()
+        .find(|cpd| {
+            cpd.class == class
+                && cpd.procedure == procedure
+                && cpd.kind == kind
+                && cpd.owner == owner
+                && Arc::ptr_eq(&cpd.heap, &heap)
+        })
+        .map(|cpd| cpd.handle);
+    if let Some(handle) = found {
+        return Some(handle_value(handle));
+    }
     let size = size_of::<CallProcData32>() as u32;
     let at = heap.alloc(size).ok()?;
     let Ok(handle) = crate::handles::alloc(heap.server_address(at), owner, TYPE_CALLPROC) else {
@@ -129,7 +143,7 @@ pub fn get(class: usize, kind: u32, procedure: u32) -> Option<u32> {
         heap.free(at, size);
         return None;
     }
-    CALL_PROCS.lock().push(CallProc { handle, class, procedure, kind, heap, at });
+    CALL_PROCS.lock().push(CallProc { handle, class, procedure, kind, owner, heap, at });
     Some(handle_value(handle))
 }
 

@@ -31,9 +31,14 @@ traite l'une d'elles y ajoute la section de sa PR (voir « Ajouter une évaluati
 | [155](https://github.com/pentest30/mini-nt-os/pull/155) | 3 | 3 | 0 | 0 | 0 | 0 | 0 |
 | [156](https://github.com/pentest30/mini-nt-os/pull/156) | 7 | 3 | 0 | 0 | 2 | 2 | 0 |
 | [157](https://github.com/pentest30/mini-nt-os/pull/157) | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
-| **Total** | **71** | **40** | **6** | **4** | **3** | **18** | **4** |
+| [161](https://github.com/pentest30/mini-nt-os/pull/161) | 2 | 0 | 2 | 0 | 0 | 0 | 2 |
+| [162](https://github.com/pentest30/mini-nt-os/pull/162) | 1 | 1 | 0 | 0 | 0 | 0 | 0 |
+| [163](https://github.com/pentest30/mini-nt-os/pull/163) | 2 | 0 | 1 | 0 | 0 | 1 | 0 |
+| [164](https://github.com/pentest30/mini-nt-os/pull/164) | 6 | 2 | 2 | 0 | 0 | 2 | 0 |
+| **Total** | **82** | **43** | **11** | **4** | **3** | **21** | **6** |
 
-Toutes les remarques jusqu'à la PR 157 sont évaluées.
+Toutes les remarques jusqu'à la PR 157 sont évaluées, puis celles des PR 161 à 164. Restent celles des PR 158 et 159
+(fusionnées), et celles de la PR 160 sur sa branche.
 
 Ce qui ressort :
 
@@ -43,8 +48,9 @@ Ce qui ressort :
 - **Les remarques sans suite.** Elles sont 16 sur 52. Le bot juge d'après la documentation de Win32 ou Wine, alors que
   Mino suit ReactOS. Avant d'agir sur une remarque, il faut regarder ce que fait ReactOS épinglé.
 - **Les redites.** Le bot répète une remarque d'une passe à l'autre ou d'une PR à l'autre. C'est le cas de S3 trois
-  fois dans la PR 132, de l'alignement d'ACCEL dans les PR 125 et 126, et du paragraphe de `m6-logon.md` dans les
-  PR 132 et 133.
+  fois dans la PR 132, de l'alignement d'ACCEL dans les PR 125 et 126, et du paragraphe de `m6-logon.md` dans les PR
+  132 et 133. Dans une pile, il relit chaque PR avec celles qu'elle contient et y reprend leurs remarques : le cache
+  des procédures d'appel de la PR 161 revient sur les PR 163 et 164.
 - **Ce qu'il manque.** La concurrence et l'IRQL : dans la PR 149, il n'a vu ni la course entre l'ouverture et le
   dernier close, ni l'effacement sous un `KSpinLock`.
 
@@ -260,5 +266,67 @@ Commit relu par les bots : `4cb8cad`. Évalué le 2026-11-21. Une remarque, post
 |---|---|---|---|---|
 | `tests/native/auth1.c:100` | Le résultat de WinVerifyTrust est imprimé, jamais vérifié, et le scénario ne l'attend pas : une régression de la vérification de confiance laisse `authenticode` vert, alors que la PR dit WinVerifyTrust à 0 vérifié. | Fondé | La sonde allait jusqu'à « PASS » quel que soit `trust` ; les étapes suivantes ne lisent que le certificat du signataire. Sans les DLL enregistrées, WinVerifyTrust rendait `0x80070057` et le scénario aurait passé. | `1026f1c` : la sonde s'arrête si `trust` n'est pas 0, et le scénario attend `[auth] WinVerifyTrust: 0`. |
 | idem (Codex, P2) | La même. | Fondé | Voir la ligne précédente. | `1026f1c`. |
+
+Aucun défaut manqué vérifié.
+
+## PR 161 : les procédures de l'autre jeu de caractères (CALLPROCDATA)
+
+Commits relus par Vortex : `bef39ad`, puis `4e417c0`. Évalué le 2026-11-22. Vortex a posté une remarque, puis l'a
+reprise à la passe suivante parmi celles « hors des lignes changées » ; la revue de Codex a échoué (limite d'usage),
+sans remarque.
+
+| Où | Remarque | Verdict | Pourquoi | Suite |
+|---|---|---|---|---|
+| `kernel/win32k/src/callproc.rs:99` | La recherche du cache de `get` ignore le processus : pour une classe du système partagée comme Edit, un second processus reçoit de GetClassInfoA le handle du premier, que ValidateCallProc de `user32` refuse et qui meurt avec le premier. | Partiellement fondé | Le défaut existe, pas par ce chemin. Comme dans ReactOS, chaque processus a ses classes (`ClassLists` dans son `PROCESSINFO`, Edit comprise : le `user32` de chaque processus l'enregistre), et la classe d'un contrôle se voit par la procédure du client du jeu demandé (`Class::seen_procedure`), sans procédure d'appel. Le chemin réel est GetClassLongA(GCLP_WNDPROC) de la fenêtre d'un autre processus : `user32` (IntGetClsWndProc) appelle NtUserGetCPD, qui ne regarde pas le processus (ni dans ReactOS, ni dans `window::call_procedure`) ; le handle de l'autre processus allait à la classe, qui le rendait ensuite au sien. ReactOS a le même défaut : UserSearchForCallProc ne compare pas `ppi`. | `48460d8` : la recherche compare aussi le processus (`CallProc::owner`) et le tas du bureau. Étape 7 de `ansictl1.c` : un second processus (`ANSICTL1.EXE child`) reçoit le sien de GetClassLongA de la fenêtre du premier ; sans la comparaison, il recevait celui du premier, que CallWindowProcA refusait (vérifié par mutation). |
+| idem (sur `4e417c0`, hors des lignes changées) | La même, reprise. | Partiellement fondé | Redite. | `48460d8`. |
+
+Manqués :
+
+- **Un thread d'un autre bureau recevait un handle qu'il ne lit pas.** La procédure d'appel est dans le tas du bureau
+  du thread qui l'a demandée ; la recherche ne comparait pas le tas, et un thread du même processus sur un autre
+  bureau recevait un handle hors de la plage de son tas (`user32` : DesktopPtrToUser, puis
+  ONEPARAM_ROUTINE_GETDESKTOPMAPPING, que Mino n'a pas ; CallWindowProcA rend 0). Vu en vérifiant la remarque ;
+  Vortex l'évoque sur la PR 164 (« and desktop heap »). Corrigé par `48460d8` ; étape 7 de `ansictl1.c` (un thread
+  sur `MinoOther`), vérifié par mutation.
+- **SetWindowLong(GWLP_WNDPROC) rendait l'ancienne procédure dans le jeu de la procédure donnée.** Vu par Vortex et
+  Codex sur la PR 164, qui contient ce code (voir sa section). Corrigé par `48460d8`.
+
+## PR 162 : les entrées d'un nom long dans une suite d'emplacements libres
+
+Commits relus par Vortex : `22c673a` (rien à corriger), puis `4177f2e`. Évalué le 2026-11-22. Une remarque ; la
+revue de Codex a échoué (limite d'usage).
+
+| Où | Remarque | Verdict | Pourquoi | Suite |
+|---|---|---|---|---|
+| `docs/compat/applications.md:524` | « Le répertoire ne se trouvait ni par son nom long ni par son alias » : `FatVolume::find_entry` compare l'entrée 8.3 sans regarder les entrées de nom long qui la précèdent, et `NOGRAP~1` se trouvait encore ; seul le nom long, celui que PeaZip demande, échouait. | Fondé | `find_entry` : `let short = target.is_some_and(\|target\| ent[0..11] == target)`, où `target` vient de `short_name_11(name)`, indépendamment du nom long en cours. | `afb33aa` : la phrase dit que le nom long ne se trouvait plus, l'alias 8.3 si. |
+
+Aucun défaut manqué vérifié.
+
+## PR 163 : NtUserEnumDisplayMonitors
+
+Commit relu par les bots : `9ec7ceb`, avec les PR 161 et 162 qu'elle contient. Évalué le 2026-11-22. Vortex a repris
+la remarque du cache de la PR 161 ; Codex en a posté une sur une classe enregistrée avec une procédure d'appel.
+
+| Où | Remarque | Verdict | Pourquoi | Suite |
+|---|---|---|---|---|
+| `kernel/win32k/src/callproc.rs:66` | Le cache rend le handle d'un autre processus, si les classes globales sont partagées entre processus. | Partiellement fondé | Redite de la PR 161 : elles ne le sont pas (`ClassLists` par processus) ; le chemin réel est GetClassLong de la fenêtre d'un autre processus. | `48460d8` (PR 161). |
+| `kernel/win32k/src/window.rs:2094` (Codex, P2) | Une classe enregistrée par RegisterClassA avec la procédure d'appel que GetClassInfoA a rendue pour une classe Unicode fait des fenêtres ANSI (son `CSF_ANSIPROC`) qui exécutent la procédure Unicode : le texte y arrive sans conversion. | Sans suite | ReactOS fait de même : NtUserRegisterClassExWOW garde la procédure d'appel comme procédure de la classe (« Never seen this yet »), IntCreateWindow prend son `pfnClientPrevious` et le jeu de la classe (`CSF_ANSIPROC`) ; pour SetClassLong, IntSetClassWndProc prend aussi le jeu de l'appelant. Seul IntSetWindowProc prend celui de la procédure d'appel. Ce que fait XP reste à confirmer. | Aucune. |
+
+Aucun défaut manqué vérifié.
+
+## PR 164 : la priorité de base d'un thread (ThreadBasePriority)
+
+Commit relu par les bots : `981787e`, avec les PR 161 à 163 qu'elle contient. Évalué le 2026-11-22. Vortex a posté
+quatre remarques, dont deux sur le code de la PR 161 et une sur celui de la PR 163 ; Codex deux, sur le code de la
+PR 161.
+
+| Où | Remarque | Verdict | Pourquoi | Suite |
+|---|---|---|---|---|
+| `kernel/ntoskrnl/src/sys/monitor.rs:139` | EnumDisplayMonitors décale `lprcClip` et les rectangles rendus par le coin de la région visible du DC, et non par son origine (`DcState::origin`) : faux pour une fenêtre en partie couverte. | Sans suite | NtUserEnumDisplayMonitors de ReactOS prend la borne de `prgnVis` (REGION_GetRgnBox) pour les deux décalages ; Mino le suit, et son commentaire le dit. L'origine du DC est ce que dit la documentation de Win32. | Aucune. |
+| `kernel/ps/src/ethread.rs:557` | La saturation survit à ProcessBasePriority : `EProcess::set_base_priority` met chaque thread à la base du processus sans l'effacer, et un thread TIME_CRITICAL se dit encore à 16 ; effacer la saturation, ou tirer la valeur de la base réelle. | Partiellement fondé | L'incohérence existe, la correction proposée est fausse : KeSetPriorityAndQuantumProcess de ReactOS garde la saturation (KeQueryBasePriorityThread rend ±16 tant qu'elle dure) et décale chaque thread de l'écart du processus, un thread saturé au haut ou au bas de la nouvelle classe, sans le bouger s'il reste dans la même. Le défaut est que `set_base_priority` (M5, étape 8) mettait tout thread à la base du processus, son incrément perdu, saturé ou non. | `e484a94` : `set_base_priority` décale chaque thread comme KeSetPriorityAndQuantumProcess (`ethread::rebased_priority`, sous le verrou du dispatcher : `ke::sched::rebase_priority`), et ne fait rien si la base ne change pas. Test hôte `a_process_priority_change_moves_its_threads` ; étape 4 de `prio1.c` (THREAD_PRIORITY_HIGHEST reste deux au-dessus du processus baissé à 6, TIME_CRITICAL reste à 15 quand il passe à 4), qui échoue sans le correctif (vérifié). |
+| `kernel/win32k/src/callproc.rs:100` | Le cache ignore le processus et le bureau ; une classe globale (`CLS_GLOBAL`) étant partagée entre processus, le second reçoit le handle du premier. | Partiellement fondé | Redite de la PR 161 : une classe `CLS_GLOBAL` n'est pas partagée entre processus. Le bureau compte, lui (voir les manqués de la PR 161). | `48460d8` (PR 161). |
+| `kernel/win32k/src/window.rs:639` | SetWindowLong(GWLP_WNDPROC) d'une procédure d'appel remplace `ansi` par le jeu de la procédure donnée avant de calculer l'ancienne : un appelant ANSI qui rend une procédure Unicode par un handle `CPD_A2U` reçoit l'ancienne procédure vue en Unicode. | Fondé | IntSetWindowProc de ReactOS prend l'ancienne (IntGetWindowProc, avec l'`Ansi` de l'appelant) avant de lire le jeu de la procédure d'appel ; Mino passait le jeu remplacé à `replace_procedure` et à `seen_by_client`. À l'étape 5 de `ansictl1.c`, SetWindowLongA qui rend la procédure d'appel recevait une procédure d'appel de la sous-classe ANSI, et non la sous-classe elle-même. | `48460d8` (PR 161) : `replace_procedure` prend le jeu de l'appelant (`caller_ansi`) pour l'ancienne procédure ; test hôte `the_old_procedure_is_seen_in_the_callers_set`, étape 5 de `ansictl1.c` (vérifié par mutation). |
+| `kernel/win32k/src/window.rs:2094` (Codex, P2) | La même que sur la PR 163 (RegisterClassA d'une procédure d'appel). | Sans suite | Redite de la PR 163. | Aucune. |
+| `kernel/win32k/src/window.rs:637` (Codex, P2) | La même que celle de Vortex sur `window.rs:639`. | Fondé | Voir plus haut. | `48460d8` (PR 161). |
 
 Aucun défaut manqué vérifié.
