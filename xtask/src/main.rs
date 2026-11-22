@@ -475,7 +475,14 @@ fn test(ws: &Workspace, mut args: Args) -> Result<()> {
                     let probe = run_dir.join("probe.txt");
                     std::fs::write(&probe, apps::probe_commands(app))
                         .map_err(|e| format!("{}: {e}", probe.display()))?;
-                    let in_apps = [(installer.clone(), app.file.to_string()), (probe, apps::PROBE_FILE.to_string())];
+                    let mut in_apps =
+                        vec![(installer.clone(), app.file.to_string()), (probe, apps::PROBE_FILE.to_string())];
+                    // The files of its route (an image to open, a script).
+                    for (name, bytes) in app.route.map(|route| (route.files)()).unwrap_or_default() {
+                        let path = run_dir.join(name);
+                        std::fs::write(&path, bytes).map_err(|e| format!("{}: {e}", path.display()))?;
+                        in_apps.push((path, name.to_string()));
+                    }
                     println!("xtask: {}: {} MiB free on C: for {}", app.id, app.free_mib, app.name);
                     apps_disk(ws, &run_dir, image, &extra_files, &in_apps, app.free_mib)?;
                 } else {
