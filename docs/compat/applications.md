@@ -627,6 +627,22 @@ un parcours qui ne démarre pas ou dépasse son délai. Vérifié par mutation :
 `ROUTE.CMD` trouve la différence, le fichier de commandes finit avec 4 et le scénario échoue (la comparaison, la
 ligne finale et le code 0 manquent) ; avec `exit /b 4`, il finissait avec 0.
 
+### La langue de l'interface : Notepad++ en néerlandais, le 2026-11-22
+
+En écrivant le parcours de Notepad++, un run a montré sa boîte Remplacer en néerlandais (« Vervang », « Vind wat »),
+un autre en anglais. NtQueryDefaultUILanguage et NtQueryInstallUILanguage n'avaient pas de handler, et le
+GetUserDefaultUILanguage du `kernel32` de ReactOS (`winnls/string/locale.c`, comme GetSystemDefaultUILanguage) ne
+regarde pas le statut : il rend le LANGID de sa pile, n'importe lequel. L'installeur NSIS silencieux de Notepad++ en
+tirait sa langue. Faits comme ReactOS (`ex/locale.c`, ExpGetCurrentUserUILanguage ; `config/cmcontrl.c` pour
+PsInstallUILanguageId) : la langue d'installation vient d'`InstallLanguage` de `Nls\Language` (sinon celle des
+paramètres régionaux du système : `ex::locale::set_install_ui_language`, lue au montage de la ruche SYSTEM) ; celle de
+l'utilisateur, de `MultiUILanguageId` de son `Control Panel\Desktop` (une REG_SZ lue comme RtlUnicodeStringToInteger
+en base 16 : `ex::locale::parse_ui_language`), la langue d'installation à défaut (`sys::locale`). Scénario
+`ui-language` (`tests/native/uilang1.c`, AMD et Intel) : les deux services, les fonctions de `kernel32`, la valeur
+de l'utilisateur en chaîne, en REG_DWORD, effacée, les pointeurs refusés ; sans les handlers, il échoue (`c0000002`,
+`GetUserDefaultUILanguage` rend 0 ce jour-là). Les autres installeurs NSIS (AbiWord, Dev-C++) prenaient leur
+langue de la même façon.
+
 ### La suite
 
 **Mise à jour du 2026-11-20 : ProcessDebugPort** (`fix/ps-process-debug-port`).
