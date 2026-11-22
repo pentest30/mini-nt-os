@@ -1,5 +1,17 @@
 # Notes de passation
 
+- **Les revues des bots des PR 161 à 164** (demandé le 2026-11-22 ;
+  [`revues/mergestorm-vortex.md`](revues/mergestorm-vortex.md), une section par PR, chacune sur la branche de sa
+  PR, remontées par merge : 161 → 162 → 163 → 164). Onze remarques. Corrigé : le cache des procédures d'appel
+  compare le processus et le bureau, SetWindowLong rend l'ancienne procédure dans le jeu de l'appelant (`48460d8`,
+  PR 161 ; étapes 5 et 7 de `ansictl1.c`) ; la phrase de l'alias 8.3 dans `compat/applications.md` (PR 162) ;
+  ProcessBasePriority décale chaque thread comme KeSetPriorityAndQuantumProcess, saturés compris (`e484a94`, PR 164 ;
+  étape 4 de `prio1.c`). Sans suite, comme ReactOS : l'origine du DC d'EnumDisplayMonitors (la borne de `prgnVis`) ;
+  une classe enregistrée avec une procédure d'appel de l'autre jeu (ses fenêtres prennent le jeu de la classe ; ce
+  que fait XP reste à confirmer). Vérifié : lint, tests hôte, `ansi-controls` (AMD, Intel), `scroll-control`,
+  `notepad`, `thread-priority` (AMD, Intel) ; chaque correctif par mutation. **Reste à évaluer** : les remarques des
+  bots des PR 158 et 159 (fusionnées), et celles de Vortex sur la PR 160 à `f623515` et `dd65dcd` (sa section ne couvre que
+  `9997c91` ; la branche est à une autre session).
 - **SetThreadPriority : le GIMP démarre** (`claude/thread-base-priority`, sur la PR 163, M7,
   [`compat/applications.md`](compat/applications.md#setthreadpriority-le-gimp-interroge-ses-greffons-le-2026-11-22) ;
   demandé le 2026-11-22). Laissé plus de 16 s, le GIMP montrait la boîte fatale de GLib « error Incorrect function.
@@ -13,8 +25,8 @@
   150 greffons, un processus chacun, à son premier démarrage) : le GIMP ouvre sa boîte à outils et la fenêtre de
   l'image vers 500 s, puis se ferme avec 0 ; plancher relevé (scénario de 1 800 s au plus). Vérifié : lint,
   1 255 tests hôte, `thread-priority` (AMD, Intel), `app-gimp`, `app-keepass`. **Dettes** : ThreadPriority
-  (classe 2, la priorité absolue) n'est pas faite ; ProcessBasePriority remet toujours chaque thread à la priorité
-  du processus, sans garder leurs incréments (KeSetPriorityAndQuantumProcess les garde). **Suite** : les services
+  (classe 2, la priorité absolue) n'est pas faite. ProcessBasePriority garde maintenant l'incrément de chaque
+  thread et sa saturation (`e484a94`, revue de la PR 164). **Suite** : les services
   qui manquent au démarrage du GIMP, puis son parcours.
 - **EnumDisplayMonitors : le GIMP s'ouvre** (`claude/enum-display-monitors`, sur la PR 162, M7,
   [`compat/applications.md`](compat/applications.md#enumdisplaymonitors-le-gimp-souvre-le-2026-11-22) ; demandé le

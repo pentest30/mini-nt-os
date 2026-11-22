@@ -589,8 +589,9 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   répertoire (`io::fat::FatVolume::add_entries`, vfatFindDirSpace : un MoveFile fait par copie et effacement
   laissait des trous où le nom long se séparait de son entrée 8.3) : PeaZip s'installe et s'ouvre.
   NtUserEnumDisplayMonitors (`win32k::monitor::enumerate`) : le GIMP ouvre sa fenêtre « GIMP Startup » ;
-  NtSetInformationThread(ThreadBasePriority) (`ps::ethread::base_priority_of`, la saturation gardée) : il interroge
-  ses greffons et ouvre sa boîte à outils (le banc lui laisse 600 s : `program_seconds` de `xtask/src/apps.rs`).
+  NtSetInformationThread(ThreadBasePriority) (`ps::ethread::base_priority_of`, la saturation gardée ;
+  ProcessBasePriority décale chaque thread, `ps::ethread::rebased_priority`) : il interroge ses greffons et ouvre
+  sa boîte à outils (le banc lui laisse 600 s : `program_seconds` de `xtask/src/apps.rs`).
   Suite : [`docs/passation.md`](docs/passation.md).
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.
