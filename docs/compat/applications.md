@@ -521,7 +521,8 @@ et 3, son entrée 8.3 `NOGRAP~1` dans le 10, entre elles les entrées de deux fi
 un trou : Inno déplace chaque fichier installé par MoveFile, que `kernel32` fait par une copie puis un effacement
 (FileRenameInformation manque), et l'effacé laisse ses emplacements libres. `io::fat` mettait chaque entrée d'un nom
 dans le premier emplacement libre, une à une : le nom long, séparé de son entrée 8.3, n'était plus reconnu, et le
-répertoire ne se trouvait ni par son nom long ni par son alias.
+répertoire ne se trouvait plus par son nom long, celui que PeaZip demande ; son alias `NOGRAP~1` se trouvait encore
+(`FatVolume::find_entry` compare l'entrée 8.3 seule).
 
 Comme `vfatFindDirSpace` de `vfatfs` (FATAddEntry), les entrées d'un nom prennent maintenant une suite
 d'emplacements libres consécutifs (`FatVolume::add_entries`, d'un cluster au suivant au besoin) ; un trou trop

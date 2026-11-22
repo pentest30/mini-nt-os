@@ -81,7 +81,14 @@
   NtUserEnumDisplayMonitors (GIMP) ; ce répertoire à nom
   long de 18 caractères est écrit sans son nom long (seule l'entrée 8.3 `NOGRAP~1` est sur le disque, alors que
   `firecrystal.theme.7z`, 20 caractères, a le sien) — Io, le prochain blocage de PeaZip ; FileRenameInformation
-  (`kernel32` copie puis efface à chaque MoveFile : « Forcing copy, renaming not supported by FSD »).
+  (`kernel32` copie puis efface à chaque MoveFile : « Forcing copy, renaming not supported by FSD »). **Revue des
+  bots** (le 2026-11-22, [`revues/mergestorm-vortex.md`](revues/mergestorm-vortex.md#pr-161--les-procédures-de-lautre-jeu-de-caractères-callprocdata)) :
+  `48460d8` ; une procédure d'appel déjà faite n'est rendue qu'à son processus, sur son bureau (`callproc::get` :
+  GetClassLong d'une fenêtre d'un autre processus y mettait à la classe un handle que `user32` refuse ensuite à son
+  propre processus ; un thread d'un autre bureau recevait un handle de tas qu'il ne lit pas), et SetWindowLong
+  d'une procédure d'appel rend l'ancienne procédure dans le jeu de l'appelant (IntSetWindowProc) ; étapes 5 et 7 de
+  `ansictl1.c`, vérifiées par mutation. Reste, comme ReactOS : une classe enregistrée avec une procédure d'appel de
+  l'autre jeu fait des fenêtres du jeu de la classe.
 - **Les sous-menus du menu Démarrer : NtUserSetParent** (`claude/start-menu-speed`, sur la PR 157, M7,
   [`compat/m6-logon.md`](compat/m6-logon.md) ; demandé le 2026-11-21 après un essai sous VirtualBox : « l'affichage
   des sous-menus Programs prend du temps et affiche parfois une liste vide figée »). La liste vide : NtUserSetParent
