@@ -2291,7 +2291,7 @@ CallWindowProcA et CallWindowProcW, `misc.c`, ValidateCallProc) rend dans ce cas
 
 | Partie | Ce que fait Mino |
 |---|---|
-| Les procédures d'appel (`win32k::callproc`, `abi::user::CallProcData32`) | UserGetCPD : un objet `TYPE_CALLPROC` de la table des handles de USER, au `PROCESSINFO` du processus (ValidateCallProc le compare à `g_ppi`), sa `CALLPROCDATA` dans le tas du bureau du thread (PROCDESKHEAD, `pfnClientPrevious`, `wType` : `CPD_A2U` ou `CPD_U2A`, et `CPD_CLASS`, `CPD_WINDOW`…) ; le client reçoit le handle au mot haut `0xFFFF` (GetCallProcHandle), que CallWindowProcA et CallWindowProcW reconnaissent (IsCallProcHandle) et convertissent. Une classe garde les siennes : une même procédure demandée de la même façon rend le même handle (UserSearchForCallProc) ; elles partent avec la classe, ou avec le processus (`crate::destroy`) |
+| Les procédures d'appel (`win32k::callproc`, `abi::user::CallProcData32`) | UserGetCPD : un objet `TYPE_CALLPROC` de la table des handles de USER, au `PROCESSINFO` du processus (ValidateCallProc le compare à `g_ppi`), sa `CALLPROCDATA` dans le tas du bureau du thread (PROCDESKHEAD, `pfnClientPrevious`, `wType` : `CPD_A2U` ou `CPD_U2A`, et `CPD_CLASS`, `CPD_WINDOW`…) ; le client reçoit le handle au mot haut `0xFFFF` (GetCallProcHandle), que CallWindowProcA et CallWindowProcW reconnaissent (IsCallProcHandle) et convertissent. Une classe garde les siennes : une même procédure demandée de la même façon par le même processus, sur le même bureau, rend le même handle (UserSearchForCallProc, qui ne compare ni l'un ni l'autre : voir plus bas) ; elles partent avec la classe, ou avec le processus (`crate::destroy`) |
 | La procédure d'une classe (`Class::procedure`, `Class::seen_procedure`, IntGetClassWndProc) | celle du serveur se voit par celle du client de son FNID ; un contrôle (de FNID_BUTTON à FNID_GHOST) dont la classe a la procédure du client de l'autre jeu de caractères se voit par celle du jeu demandé (manquait : GetClassInfoA de l'Edit de `user32` rendait EditWndProcW) ; une autre procédure de l'autre jeu, par une procédure d'appel (`callproc::Seen::Crossed`), ou elle-même sans elle |
 | La procédure d'une fenêtre (`window::window_procedure`, `seen_by_client`, IntGetWindowProc) | une procédure de l'autre jeu de caractères se voit par une procédure d'appel de la classe de la fenêtre, au lieu d'ERROR_CALL_NOT_IMPLEMENTED ; SetWindowLong(GWLP_WNDPROC) dans l'autre jeu change la procédure, comme ReactOS, et rend l'ancienne par une procédure d'appel |
 | NtUserGetCPD (`sys::window::nt_user_get_cpd`, `window::call_procedure`) | ce que `user32` demande lui-même pour GetWindowLong(GWLP_WNDPROC) et GetClassLong(GCLP_WNDPROC) dans l'autre jeu de caractères (IntGetWndProc, IntGetClsWndProc) ; une demande de la classe seule (`CPD_CLASS`) rend 0, comme ReactOS |
@@ -2300,7 +2300,14 @@ CallWindowProcA et CallWindowProcW, `misc.c`, ValidateCallProc) rend dans ce cas
 
 Écarts avec ReactOS : `spcpdNext` reste nul dans le tas (`user32` ne le lit pas ; win32k garde la liste) ; pas de
 SetClassLong(GCLP_WNDPROC) (NtUserSetClassLong n'a pas de handler), ni de procédures d'appel des boîtes de dialogue
-(DWLP_DLGPROC reste dans `user32`).
+(DWLP_DLGPROC reste dans `user32`). La recherche d'une procédure d'appel déjà faite compare aussi le processus et le
+tas du bureau (`callproc::get`), ce que UserSearchForCallProc ne fait pas : GetClassLong(GCLP_WNDPROC) de la fenêtre
+d'un autre processus (NtUserGetCPD ne regarde pas le processus) y mettait à la classe un handle de cet autre
+processus, que la classe rendait ensuite au sien, et que ValidateCallProc de `user32` refuse ; un thread d'un autre
+bureau recevait un handle du tas d'un bureau qui ne lui est pas projeté (DesktopPtrToUser, puis
+ONEPARAM_ROUTINE_GETDESKTOPMAPPING, que Mino n'a pas). Comme IntSetWindowProc, SetWindowLong(GWLP_WNDPROC) rend
+l'ancienne procédure vue dans le jeu de l'appelant, même quand la procédure donnée est une procédure d'appel de
+l'autre jeu (revue de la PR 164).
 
 Le banc d'essai : `tests/native/ansictl1.c` (`ANSICTL1.EXE`, MinGW), scénario `ansi-controls`, à la place de
 `winlogon.exe`. 1. GetClassInfoA et GetClassInfoW de Button, ComboBox, Edit, ListBox et Static : la procédure de
@@ -2311,8 +2318,12 @@ d'appel (le mot haut `0xFFFF`), la même chaque fois ; CallWindowProcA d'elle do
 procédure Unicode, et son WM_GETTEXT remplit un tampon ANSI court sans rien écrire au-delà. 5. GetWindowLongA de la
 fenêtre Unicode (NtUserGetCPD) ; sous-classée par SetWindowLongA, son ancienne procédure est la procédure d'appel, les
 messages arrivent par elle à la procédure Unicode, et rendue, la fenêtre a de nouveau sa procédure Unicode. Une
-fenêtre de cette classe Unicode créée en ANSI reste Unicode. 6. Dans l'autre sens, GetClassInfoW d'une classe ANSI et
-CallWindowProcW.
+fenêtre de cette classe Unicode créée en ANSI reste Unicode ; SetWindowLongA qui rend la procédure d'appel rend la
+sous-classe ANSI elle-même. 6. Dans l'autre sens, GetClassInfoW d'une classe ANSI et CallWindowProcW. 7. Une
+procédure d'appel est à son processus et à son bureau : un thread du programme sur un autre bureau (`MinoOther`) a la
+sienne, que CallWindowProcA convertit, et un second processus (le programme, « child ») a la sienne de
+GetClassLongA de la fenêtre Unicode du premier, pas celle du premier ; celle du premier convertit encore après la fin
+du second.
 
 Tests : hôte (`win32k::class` : la procédure d'un contrôle vue des deux jeux, une procédure de l'autre jeu
 `Seen::Crossed` ; `win32k::window` : `creation_procedure`, `window_procedure` et `replace_procedure` de l'autre jeu ;
@@ -2320,4 +2331,6 @@ Tests : hôte (`win32k::class` : la procédure d'un contrôle vue des deux jeux,
 échouer chacune : la procédure d'un contrôle de classe sans l'échange de jeu (étape 1) ; un contrôle créé en ANSI
 qui reste Unicode (étape 3) ; toute fenêtre d'un créateur ANSI faite ANSI (étape 4) ; aucune procédure d'appel créée
 (étapes 4 à 6) ; NtUserGetCPD sans handler, et une procédure d'appel donnée à SetWindowLong sans être résolue
-(étape 5).
+(étape 5). Trois autres après la revue : l'ancienne procédure vue dans le jeu de la procédure donnée (étape 5) ; la
+recherche sans le processus (le second processus reçoit le handle du premier, étape 7), sans le tas (le thread de
+l'autre bureau reçoit celui de l'étape 4).

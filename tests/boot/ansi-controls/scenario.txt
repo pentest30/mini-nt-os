@@ -23,8 +23,15 @@
 #    WM_GETTEXT fills a short ANSI buffer and nothing past it; a window of
 #    that class created in ANSI stays a Unicode window;
 # 5. GetWindowLongA of the Unicode window (NtUserGetCPD), subclassed by
-#    SetWindowLongA and given back;
-# 6. GetClassInfoW of an ANSI class, and CallWindowProcW of it.
+#    SetWindowLongA and given back: SetWindowLongA of the call procedure
+#    returns the ANSI subclass itself (IntSetWindowProc takes the old
+#    procedure in the caller's set);
+# 6. GetClassInfoW of an ANSI class, and CallWindowProcW of it;
+# 7. a call procedure is its process's and its desktop's
+#    (win32k::callproc::get): a thread on another desktop gets its own, and
+#    a second process (ANSICTL1.EXE child) gets its own from GetClassLongA of
+#    this program's window, which used to give it this program's (refused by
+#    user32's ValidateCallProc).
 features = test-smss
 requires = userland, native
 initial-command = ANSICTL1.EXE
@@ -40,6 +47,10 @@ expect = [ansictl] step 4: GetClassInfoA of a Unicode class: a call procedure 1 
 expect = [ansictl] step 4: CallWindowProcA: the Unicode procedure gets the text 1; WM_GETTEXT(8) 7 "ansi te", the bytes past it untouched 1
 expect = [ansictl] step 4: a window of it created in ANSI stays Unicode: its procedure gets the text 1
 expect = [ansictl] step 5: GetWindowLongA a call procedure 1, SetWindowLongA gave it back 1, the Unicode procedure gets the text through the subclass 1; given back, GetWindowLongW the procedure 1
+expect = [ansictl] step 5: SetWindowLongA that gave it back returned the ANSI subclass 1
+expect = [ansictl] step 7: a thread on another desktop: its own call procedure converts 1
+expect = [ansictl] child: GetClassLongA of the parent's window: a call procedure 1, not the parent's 1, it converts 1
+expect = [ansictl] step 7: another process: its own call procedure 1; after its end, this one's converts 1, the same again 1
 expect = [ansictl] step 6: GetClassInfoW of an ANSI class: a call procedure 1; CallWindowProcW: the ANSI procedure gets the text 1
 expect = [ansictl] done
 
