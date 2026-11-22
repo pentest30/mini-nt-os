@@ -27,7 +27,7 @@ pour que chaque application teste autre chose. Elles sont rangées de la plus si
 | 4 | WinMerge 2.12.4 (2009) | GPL | Inno Setup | MFC, vues côte à côte | comparer deux fichiers, fusionner une différence, enregistrer |
 | 5 | SumatraPDF 2.5.2 (2014) | GPL | le sien | rendu de pages, défilement | ouvrir un PDF fourni, page suivante, zoom |
 | 6 | AbiWord 2.4.1 (2005) | GPL | NSIS | traitement de texte, polices, RTF | taper, mettre en gras, enregistrer en `.rtf`, rouvrir |
-| 7 | PeaZip 3.9.1 (2011) | LGPL | Inno Setup | Lazarus et Free Pascal (LCL) | ouvrir une archive, l'extraire |
+| 7 | PeaZip 3.9.1 (2011) | LGPL | Inno Setup | Lazarus et Free Pascal (LCL) | ouvrir une archive, l'extraire (l'extraction par `-ext2folder`, le 2026-11-23 ; l'ouverture attend les bitmaps de 24 bits) |
 | 8 | Dev-C++ 4.9.9.2 (2005) | GPL | NSIS | Delphi (VCL), processus `gcc` lancés | ouvrir un projet, le compiler, lancer le programme |
 | 9 | GIMP 2.6.12 (2011) | GPL | Inno Setup | GTK2, nombreuses DLL, fontconfig | ouvrir une image, appliquer un filtre, exporter en PNG (fait en Script-Fu, le 2026-11-22) |
 | 10 | Apache OpenOffice 4.1.17 (2026) | Apache 2.0 | NSIS, qui déballe son installeur MSI | très grosse application, runtimes de Visual C++ (WinSxS, à mesurer) | Writer : taper, enregistrer en `.odt`, rouvrir |
@@ -731,6 +731,33 @@ Plancher de KeePass : chaque étape du parcours, les deux fermetures avec 2, le 
 de la base ; interdits : un parcours qui ne démarre pas, dépasse son délai, un programme qui finit seul, des étapes
 laissées. Vérifié par mutation : un mauvais mot de passe à la réouverture (« Invalid/wrong key ») et le scénario
 échoue (le parcours dépasse son délai à « database opened »).
+
+### Le parcours de PeaZip, le 2026-11-23
+
+Le parcours de la liste (« ouvrir une archive, l'extraire ») est fait pour l'extraction, par la ligne de commande de
+PeaZip : `peazip.exe -ext2folder C:\APPS\ROUTE.ZIP`. `xtask` écrit `ROUTE.ZIP`, une archive où `ROUTE.TXT` (66 octets,
+deux lignes) est stocké (`zip::stored`, relue par `zip::entries` et `zip::extract` dans un test hôte). PeaZip lance un
+second `peazip.exe`, qui confie le travail à son 7-Zip (`res\7z\7z.exe`), puis à `cmd.exe` et `pealauncher.exe`, et le
+premier finit avant eux : la nouvelle étape `file CHEMIN => ÉTIQUETTE` du banc attend que le fichier existe (le
+programme peut avoir fini entre-temps), puis le banc imprime ses lignes. Rien à corriger dans le noyau pour cela :
+`C:\APPS\ROUTE\ROUTE.TXT` sort avec ses deux lignes. Quand le fichier attendu manque, le banc liste `C:\APPS`, et
+`show` imprime aussi les contrôles des fenêtres du programme (classe et texte). L'extraction prend 14 s, le scénario
+177 s (AMD).
+
+L'ouverture dans le gestionnaire de fichiers de PeaZip n'est pas encore une étape : une capture de l'écran (le
+pixel de `screen`, son image gardée) montre la boîte de la LCL « Failed to get raw image description from bitmap.
+Press OK to ignore and risk data corruption. Press Cancel to kill the program. », au lancement de PeaZip comme à
+l'ouverture d'une archive. C'est elle, et non le gestionnaire, la « fenêtre du programme » qu'attendait le plancher
+(classe `Window`, deux boutons sans texte). Trace temporaire des services de bitmap de PeaZip : NtGdiExtGetObjectW
+réussit toujours (1 486 appels), mais NtGdiCreateBitmap rend 0 pour 24 bits par pixel (16 × 16, 60 fois) et
+NtGdiCreateDIBSection rend 0 136 fois, quand `win32k::gdi::surface` refuse les DIB sections de 24 bits (« pas encore :
+les DIB sections de 1, 16 et 24 bits ») ; la LCL reçoit alors un HBITMAP nul. La suite : les surfaces de 24 bits
+(`gdi::surface`, `dibits`, `bitblt`).
+
+Plancher de PeaZip : son installation, ce qu'il montre, puis l'extraction (l'étape, `ROUTE.TXT` de 66 octets, ses deux
+lignes) ; interdits : un parcours qui ne démarre pas ou dépasse son délai. Vérifié par mutation : un octet des données
+de l'archive changé, 7-Zip écrit quand même le fichier (« QeaZip… », son CRC faux) et le scénario échoue sur sa
+première ligne.
 
 ### La suite
 
