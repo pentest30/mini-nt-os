@@ -363,6 +363,7 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtUserDispatchMessage, Handler::Status(message::nt_user_dispatch_message)),
     (services::NtUserEndPaint, Handler::Status(window::nt_user_end_paint)),
     (services::NtUserEnumDisplaySettings, Handler::Status(display::nt_user_enum_display_settings)),
+    (services::NtUserEnumDisplayMonitors, Handler::Status(monitor::nt_user_enum_display_monitors)),
     (services::NtUserEnumDisplayDevices, Handler::Status(display::nt_user_enum_display_devices)),
     (services::NtUserChangeDisplaySettings, Handler::Status(display::nt_user_change_display_settings)),
     (services::NtUserEnableMenuItem, Handler::Status(menu::nt_user_enable_menu_item)),

@@ -108,6 +108,7 @@ const PROGRAMS: &[(&[&str], &str, Toolchain)] = &[
     (&["clip1.c"], "CLIP1.EXE", Toolchain::MinGwWin32),
     (&["npclip1.c"], "NPCLIP1.EXE", Toolchain::MinGwWin32),
     (&["ansictl1.c"], "ANSICTL1.EXE", Toolchain::MinGwWin32),
+    (&["enummon1.c"], "ENUMMON1.EXE", Toolchain::MinGwWin32),
     (&["minoinit.c"], "MINOINIT.EXE", Toolchain::MinGwWin32),
 ];
 

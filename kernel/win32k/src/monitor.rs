@@ -8,13 +8,15 @@
 //! il compte les fenêtres recouvrantes placées par défaut (`cWndStack`), en
 //! cascade ([`cascade`]). MonitorFromWindow, MonitorFromRect et
 //! MonitorFromPoint le trouvent d'après un rectangle ([`from_rect`]),
-//! GetMonitorInfo le décrit ([`get`]).
+//! GetMonitorInfo le décrit ([`get`]), EnumDisplayMonitors l'énumère
+//! ([`enumerate`]).
 //!
-//! Pas encore : plusieurs moniteurs (EnumDisplayMonitors), le changement de
-//! mode (UserUpdateMonitorSize), la région du moniteur, une zone de travail
+//! Pas encore : plusieurs moniteurs, la région du moniteur, une zone de travail
 //! réduite (la barre des tâches, SPI_SETWORKAREA). L'objet du moniteur n'est
 //! pas dans la section partagée : son entrée de la table des handles n'a
 //! pas d'adresse (`user32` ne le lit pas, il passe par win32k).
+
+use alloc::vec::Vec;
 
 use abi::ntstatus::NtStatus;
 use abi::user::{sm, MONITOR_DEFAULTTONEAREST, MONITOR_DEFAULTTOPRIMARY, TYPE_MONITOR};
@@ -89,6 +91,50 @@ pub fn from_rect(rect: Rect, flags: u32) -> Option<Monitor> {
     primary().filter(|monitor| covers(monitor.rect, rect, flags))
 }
 
+/// NtUserEnumDisplayMonitors : la zone où chercher les moniteurs. Sans DC,
+/// le rectangle donné (`clip`, à l'écran), ou `None` : tout l'écran
+/// virtuel. Avec un DC dont la région visible est bornée par `dc_box` (à
+/// l'écran) : `clip` depuis le coin de cette borne, que ReactOS prend pour
+/// l'origine du DC, ou sans `clip` la borne elle-même.
+pub fn search_area(clip: Option<Rect>, dc_box: Option<Rect>) -> Option<Rect> {
+    match (clip, dc_box) {
+        (clip, None) => clip,
+        (Some(clip), Some(dc)) => Some(Rect::new(
+            clip.left.wrapping_add(dc.left),
+            clip.top.wrapping_add(dc.top),
+            clip.right.wrapping_add(dc.left),
+            clip.bottom.wrapping_add(dc.top),
+        )),
+        (None, Some(dc)) => Some(dc),
+    }
+}
+
+/// IntGetMonitorsFromRect, MONITOR_DEFAULTTONULL : chaque moniteur de
+/// `monitors` que coupe `area` (`None` : tous), avec la partie coupée (son
+/// rectangle entier sans `area`), dans l'ordre de la liste.
+pub fn intersecting(monitors: &[Monitor], area: Option<Rect>) -> Vec<(u32, Rect)> {
+    monitors
+        .iter()
+        .filter_map(|monitor| match area {
+            None => Some((monitor.handle, monitor.rect)),
+            Some(area) => {
+                let cut = monitor.rect.intersect(&area);
+                (!cut.is_empty()).then_some((monitor.handle, cut))
+            }
+        })
+        .collect()
+}
+
+/// Les moniteurs que coupe `area` ([`intersecting`]) : le principal, seul
+/// moniteur de Mino.
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn enumerate(area: Option<Rect>) -> Vec<(u32, Rect)> {
+    let monitors: Vec<Monitor> = primary().into_iter().collect();
+    intersecting(&monitors, area)
+}
+
 /// La place en cascade de la fenêtre recouvrante numéro `stack` d'une zone
 /// de travail `work` (IntFixWindowCoordinates), d'après les métriques `m`,
 /// et le numéro de la suivante : la cascade recommence en haut à gauche
@@ -122,6 +168,31 @@ mod tests {
 
     fn metric(index: usize) -> i32 {
         crate::metrics::system_metrics(1280, 800, &crate::metrics::Parameters::DEFAULT)[index]
+    }
+
+    #[test]
+    fn monitors_are_enumerated_where_the_area_crosses_them() {
+        let screen =
+            Monitor { handle: 0x0001_0040, rect: Rect::new(0, 0, 1280, 800), work: Rect::new(0, 0, 1280, 800) };
+        let monitors = [screen];
+        assert_eq!(intersecting(&monitors, None), [(0x0001_0040, screen.rect)], "no area: all of it");
+        assert_eq!(
+            intersecting(&monitors, Some(Rect::new(1200, 700, 1400, 900))),
+            [(0x0001_0040, Rect::new(1200, 700, 1280, 800))],
+            "the part the area crosses"
+        );
+        assert!(intersecting(&monitors, Some(Rect::new(-500, -500, -400, -400))).is_empty(), "off the screen");
+        assert!(intersecting(&monitors, Some(Rect::new(10, 10, 10, 50))).is_empty(), "an empty area");
+        // A DC whose visible region is bounded by (100, 50)-(400, 250).
+        let dc = Some(Rect::new(100, 50, 400, 250));
+        assert_eq!(search_area(None, None), None);
+        assert_eq!(search_area(Some(Rect::new(1, 2, 3, 4)), None), Some(Rect::new(1, 2, 3, 4)));
+        assert_eq!(search_area(None, dc), dc, "the DC's bounds");
+        assert_eq!(
+            search_area(Some(Rect::new(10, 20, 30, 40)), dc),
+            Some(Rect::new(110, 70, 130, 90)),
+            "from its corner"
+        );
     }
 
     #[test]

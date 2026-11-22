@@ -226,3 +226,4 @@ RegisterClassA@4
 SendMessageA@16
 GetWindowLongA@8
 RegisterClassW@4
+EnumDisplayMonitors@16
