@@ -599,7 +599,8 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   langue de l'interface, et Notepad++ s'installait en néerlandais ; scénario `ui-language`. Notepad++ tape,
   remplace, enregistre et rouvre, au clavier de QEMU (un parcours par étapes : `run_window_route`, `route-step=`).
   WH_CBT pour HCBT_CREATEWND (`win32k::hook::create_window`, avant WM_GETMINMAXINFO) : MFC y attache son `CWnd`, et
-  KeePass fait enfin son OnInitDialog ; scénario `cbt-hook`.
+  KeePass fait enfin son OnInitDialog ; scénario `cbt-hook`. KeePass crée une base et une entrée, l'enregistre et la
+  rouvre avec son mot de passe (`show`, `start ARGUMENTS`, `new-window` dans les étapes d'un parcours).
   Suite : [`docs/passation.md`](docs/passation.md).
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.

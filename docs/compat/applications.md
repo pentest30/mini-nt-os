@@ -23,7 +23,7 @@ pour que chaque application teste autre chose. Elles sont rangées de la plus si
 |---|---|---|---|---|---|
 | 1 | 7-Zip 9.20 (2010) | LGPL | MSI | `msiexec` de ReactOS, Win32, `msvcrt` | installer, archiver un fichier, l'extraire, comparer (fait par `7z.exe`, le 2026-11-22) |
 | 2 | Notepad++ 7.9.2 (2020) | GPL | NSIS | Scintilla, onglets, Rechercher et Remplacer | taper, remplacer, enregistrer, rouvrir (fait au clavier, le 2026-11-22) |
-| 3 | KeePass 1.18 (2010) | GPL | Inno Setup | MFC, cryptographie, dialogues | créer une base et une entrée, enregistrer, rouvrir avec le mot de passe |
+| 3 | KeePass 1.18 (2010) | GPL | Inno Setup | MFC, cryptographie, dialogues | créer une base et une entrée, enregistrer, rouvrir avec le mot de passe (fait au clavier, le 2026-11-22) |
 | 4 | WinMerge 2.12.4 (2009) | GPL | Inno Setup | MFC, vues côte à côte | comparer deux fichiers, fusionner une différence, enregistrer |
 | 5 | SumatraPDF 2.5.2 (2014) | GPL | le sien | rendu de pages, défilement | ouvrir un PDF fourni, page suivante, zoom |
 | 6 | AbiWord 2.4.1 (2005) | GPL | NSIS | traitement de texte, polices, RTF | taper, mettre en gras, enregistrer en `.rtf`, rouvrir |
@@ -707,6 +707,30 @@ une autre fenêtre et son résultat ignoré. KeePass : son titre devient « KeeP
 (code 2, l'IDCANCEL de DoModal) ; plancher relevé. WinMerge 2.12.4, un programme MFC lui aussi, qui finissait sur
 0xC0000005 à son lancement (« Application Error »), montre maintenant sa fenêtre principale (`WinMergeWindowClassW`,
 « WinMerge ») et se ferme avec 0 ; plancher relevé (son installation, sa fenêtre, sa fermeture).
+
+### Le parcours de KeePass, le 2026-11-22
+
+Le parcours de la liste (« créer une base et une entrée, enregistrer, rouvrir avec le mot de passe ») passe par les
+fenêtres de KeePass 1.18, au clavier de QEMU, comme celui de Notepad++ (`steps` d'`apps::Route`). Il a d'abord demandé
+WH_CBT (plus haut) : sans lui, KeePass ne faisait rien de ses touches. Ses fenêtres ont été trouvées par l'étape
+`show SECONDES => ÉTIQUETTE` du banc (les fenêtres du programme, leurs contrôles, le premier plan, le presse-papiers,
+au bout de ce temps : pour explorer, pas pour un plancher). Le banc a aussi `start ARGUMENTS` (la commande du parcours
+avec ces arguments) et `new-window TEXTE` (une autre fenêtre de ce titre que la dernière trouvée : les deux boîtes du
+mot de passe maître s'appellent toutes deux « Create New Password Database »), et il prend 24 étapes, en disant s'il
+en laisse (il en prenait 16 sans le dire).
+
+KeePass démarre ; Ctrl+N ouvre « Create New Password Database » : « minopass », Entrée, puis la seconde boîte, encore
+« minopass », Entrée ; Ctrl+Y ouvre « Add Entry » : « Mino », Tab, « mino », Entrée ; Ctrl+S ouvre « Save As » :
+`C:\APPS\ROUTE.KDB`, Entrée ; le titre devient « ROUTE.KDB - KeePass Password Safe » ; fermé par WM_CLOSE (code 2).
+Puis `KeePass.exe C:\APPS\ROUTE.KDB` : « Open Database - ROUTE.KDB », « minopass », Entrée ; la base s'ouvre et Ctrl+B
+copie le nom d'utilisateur de l'entrée, que le banc lit dans le presse-papiers : « mino ». `ROUTE.KDB` fait 1 388
+octets et commence par la signature de KeePass 1.x (`03 d9 a2 9a 65 fb`). Ctrl+Q ne ferme pas KeePass 1.18 (le
+raccourci des sources récentes) : la fermeture est celle du banc. Le parcours dure 25 s, le scénario 146 s (AMD).
+
+Plancher de KeePass : chaque étape du parcours, les deux fermetures avec 2, le nom d'utilisateur copié, la signature
+de la base ; interdits : un parcours qui ne démarre pas, dépasse son délai, un programme qui finit seul, des étapes
+laissées. Vérifié par mutation : un mauvais mot de passe à la réouverture (« Invalid/wrong key ») et le scénario
+échoue (le parcours dépasse son délai à « database opened »).
 
 ### La suite
 
