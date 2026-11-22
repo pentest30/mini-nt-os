@@ -547,6 +547,15 @@ impl EThread {
         }
     }
 
+    /// KTHREAD.Saturation : 1 ou -1 si sa priorité de base est saturée (le
+    /// haut ou le bas de la classe de son processus), 0 sinon.
+    ///
+    /// # IRQL
+    /// Tout niveau.
+    pub(crate) fn saturation(&self) -> i8 {
+        self.saturation.load(Ordering::Acquire)
+    }
+
     /// KeQueryBasePriorityThread : sa priorité de base moins celle de son
     /// processus, ou ±16 si elle est saturée.
     ///
@@ -594,6 +603,36 @@ pub fn base_priority_of(process_base: u8, increment: i32) -> (u8, i8) {
         base.clamp(1, low_realtime - 1)
     };
     (base as u8, saturation)
+}
+
+/// KeSetPriorityAndQuantumProcess, pour un thread : la priorité de base
+/// d'un thread de base `thread_base` et de saturation `saturation` quand
+/// celle de son processus passe de `old` à `new`, ou `None` s'il la garde.
+/// Elle suit le changement, gardée dans la classe du nouveau processus (de
+/// 16 à 31 en temps réel, sinon de 1 à 15) ; saturée, elle va au haut ou au
+/// bas de la nouvelle classe, et ne bouge pas quand la classe reste la même.
+/// Ainsi un thread THREAD_PRIORITY_TIME_CRITICAL reste à 15 quand son
+/// processus passe de 8 à 4, et sa priorité relative (±16,
+/// [`EThread::base_increment`]) dit vrai.
+pub fn rebased_priority(thread_base: u8, saturation: i8, old: u8, new: u8) -> Option<u8> {
+    let low_realtime = i32::from(ke::sched::LOW_REALTIME_PRIORITY);
+    let high = ke::sched::PRIORITY_LEVELS as i32 - 1;
+    let (floor, ceiling, same_class) = if i32::from(new) >= low_realtime {
+        (low_realtime, high, i32::from(old) >= low_realtime)
+    } else {
+        (1, low_realtime - 1, i32::from(old) < low_realtime)
+    };
+    if saturation != 0 && same_class {
+        return None;
+    }
+    let base = if saturation > 0 {
+        ceiling
+    } else if saturation < 0 {
+        floor
+    } else {
+        (i32::from(thread_base) + i32::from(new) - i32::from(old)).clamp(floor, ceiling)
+    };
+    Some(base as u8)
 }
 
 impl Drop for EThread {
@@ -981,7 +1020,34 @@ pub(crate) fn delete_teb(process: &EProcess, teb: u32) {
 
 #[cfg(test)]
 mod base_priority_tests {
-    use super::base_priority_of;
+    use super::{base_priority_of, rebased_priority};
+
+    /// KeSetPriorityAndQuantumProcess: the threads follow their process's
+    /// base priority, kept in its new class; a saturated one goes to the end
+    /// of the new class, and stays where it is when the class is the same.
+    #[test]
+    fn a_process_priority_change_moves_its_threads() {
+        // A normal process (8) raised to 13: +2 and -2 kept, clamped at 15.
+        assert_eq!(rebased_priority(10, 0, 8, 13), Some(15));
+        assert_eq!(rebased_priority(6, 0, 8, 13), Some(11));
+        assert_eq!(rebased_priority(8, 0, 8, 6), Some(6));
+        assert_eq!(rebased_priority(10, 0, 8, 6), Some(8), "THREAD_PRIORITY_HIGHEST stays +2");
+        assert_eq!(rebased_priority(6, 0, 8, 4), Some(2));
+        assert_eq!(rebased_priority(2, 0, 4, 1), Some(1), "never below 1");
+        // Saturated, in the same class: left alone.
+        assert_eq!(rebased_priority(15, 1, 8, 4), None, "THREAD_PRIORITY_TIME_CRITICAL stays at 15");
+        assert_eq!(rebased_priority(1, -1, 8, 13), None, "THREAD_PRIORITY_IDLE stays at 1");
+        assert_eq!(rebased_priority(31, 1, 24, 20), None);
+        // Into or out of real time.
+        assert_eq!(rebased_priority(10, 0, 8, 24), Some(26));
+        assert_eq!(rebased_priority(15, 1, 8, 24), Some(31), "saturated: the top of real time");
+        assert_eq!(rebased_priority(1, -1, 8, 24), Some(16), "saturated: the bottom of real time");
+        assert_eq!(rebased_priority(26, 0, 24, 8), Some(10));
+        assert_eq!(rebased_priority(31, 1, 24, 8), Some(15));
+        assert_eq!(rebased_priority(16, -1, 24, 8), Some(1));
+        assert_eq!(rebased_priority(16, 0, 24, 2), Some(1), "kept in the new class");
+        assert_eq!(rebased_priority(15, 0, 13, 24), Some(26));
+    }
 
     #[test]
     fn a_thread_base_priority_stays_in_its_process_class() {

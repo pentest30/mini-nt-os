@@ -525,9 +525,12 @@ impl EProcess {
         self.base_priority.load(Ordering::Acquire)
     }
 
-    /// NtSetInformationProcess(`ProcessBasePriority`, KeSetPriorityProcess) :
-    /// la priorité de base de ses threads, ceux qui vivent et ceux qui
-    /// viendront.
+    /// NtSetInformationProcess(`ProcessBasePriority`,
+    /// KeSetPriorityAndQuantumProcess) : sa priorité de base, celle des
+    /// threads qui viendront ; chaque thread qui vit suit le changement
+    /// ([`crate::ethread::rebased_priority`] : son incrément gardé, une
+    /// saturation au haut ou au bas de la nouvelle classe). Rien si elle ne
+    /// change pas.
     ///
     /// # Panics
     /// Pour une priorité hors des 32 niveaux.
@@ -535,12 +538,19 @@ impl EProcess {
     /// # IRQL
     /// <= DISPATCH_LEVEL.
     pub fn set_base_priority(&self, base: u8) {
+        assert!(usize::from(base) < ke::sched::PRIORITY_LEVELS, "a priority of {base}");
         // Stored first: a thread created meanwhile reads it once started.
-        self.base_priority.store(base, Ordering::Release);
+        let old = self.base_priority.swap(base, Ordering::AcqRel);
+        if old == base {
+            return;
+        }
         let threads = self.threads.lock().list.clone();
         for thread in threads {
             if let Some(tid) = thread.ke_tid() {
-                ke::sched::set_base_priority(tid, base);
+                let saturation = thread.saturation();
+                ke::sched::rebase_priority(tid, |current| {
+                    crate::ethread::rebased_priority(current, saturation, old, base)
+                });
             }
         }
     }

@@ -1272,6 +1272,34 @@ pub fn set_base_priority(tid: usize, base: u8) {
     }
 }
 
+/// KeSetPriorityAndQuantumProcess, pour un thread : sa priorité de base
+/// devient ce que `rebase` fait de l'actuelle (`None` la garde), lue et
+/// changée sous le verrou du dispatcher ; une commutation est examinée s'il
+/// le faut, comme [`set_base_priority`]. Rien pour un thread qui n'existe
+/// pas.
+///
+/// # Panics
+/// Si `rebase` rend une priorité hors des [`PRIORITY_LEVELS`] niveaux.
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL. `rebase` s'exécute à DISPATCH_LEVEL, sous le verrou.
+pub fn rebase_priority(tid: usize, rebase: impl FnOnce(u8) -> Option<u8>) {
+    // SAFETY: lock held from acquire to release; a registered thread is valid.
+    unsafe {
+        let old_irql = DISPATCHER_LOCK.acquire::<KePlatform>();
+        let t = (*threads()).get(tid);
+        if !t.is_null() {
+            if let Some(base) = rebase((*t).base_priority) {
+                assert!(usize::from(base) < PRIORITY_LEVELS, "a priority of {base}");
+                if (*sched()).set_base_priority(t, base) {
+                    request_reschedule();
+                }
+            }
+        }
+        DISPATCHER_LOCK.release::<KePlatform>(old_irql);
+    }
+}
+
 /// Examine les files prêtes de ce processeur et relève les threads affamés
 /// ([`Scheduler::scan_starved`]) ; appelé chaque seconde par le balance set
 /// manager (`ke::balance`).

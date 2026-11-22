@@ -35,3 +35,5 @@ NtQueryKey@20
 NtQueryObject@20
 NtLockFile@40
 NtUnlockFile@20
+NtQueryInformationThread@20
+NtSetInformationProcess@16
