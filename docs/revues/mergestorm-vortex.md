@@ -31,9 +31,11 @@ traite l'une d'elles y ajoute la section de sa PR (voir « Ajouter une évaluati
 | [155](https://github.com/pentest30/mini-nt-os/pull/155) | 3 | 3 | 0 | 0 | 0 | 0 | 0 |
 | [156](https://github.com/pentest30/mini-nt-os/pull/156) | 7 | 3 | 0 | 0 | 2 | 2 | 0 |
 | [157](https://github.com/pentest30/mini-nt-os/pull/157) | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
-| **Total** | **71** | **40** | **6** | **4** | **3** | **18** | **4** |
+| [161](https://github.com/pentest30/mini-nt-os/pull/161) | 2 | 0 | 2 | 0 | 0 | 0 | 2 |
+| **Total** | **73** | **40** | **8** | **4** | **3** | **18** | **6** |
 
-Toutes les remarques jusqu'à la PR 157 sont évaluées.
+Toutes les remarques jusqu'à la PR 157 sont évaluées, puis celles de la PR 161. Restent celles des PR 158 et 159
+(fusionnées), et celles de la PR 160 sur sa branche.
 
 Ce qui ressort :
 
@@ -262,3 +264,25 @@ Commit relu par les bots : `4cb8cad`. Évalué le 2026-11-21. Une remarque, post
 | idem (Codex, P2) | La même. | Fondé | Voir la ligne précédente. | `1026f1c`. |
 
 Aucun défaut manqué vérifié.
+
+## PR 161 : les procédures de l'autre jeu de caractères (CALLPROCDATA)
+
+Commits relus par Vortex : `bef39ad`, puis `4e417c0`. Évalué le 2026-11-22. Vortex a posté une remarque, puis l'a
+reprise à la passe suivante parmi celles « hors des lignes changées » ; la revue de Codex a échoué (limite d'usage),
+sans remarque.
+
+| Où | Remarque | Verdict | Pourquoi | Suite |
+|---|---|---|---|---|
+| `kernel/win32k/src/callproc.rs:99` | La recherche du cache de `get` ignore le processus : pour une classe du système partagée comme Edit, un second processus reçoit de GetClassInfoA le handle du premier, que ValidateCallProc de `user32` refuse et qui meurt avec le premier. | Partiellement fondé | Le défaut existe, pas par ce chemin. Comme dans ReactOS, chaque processus a ses classes (`ClassLists` dans son `PROCESSINFO`, Edit comprise : le `user32` de chaque processus l'enregistre), et la classe d'un contrôle se voit par la procédure du client du jeu demandé (`Class::seen_procedure`), sans procédure d'appel. Le chemin réel est GetClassLongA(GCLP_WNDPROC) de la fenêtre d'un autre processus : `user32` (IntGetClsWndProc) appelle NtUserGetCPD, qui ne regarde pas le processus (ni dans ReactOS, ni dans `window::call_procedure`) ; le handle de l'autre processus allait à la classe, qui le rendait ensuite au sien. ReactOS a le même défaut : UserSearchForCallProc ne compare pas `ppi`. | `48460d8` : la recherche compare aussi le processus (`CallProc::owner`) et le tas du bureau. Étape 7 de `ansictl1.c` : un second processus (`ANSICTL1.EXE child`) reçoit le sien de GetClassLongA de la fenêtre du premier ; sans la comparaison, il recevait celui du premier, que CallWindowProcA refusait (vérifié par mutation). |
+| idem (sur `4e417c0`, hors des lignes changées) | La même, reprise. | Partiellement fondé | Redite. | `48460d8`. |
+
+Manqués :
+
+- **Un thread d'un autre bureau recevait un handle qu'il ne lit pas.** La procédure d'appel est dans le tas du bureau
+  du thread qui l'a demandée ; la recherche ne comparait pas le tas, et un thread du même processus sur un autre
+  bureau recevait un handle hors de la plage de son tas (`user32` : DesktopPtrToUser, puis
+  ONEPARAM_ROUTINE_GETDESKTOPMAPPING, que Mino n'a pas ; CallWindowProcA rend 0). Vu en vérifiant la remarque ;
+  Vortex l'évoque sur la PR 164 (« and desktop heap »). Corrigé par `48460d8` ; étape 7 de `ansictl1.c` (un thread
+  sur `MinoOther`), vérifié par mutation.
+- **SetWindowLong(GWLP_WNDPROC) rendait l'ancienne procédure dans le jeu de la procédure donnée.** Vu par Vortex et
+  Codex sur la PR 164, qui contient ce code (voir sa section). Corrigé par `48460d8`.
