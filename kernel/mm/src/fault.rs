@@ -151,9 +151,29 @@ pub fn resolve(page: Option<(PageState, PageProtect)>, backing: Backing, pte: Pt
         // fault, and retrying it would loop. Nothing maps the page between
         // the fault and the VAD lock: a fault runs with interrupts masked on
         // the one processor, and a copy (`AddressSpace::copy`) looks at the
-        // page under the lock it resolves it with. With several processors,
-        // two faults on one page would collide here.
+        // page under the lock it resolves it with. A fault that released the
+        // lock to read a file (`AddressSpace::access_fault`) looks at the
+        // page first when it restarts ([`pte_allows`]). With several
+        // processors, two faults on one page would collide here.
         (_, PteState::Present { .. }) => Resolution::AccessViolation,
+    }
+}
+
+/// La page, dans l'état `pte`, permet déjà l'accès `access` : présente,
+/// inscriptible pour une écriture, exécutable pour une exécution. Une faute
+/// qui reprend après avoir lu la page d'un fichier, verrou de la VAD relâché,
+/// trouve ainsi la page qu'une autre faute a projetée pendant la lecture, et
+/// réussit (MmNotPresentFaultSectionView de ReactOS : MmIsPagePresent, « another
+/// thread could load the page ») ; [`resolve`] y voyait une faute sans cause,
+/// et une violation d'accès.
+pub fn pte_allows(pte: PteState, access: Access) -> bool {
+    match pte {
+        PteState::Present { writable, executable, .. } => match access {
+            Access::Read => true,
+            Access::Write => writable,
+            Access::Execute => executable,
+        },
+        PteState::Absent | PteState::Retained => false,
     }
 }
 
@@ -222,6 +242,28 @@ pub fn demand_zero_faults() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A page another fault mapped while this one read the file: present
+    /// with the rights the access needs, the restarted fault is done.
+    #[test]
+    fn a_page_mapped_meanwhile_allows_the_access_it_has_the_rights_for() {
+        let shared = PteState::Present { writable: false, executable: false, shared: true };
+        let writable = PteState::Present { writable: true, executable: false, shared: true };
+        let code = PteState::Present { writable: false, executable: true, shared: true };
+        assert!(pte_allows(shared, Access::Read));
+        assert!(!pte_allows(shared, Access::Write), "a copy on write still to make");
+        assert!(pte_allows(writable, Access::Write));
+        assert!(!pte_allows(writable, Access::Execute), "no execute");
+        assert!(pte_allows(code, Access::Execute));
+        assert!(!pte_allows(PteState::Absent, Access::Read));
+        assert!(!pte_allows(PteState::Retained, Access::Read), "PAGE_NOACCESS");
+        // The first pass still takes such a page for a fault without cause.
+        let rw = PageProtect::READWRITE;
+        assert_eq!(
+            resolve(Some((PageState::Committed, rw)), Backing::Section, writable, Access::Write),
+            Resolution::AccessViolation
+        );
+    }
 
     #[test]
     fn a_stack_guard_moves_down_one_page() {
