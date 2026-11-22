@@ -1,5 +1,14 @@
 # Notes de passation
 
+- **Les revues des bots des PR 158 et 159** (`claude/reviews-158-159`, sur `main` ; demandé le 2026-11-22 ;
+  [`revues/mergestorm-vortex.md`](revues/mergestorm-vortex.md)). Les deux PR étaient fusionnées. Corrigé : SetParent
+  ne lie plus une fenêtre ni sous un parent détruits pendant son SW_HIDE, et une chaîne de parents plus longue que la
+  limite est refusée (`e0b1b85`, `win32k::winpos::set_parent`, `chain_reaches` ; scénario `set-parent`,
+  `tests/native/setpar1.c`) ; une faute qui reprend après avoir lu la page d'un fichier réussit si une autre faute
+  l'a projetée entre-temps (`23db3d6`, `mm::fault::pte_allows`, MmIsPagePresent) ; deux sections de données du même
+  fichier faites en même temps prennent le même segment (`36611e1`, `io::section_cache::Cache::insert`). Sans suite,
+  comme ReactOS : SetParent sous la fenêtre d'un autre bureau ; une lecture courte du fichier complétée de zéros.
+  **Pas testé** : la course de deux fautes sur une page (il faudrait une lecture qui bloque au bon moment).
 - **Les sections de fichiers paginées à la demande** (`claude/demand-paged-sections`, sur la PR 158, M7 ;
   [ADR-024](03-decisions.md#adr-024--sections-de-fichiers--les-pages-dune-section-de-données-lues-à-la-faute-partagées-par-le-segment-du-fichier),
   proposée ; [`compat/m6-logon.md`](compat/m6-logon.md) ; demandé le 2026-11-21 après la mesure de l'entrée
