@@ -556,6 +556,34 @@ Vu ensuite dans son démarrage : NtUserGetThreadDesktop, NtUserGetObjectInformat
 NtUserGetDoubleClickTime, NtUserMapVirtualKeyEx, NtGdiModifyWorldTransform, NtGdiSaveDC et NtGdiRestoreDC (pris par
 une autre session) sans handler, une DIB section de 1 bit refusée.
 
+### SetThreadPriority : le GIMP interroge ses greffons, le 2026-11-22
+
+Laissé plus longtemps derrière sa fenêtre « GIMP Startup » (le banc la fermait 16 s après), le GIMP montrait une
+boîte « Error » de GLib : « g_thread_set_priority_win32_impl: error Incorrect function. during SetThreadPriority ».
+SetThreadPriority de `kernel32` est NtSetInformationThread(ThreadBasePriority, classe 3), sans handler :
+`STATUS_NOT_IMPLEMENTED`, que `kernel32` traduit en ERROR_INVALID_FUNCTION, et GLib s'arrête. Fait comme ReactOS
+(`ps/query.c`, KeSetBasePriorityThread, KeQueryBasePriorityThread ; `sys::process::nt_set_information_thread`,
+`ps::ethread::base_priority_of`, `EThread::set_base_increment`, `base_increment`) : un incrément de -2 à 2, ou ±16
+(la saturation que `kernel32` passe pour THREAD_PRIORITY_TIME_CRITICAL et THREAD_PRIORITY_IDLE), tout incrément
+dans un processus temps réel, sinon `STATUS_INVALID_PARAMETER` ; la priorité de base est celle du processus plus
+l'incrément, gardée dans la classe du processus (de 1 à 15, ou de 16 à 31 en temps réel) ; le thread garde sa
+saturation, que ThreadBasicInformation (GetThreadPriority) rend comme ±16. Scénario `thread-priority`
+(`tests/native/prio1.c`, AMD et Intel) ; deux mutations le font échouer (la classe refusée ; la saturation oubliée) ;
+test hôte `a_thread_base_priority_stays_in_its_process_class`.
+
+Sans l'erreur, le GIMP interroge ses greffons à son premier démarrage : un processus chacun (`wind.exe`,
+`whirl-pinch.exe`… `color-exchange.exe`, dans l'ordre inverse de l'alphabet), 152 en 300 s. Le banc laisse
+maintenant à un programme le temps de démarrer (`program_seconds` de `xtask/src/apps.rs`, `settle=` de `PROBE.TXT` ;
+5 s par défaut, 600 s pour le GIMP), et imprime ses fenêtres chaque minute. Le GIMP ouvre alors sa boîte à outils (« Toolbox »), la
+fenêtre « Layers, Channels, Paths, Undo - Brushes, Patterns, Gradients » et celle de l'image (« GNU Image
+Manipulation Program »), entre 440 et 560 s après son lancement, et se ferme avec 0 sur WM_CLOSE ; plancher relevé
+(la boîte à outils, la fermeture). KeePass, au délai par défaut, ne change pas.
+
+Restent à son démarrage, sans handler : NtUserGetThreadDesktop, NtUserGetObjectInformation, NtUserFindWindowEx,
+NtUserGetDoubleClickTime, NtUserMapVirtualKeyEx, NtGdiModifyWorldTransform, NtGdiGetRegionData,
+NtGdiExtCreateRegion ; une DIB section de 1 bit refusée. Son parcours (ouvrir une image, un filtre, l'export PNG)
+reste à faire.
+
 ### La suite
 
 **Mise à jour du 2026-11-20 : ProcessDebugPort** (`fix/ps-process-debug-port`).

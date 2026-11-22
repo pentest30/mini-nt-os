@@ -1,5 +1,21 @@
 # Notes de passation
 
+- **SetThreadPriority : le GIMP démarre** (`claude/thread-base-priority`, sur la PR 163, M7,
+  [`compat/applications.md`](compat/applications.md#setthreadpriority-le-gimp-interroge-ses-greffons-le-2026-11-22) ;
+  demandé le 2026-11-22). Laissé plus de 16 s, le GIMP montrait la boîte fatale de GLib « error Incorrect function.
+  during SetThreadPriority » : NtSetInformationThread(ThreadBasePriority, classe 3) manquait. Fait comme ReactOS
+  (`ps/query.c`, KeSetBasePriorityThread, KeQueryBasePriorityThread) : `sys::process::nt_set_information_thread`,
+  `ps::ethread::base_priority_of` (la classe du processus gardée), `EThread::set_base_increment`, `base_increment`
+  (la saturation ±16 de TIME_CRITICAL et IDLE rendue par ThreadBasicInformation). Scénario `thread-priority`
+  (`tests/native/prio1.c`, AMD et Intel) ; deux mutations le font échouer ; test hôte
+  `a_thread_base_priority_stays_in_its_process_class`. Le banc laisse à un programme le temps de démarrer
+  (`program_seconds` de `xtask/src/apps.rs`, `settle=` de `PROBE.TXT`, 600 s pour le GIMP qui interroge ses
+  150 greffons, un processus chacun, à son premier démarrage) : le GIMP ouvre sa boîte à outils et la fenêtre de
+  l'image vers 500 s, puis se ferme avec 0 ; plancher relevé (scénario de 1 800 s au plus). Vérifié : lint,
+  1 255 tests hôte, `thread-priority` (AMD, Intel), `app-gimp`, `app-keepass`. **Dettes** : ThreadPriority
+  (classe 2, la priorité absolue) n'est pas faite ; ProcessBasePriority remet toujours chaque thread à la priorité
+  du processus, sans garder leurs incréments (KeSetPriorityAndQuantumProcess les garde). **Suite** : les services
+  qui manquent au démarrage du GIMP, puis son parcours.
 - **EnumDisplayMonitors : le GIMP s'ouvre** (`claude/enum-display-monitors`, sur la PR 162, M7,
   [`compat/applications.md`](compat/applications.md#enumdisplaymonitors-le-gimp-souvre-le-2026-11-22) ; demandé le
   2026-11-22). `gimp-2.6.exe` lisait `0xC` dans `libgdk` après NtUserEnumDisplayMonitors, sans handler (0 : aucun
