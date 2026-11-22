@@ -116,6 +116,22 @@ const KEEPASS_ROUTE_STEPS: &[&str] = &[
 /// (`ROUTE_STEPS` of `tests/native/appbench.c`), each under 160 characters.
 pub const ROUTE_STEPS: usize = 24;
 
+/// PeaZip's route: `ROUTE.ZIP` extracted to a folder of its name
+/// (`-ext2folder`); PeaZip hands the work to its 7-Zip (`res\7z\7z.exe`)
+/// and its launcher, and ends before them: the route waits for the file.
+/// Opening the archive in PeaZip's file manager is not yet a step: the
+/// manager stops on LCL's "Failed to get raw image description from
+/// bitmap", win32k refusing 24-bit bitmaps (docs/compat/applications.md).
+const PEAZIP_ROUTE_STEPS: &[&str] =
+    &[r"start -ext2folder C:\APPS\ROUTE.ZIP", r"file C:\APPS\ROUTE\ROUTE.TXT => extracted", "close"];
+
+/// The text PeaZip's route archives.
+const PEAZIP_ROUTE_TEXT: &[u8] = b"PeaZip route: an archive opened, then extracted\r\nits second line\r\n";
+
+fn peazip_route_files() -> Vec<(&'static str, Vec<u8>)> {
+    vec![("ROUTE.ZIP", crate::zip::stored(&[("ROUTE.TXT", PEAZIP_ROUTE_TEXT)]))]
+}
+
 fn notepadpp_route_files() -> Vec<(&'static str, Vec<u8>)> {
     vec![("ROUTE.TXT", b"Mino route\r\n".to_vec())]
 }
@@ -345,7 +361,13 @@ pub const APPS: [App; 10] = [
         install_seconds: 300,
         program_seconds: 5,
         memory_mb: 256,
-        route: None,
+        route: Some(Route {
+            command: r#""C:\Program Files\PeaZip\peazip.exe""#,
+            seconds: 300,
+            files: peazip_route_files,
+            output: r"C:\APPS\ROUTE\ROUTE.TXT",
+            steps: PEAZIP_ROUTE_STEPS,
+        }),
     },
     App {
         id: "devcpp",
@@ -578,7 +600,7 @@ mod tests {
         assert!(!text.contains("route-step="));
         assert!(APPS
             .iter()
-            .filter(|app| !["gimp", "7zip", "notepadpp", "keepass"].contains(&app.id))
+            .filter(|app| !["gimp", "7zip", "notepadpp", "keepass", "peazip"].contains(&app.id))
             .all(|app| app.route.is_none()));
     }
 
@@ -627,6 +649,22 @@ mod tests {
     }
 
     #[test]
+    fn peazip_has_an_archive_to_extract() {
+        let app = APPS.iter().find(|app| app.id == "peazip").unwrap();
+        let route = app.route.expect("PeaZip's route");
+        let files = (route.files)();
+        assert_eq!(files.iter().map(|(name, _)| *name).collect::<Vec<_>>(), ["ROUTE.ZIP"]);
+        let entries = crate::zip::entries(&files[0].1).expect("a valid archive");
+        assert_eq!(entries.iter().map(|e| (e.name.as_str(), e.size)).collect::<Vec<_>>(), [("ROUTE.TXT", 66)]);
+        let mut text = Vec::new();
+        crate::zip::extract(&files[0].1, &entries[0], &mut text).expect("ROUTE.TXT");
+        assert_eq!(text, PEAZIP_ROUTE_TEXT);
+        let text = probe_commands(app);
+        assert!(text.contains("route-output=C:\\APPS\\ROUTE\\ROUTE.TXT\r\n"), "where -ext2folder puts it");
+        assert!(text.contains("route-step=file C:\\APPS\\ROUTE\\ROUTE.TXT => extracted\r\n"));
+    }
+
+    #[test]
     fn the_steps_of_each_route_go_to_the_probe() {
         for app in APPS.iter().filter(|app| app.route.is_some_and(|route| !route.steps.is_empty())) {
             let route = app.route.unwrap();
@@ -635,7 +673,7 @@ mod tests {
             let steps: Vec<&str> = text.lines().filter_map(|line| line.strip_prefix("route-step=")).collect();
             assert_eq!(steps, route.steps, "{}", app.id);
             assert!(steps.len() <= ROUTE_STEPS && steps.iter().all(|step| step.len() < 160), "{}", app.id);
-            assert_eq!(steps.first(), Some(&"start"), "{}", app.id);
+            assert!(steps.first().is_some_and(|step| step.starts_with("start")), "{}", app.id);
             assert_eq!(steps.last(), Some(&"close"), "{}", app.id);
             // Each wait has a label, no label begins another: the
             // scenario's keys follow them.

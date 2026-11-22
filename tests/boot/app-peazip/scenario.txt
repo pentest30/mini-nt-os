@@ -22,6 +22,12 @@ timeout = 900
 # (io::fat::FatVolume::add_entries; before, nographic-embedded had its long
 # name in a hole that a moved file left and its 8.3 entry at the end, and
 # PeaZip rolled back), see docs/compat/applications.md.
+# Its route then extracts C:\APPS\ROUTE.ZIP (written by xtask, stored) by
+# its command line, peazip.exe -ext2folder: PeaZip hands it to its 7-Zip and
+# its launcher and ends first; the bench waits for C:\APPS\ROUTE\ROUTE.TXT
+# and prints its two lines. Not yet: PeaZip's file manager stops on LCL's
+# "Failed to get raw image description from bitmap" (24-bit bitmaps,
+# refused by win32k), the "program window" above.
 expect = [appbench] installer started
 expect = Setup version: Inno Setup version 5.4.2
 expect = User privileges: Administrative
@@ -32,6 +38,11 @@ expect = [appbench] installer ended: exit code 0
 expect = [appbench] installed: C:\Program Files\PeaZip\peazip.exe
 expect = [appbench] program started
 expect = [appbench] program window after
+expect = [appbench] route: "C:\Program Files\PeaZip\peazip.exe" -ext2folder C:\APPS\ROUTE.ZIP
+expect = [appbench] route step: extracted
+expect = [appbench] route: ROUTE.TXT, 66 bytes
+expect = route file: PeaZip route: an archive opened, then extracted
+expect = route file: its second line
 expect = [appbench] PeaZip 3.9.1: report done
 forbid = Unable to create a temporary file
 forbid = User privileges: None
@@ -39,3 +50,5 @@ forbid = [appbench] installer still running after
 forbid = [appbench] installer ended: exit code c00000fd
 forbid = [appbench] program ended by itself: exit code c0000005
 forbid = *** STOP:
+forbid = [appbench] route still running after
+forbid = [appbench] route did not start

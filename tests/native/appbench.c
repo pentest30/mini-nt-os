@@ -523,7 +523,10 @@ static void describe_output(void)
     narrow(name, shown, sizeof(shown));
     HANDLE made = CreateFileW(route_output, GENERIC_READ, FILE_SHARE_READ, 0, OPEN_EXISTING, 0, 0);
     if (made == INVALID_HANDLE_VALUE) {
-        DbgPrint(TAG "route: no %s (error %lu)\n", shown, GetLastError());
+        /* Where the route's files went: C:\APPS, two levels down. */
+        DbgPrint(TAG "route: no %s (error %lu); C:\\APPS has:\n", shown, GetLastError());
+        listed = 0;
+        list_dir(L"C:\\APPS", 1);
         return;
     }
     DWORD read = 0, size = GetFileSize(made, 0);
@@ -627,6 +630,33 @@ static BOOL CALLBACK find_part_window(HWND window, LPARAM argument)
     return TRUE;
 }
 
+/* The controls of the visible windows of a process: class and text. */
+static BOOL CALLBACK print_control(HWND child, LPARAM count)
+{
+    WCHAR text[120], class_name[64]; char a[160], b[80];
+    if (++*(int *)count > 30) return FALSE;
+    text[0] = class_name[0] = 0;
+    GetWindowTextW(child, text, 120);
+    GetClassNameW(child, class_name, 64);
+    DbgPrint(TAG "   control %s%s: \"%s\"\n", narrow(class_name, b, sizeof(b)), IsWindowVisible(child) ? "" : " (hidden)",
+             narrow(text, a, sizeof(a)));
+    return TRUE;
+}
+static BOOL CALLBACK print_controls_of(HWND window, LPARAM pid)
+{
+    DWORD owner = 0;
+    GetWindowThreadProcessId(window, &owner);
+    if (owner == (DWORD)pid && IsWindowVisible(window)) {
+        WCHAR title[160]; char line[200];
+        int count = 0;
+        title[0] = 0;
+        GetWindowTextW(window, title, 160);
+        DbgPrint(TAG "route controls of \"%s\":\n", narrow(title, line, sizeof(line)));
+        EnumChildWindows(window, print_control, (LPARAM)&count);
+    }
+    return TRUE;
+}
+
 /* The text on the clipboard (CF_UNICODETEXT), line by line. */
 static char clipboard_text[4096];
 static void print_clipboard(void)
@@ -661,9 +691,11 @@ static void print_clipboard(void)
    - `close`: WM_CLOSE to the program's windows, then its exit code;
    - `new-window TEXT => LABEL`: the same, for another window than the
      one the last wait found (a second dialog with the first one's title);
-   - `show SECONDS => LABEL`: waits that long, then prints the windows and
-     the clipboard: to find a route's windows, not for a floor (a time is
-     not an event).
+   - `file PATH => LABEL`: waits for the file PATH to exist; the program
+     may have ended meanwhile (it gave the work to another process);
+   - `show SECONDS => LABEL`: waits that long, then prints the windows,
+     the controls of the program's windows and the clipboard: to find a
+     route's windows, not for a floor (a time is not an event).
    Each wait prints "route step: LABEL"; all of them have route-seconds.
    Then what the file it makes is (route-output=). */
 static void run_window_route(void)
@@ -725,6 +757,7 @@ static void run_window_route(void)
             WaitForSingleObject(process.hProcess, seconds * 1000);
             DbgPrint(TAG "route windows after %lu s:\n", (GetTickCount() - started) / 1000);
             print_windows(TRUE);
+            EnumWindows(print_controls_of, (LPARAM)process.dwProcessId);
             /* Whether the program takes the keys: the foreground window, and
                whether its window answers a sent message. */
             WCHAR title[160];
@@ -745,6 +778,7 @@ static void run_window_route(void)
         BOOL clipboard = contains(step, L"clipboard") && step[9] == 0;
         BOOL none = prefix_w(step, L"no-window ");
         BOOL fresh = prefix_w(step, L"new-window ");
+        BOOL file = prefix_w(step, L"file ");
         const WCHAR *part = step;
         while (*part && *part != L' ') ++part;
         if (*part) ++part;
@@ -753,6 +787,8 @@ static void run_window_route(void)
             BOOL done;
             if (clipboard) {
                 done = GetClipboardSequenceNumber() != sequence;
+            } else if (file) {
+                done = GetFileAttributesW(part) != INVALID_FILE_ATTRIBUTES;
             } else {
                 struct find_part find = {process.dwProcessId, part, 0, fresh ? found : 0};
                 EnumWindows(find_part_window, (LPARAM)&find);
@@ -761,7 +797,9 @@ static void run_window_route(void)
             }
             if (done) break;
             DWORD code = 0;
-            if (WaitForSingleObject(process.hProcess, 250) == WAIT_OBJECT_0) {
+            if (WaitForSingleObject(process.hProcess, 250) == WAIT_OBJECT_0 && file) {
+                Sleep(250);
+            } else if (WaitForSingleObject(process.hProcess, 0) == WAIT_OBJECT_0) {
                 GetExitCodeProcess(process.hProcess, &code);
                 DbgPrint(TAG "route program ended by itself at \"%s\": exit code %lx\n", label, code);
                 CloseHandle(process.hThread);
