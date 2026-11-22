@@ -33,8 +33,18 @@
  *    asks NtUserGetCPD); subclassed in ANSI (SetWindowLongA), its old
  *    procedure is that call procedure, the messages reach the Unicode
  *    procedure through it, and given back it is the Unicode procedure again;
+ *    SetWindowLongA that gives it back returns the ANSI subclass itself (the
+ *    old procedure seen in the caller's set, not in the call procedure's);
  * 6. the other way: GetClassInfoW of an ANSI class is a call procedure, and
- *    CallWindowProcW of it hands the ANSI procedure its text in ANSI.
+ *    CallWindowProcW of it hands the ANSI procedure its text in ANSI;
+ * 7. a call procedure is its process's and its desktop's: a thread of this
+ *    process on another desktop gets one of its own from GetClassInfoA of
+ *    the Unicode class, which CallWindowProcA converts (the one of step 4 is
+ *    in the heap of Default, not mapped there); a second process (this
+ *    program, "child") gets one of its own from GetClassLongA of this
+ *    program's Unicode window, not this program's (user32's
+ *    ValidateCallProc refuses another process's), and this program's still
+ *    works after the child's end.
  * Each result goes to the debug port (DbgPrint), where the scenario looks
  * for it.
  *
@@ -43,6 +53,8 @@
  */
 
 typedef unsigned short WCHAR;
+typedef unsigned short WORD;
+typedef unsigned char BYTE;
 typedef unsigned short ATOM;
 typedef unsigned int UINT;
 typedef unsigned long DWORD;
@@ -55,6 +67,7 @@ typedef void *HICON;
 typedef void *HBRUSH;
 typedef void *HWINSTA;
 typedef void *HDESK;
+typedef void *HANDLE;
 typedef unsigned int WPARAM;
 typedef long LPARAM;
 typedef long LRESULT;
@@ -86,6 +99,34 @@ typedef struct {
     const WCHAR *lpszClassName;
 } WNDCLASSW;
 
+typedef struct {
+    DWORD cb;
+    WCHAR *lpReserved;
+    WCHAR *lpDesktop;
+    WCHAR *lpTitle;
+    DWORD dwX;
+    DWORD dwY;
+    DWORD dwXSize;
+    DWORD dwYSize;
+    DWORD dwXCountChars;
+    DWORD dwYCountChars;
+    DWORD dwFillAttribute;
+    DWORD dwFlags;
+    WORD wShowWindow;
+    WORD cbReserved2;
+    BYTE *lpReserved2;
+    HANDLE hStdInput;
+    HANDLE hStdOutput;
+    HANDLE hStdError;
+} STARTUPINFOW;
+
+typedef struct {
+    HANDLE hProcess;
+    HANDLE hThread;
+    DWORD dwProcessId;
+    DWORD dwThreadId;
+} PROCESS_INFORMATION;
+
 #define WS_POPUP 0x80000000
 #define WS_CHILD 0x40000000
 #define WS_VISIBLE 0x10000000
@@ -95,12 +136,24 @@ typedef struct {
 #define WM_GETTEXT 0x000D
 #define WM_SETTEXT 0x000C
 #define GWLP_WNDPROC (-4)
+#define INFINITE 0xFFFFFFFF
+#define CHILD_PASSED 0x77
 
 __declspec(dllimport) unsigned long __cdecl DbgPrint(const char *format, ...);
 
+__declspec(dllimport) BOOL __stdcall CloseHandle(HANDLE object);
+__declspec(dllimport) BOOL __stdcall CreateProcessW(const WCHAR *application, WCHAR *command_line,
+                                                    void *process_attributes, void *thread_attributes, BOOL inherit,
+                                                    DWORD flags, void *environment, const WCHAR *directory,
+                                                    STARTUPINFOW *startup, PROCESS_INFORMATION *information);
+__declspec(dllimport) HANDLE __stdcall CreateThread(void *attributes, DWORD stack, DWORD(__stdcall *start)(void *),
+                                                    void *parameter, DWORD flags, DWORD *id);
 __declspec(dllimport) void __stdcall ExitProcess(UINT code);
+__declspec(dllimport) WCHAR *__stdcall GetCommandLineW(void);
 __declspec(dllimport) DWORD __stdcall GetCurrentProcessId(void);
+__declspec(dllimport) BOOL __stdcall GetExitCodeProcess(HANDLE process, DWORD *code);
 __declspec(dllimport) HINSTANCE __stdcall GetModuleHandleW(const WCHAR *name);
+__declspec(dllimport) DWORD __stdcall WaitForSingleObject(HANDLE object, DWORD milliseconds);
 
 __declspec(dllimport) LRESULT __stdcall CallWindowProcA(WNDPROC procedure, HWND window, UINT message, WPARAM w,
                                                        LPARAM l);
@@ -238,6 +291,86 @@ static int is_call_procedure(WNDPROC procedure)
 
 static const char path[] = "C:\\Program Files\\PeaZip";
 
+/* The command line of step 7's child: "C:\ANSICTL1.EXE child HWND CPD",
+ * both in eight hexadecimal digits. */
+static WCHAR child_line[] = L"C:\\ANSICTL1.EXE child 00000000 00000000";
+#define CHILD_WINDOW_AT 22
+#define CHILD_CPD_AT 31
+
+static void put_hex(WCHAR *out, DWORD value)
+{
+    int i;
+    for (i = 0; i < 8; i++)
+        out[i] = L"0123456789abcdef"[(value >> (28 - 4 * i)) & 15];
+}
+
+static DWORD get_hex(const WCHAR *in)
+{
+    DWORD value = 0;
+    int i;
+    for (i = 0; i < 8; i++)
+        value = value * 16 + (in[i] <= L'9' ? in[i] - L'0' : in[i] - L'a' + 10);
+    return value;
+}
+
+/* The child's command line holds " child " after the program's path. */
+static const WCHAR *child_arguments(void)
+{
+    const WCHAR *line = GetCommandLineW();
+    static const WCHAR WORD_CHILD[] = L" child ";
+    for (; *line; line++) {
+        int i;
+        for (i = 0; WORD_CHILD[i] && line[i] == WORD_CHILD[i]; i++)
+            ;
+        if (!WORD_CHILD[i])
+            return line + 7;
+    }
+    return 0;
+}
+
+/* Step 7's child: GetClassLongA of the parent's Unicode window gives a call
+ * procedure of its own, which CallWindowProcA converts (the procedure is the
+ * same program's, at the same address here). */
+static void child(const WCHAR *arguments)
+{
+    HWND window = (HWND)get_hex(arguments);
+    WNDPROC parents = (WNDPROC)get_hex(arguments + 9);
+    WNDPROC got = (WNDPROC)GetClassLongA(window, GCL_WNDPROC);
+    int converts;
+
+    wide_text[0] = 0;
+    CallWindowProcA(got, 0, WM_SETTEXT, 0, (LPARAM) "from the child");
+    converts = same_wide(wide_text, L"from the child");
+    DbgPrint("[ansictl] child: GetClassLongA of the parent's window: a call procedure %d, not the parent's %d, it "
+             "converts %d\n",
+             is_call_procedure(got), got != parents, converts);
+    ExitProcess(is_call_procedure(got) && got != parents && converts ? CHILD_PASSED : 1);
+}
+
+/* Step 7's thread on another desktop. */
+static HDESK other_desktop;
+static HINSTANCE the_instance;
+static int on_other_desktop = -1;
+
+static DWORD __stdcall another_desktop(void *parameter)
+{
+    WNDCLASSA seen;
+    (void)parameter;
+    if (!SetThreadDesktop(other_desktop)) {
+        on_other_desktop = -2;
+        return 0;
+    }
+    memset(&seen, 0, sizeof seen);
+    wide_text[0] = 0;
+    if (!GetClassInfoA(the_instance, "MinoWide", &seen)) {
+        on_other_desktop = -3;
+        return 0;
+    }
+    CallWindowProcA(seen.lpfnWndProc, 0, WM_SETTEXT, 0, (LPARAM) "on another desktop");
+    on_other_desktop = is_call_procedure(seen.lpfnWndProc) && same_wide(wide_text, L"on another desktop");
+    return 0;
+}
+
 DWORD __stdcall GuiStartup(void)
 {
     static const char *const names_a[] = {"Button", "ComboBox", "Edit", "ListBox", "Static"};
@@ -248,7 +381,11 @@ DWORD __stdcall GuiStartup(void)
     HWND parent, window, plain;
     char text[64];
     int i, ansi_seen = 0, unicode_seen = 0, differ = 0, length, got, untouched, whole, plain_length;
+    const WCHAR *arguments = child_arguments();
 
+    if (arguments)
+        child(arguments);
+    the_instance = instance;
     if (!take_a_desktop())
         ExitProcess(1);
     memset(&class_a, 0, sizeof class_a);
@@ -365,18 +502,58 @@ DWORD __stdcall GuiStartup(void)
         /* 5. The window's procedure in ANSI, subclassed and given back. */
         {
             WNDPROC window_cpd = (WNDPROC)GetWindowLongA(wide, GWLP_WNDPROC);
-            WNDPROC old = (WNDPROC)SetWindowLongA(wide, GWLP_WNDPROC, (LONG)ansi_subclass);
+            WNDPROC old = (WNDPROC)SetWindowLongA(wide, GWLP_WNDPROC, (LONG)ansi_subclass), given_back;
             int through, back;
             subclassed_previous = old;
             wide_text[0] = 0;
             SendMessageA(wide, WM_SETTEXT, 0, (LPARAM) "via the subclass");
             through = subclass_seen == 1 && same_wide(wide_text, L"via the subclass");
-            SetWindowLongA(wide, GWLP_WNDPROC, (LONG)old);
+            given_back = (WNDPROC)SetWindowLongA(wide, GWLP_WNDPROC, (LONG)old);
             back = (WNDPROC)GetWindowLongW(wide, GWLP_WNDPROC) == wide_procedure;
             DbgPrint("[ansictl] step 5: GetWindowLongA a call procedure %d, SetWindowLongA gave it back %d, the "
                      "Unicode procedure gets the text through the subclass %d; given back, GetWindowLongW the "
                      "procedure %d\n",
                      is_call_procedure(window_cpd), old == window_cpd, through, back);
+            DbgPrint("[ansictl] step 5: SetWindowLongA that gave it back returned the ANSI subclass %d\n",
+                     given_back == ansi_subclass);
+        }
+
+        /* 7. A call procedure of another desktop, of another process. */
+        {
+            HANDLE thread;
+            STARTUPINFOW startup;
+            PROCESS_INFORMATION process;
+            DWORD code = 0;
+            WNDPROC mine = (WNDPROC)GetClassLongA(wide, GCL_WNDPROC), again;
+            int still;
+
+            other_desktop = CreateDesktopW(L"MinoOther", 0, 0, 0, MAXIMUM_ALLOWED, 0);
+            thread = other_desktop ? CreateThread(0, 0, another_desktop, 0, 0, 0) : 0;
+            if (thread) {
+                WaitForSingleObject(thread, INFINITE);
+                CloseHandle(thread);
+            }
+            DbgPrint("[ansictl] step 7: a thread on another desktop: its own call procedure converts %d\n",
+                     on_other_desktop);
+
+            put_hex(child_line + CHILD_WINDOW_AT, (DWORD)wide);
+            put_hex(child_line + CHILD_CPD_AT, (DWORD)mine);
+            memset(&startup, 0, sizeof startup);
+            startup.cb = sizeof startup;
+            startup.lpDesktop = L"WinSta0\\Default";
+            if (CreateProcessW(L"C:\\ANSICTL1.EXE", child_line, 0, 0, 0, 0, 0, 0, &startup, &process)) {
+                WaitForSingleObject(process.hProcess, INFINITE);
+                GetExitCodeProcess(process.hProcess, &code);
+                CloseHandle(process.hThread);
+                CloseHandle(process.hProcess);
+            }
+            wide_text[0] = 0;
+            CallWindowProcA(mine, wide, WM_SETTEXT, 0, (LPARAM) "still mine");
+            still = same_wide(wide_text, L"still mine");
+            again = (WNDPROC)GetClassLongA(wide, GCL_WNDPROC);
+            DbgPrint("[ansictl] step 7: another process: its own call procedure %d; after its end, this one's "
+                     "converts %d, the same again %d\n",
+                     code == CHILD_PASSED, still, again == mine);
         }
     }
 
