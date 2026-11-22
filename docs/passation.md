@@ -1,5 +1,17 @@
 # Notes de passation
 
+- **Le parcours de 7-Zip** (`claude/7zip-route`, sur la PR 165, M7,
+  [`compat/applications.md`](compat/applications.md#le-parcours-de-7-zip-le-2026-11-22) ; demandé le 2026-11-22).
+  Par sa ligne de commande : `cmd.exe /c C:\APPS\ROUTE.CMD`, un fichier de commandes que `xtask` écrit avec le texte
+  à archiver (`apps::route_text`) : `7z a`, `7z t`, `7z x`, puis `fc /b` ; chaque étape qui échoue a son code (`exit 1` à `exit 4` : le `cmd` de
+  ReactOS 0.4.16 ne transmet pas `exit /b N`, un fichier de commandes y rend le code de sa dernière commande).
+  Le banc décrit le fichier que fait un parcours, quel qu'il soit (`route-output=`, `apps::Route::output` : taille,
+  PNG ou non, premiers octets). Aucun correctif du noyau : code 0 en 2 à 12 s, « FC: no differences encountered »,
+  `ROUTE.7Z` de 2 202 octets à la signature de 7z ; le parcours de la liste est fait. Test hôte
+  `seven_zip_has_a_route_by_its_command_line`. Vérifié : lint, tests hôte, `app-7zip` (AMD, 73 s) ; par mutation
+  (`fc` contre un autre fichier : code 4, le scénario échoue). Pas relancé : `app-gimp` (sa ligne de sortie garde
+  « ROUTE.PNG, » et « a PNG 1 », que son plancher attend), Intel (les scénarios `app-*` ne tournent que sur AMD). **Suite** : les parcours de Notepad++, KeePass,
+  AbiWord, PeaZip, par la même voie quand ils ont une ligne de commande, sinon par `keys` et la souris de QEMU.
 - **Le parcours du GIMP** (`claude/gimp-route`, sur la PR 164, M7,
   [`compat/applications.md`](compat/applications.md#le-parcours-du-gimp-le-2026-11-22) ; demandé le 2026-11-22).
   Le banc a une commande de parcours par application (`route` de `xtask/src/apps.rs` : commande, délai, fichiers mis

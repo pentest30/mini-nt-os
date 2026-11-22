@@ -21,7 +21,7 @@ pour que chaque application teste autre chose. Elles sont rangées de la plus si
 
 | # | Application | Licence | Installeur | Ce qu'elle teste | Parcours |
 |---|---|---|---|---|---|
-| 1 | 7-Zip 9.20 (2010) | LGPL | MSI | `msiexec` de ReactOS, Win32, `msvcrt` | installer, archiver un fichier, l'extraire, comparer |
+| 1 | 7-Zip 9.20 (2010) | LGPL | MSI | `msiexec` de ReactOS, Win32, `msvcrt` | installer, archiver un fichier, l'extraire, comparer (fait par `7z.exe`, le 2026-11-22) |
 | 2 | Notepad++ 7.9.2 (2020) | GPL | NSIS | Scintilla, onglets, Rechercher et Remplacer | taper, remplacer, enregistrer, rouvrir |
 | 3 | KeePass 1.18 (2010) | GPL | Inno Setup | MFC, cryptographie, dialogues | créer une base et une entrée, enregistrer, rouvrir avec le mot de passe |
 | 4 | WinMerge 2.12.4 (2009) | GPL | Inno Setup | MFC, vues côte à côte | comparer deux fichiers, fusionner une différence, enregistrer |
@@ -437,8 +437,8 @@ commitée) :
   courant de `msiexec`, `C:\WINDOWS\System32\7-Zip`. `ProgramFilesDir` et `CommonFilesDir` sont dans `mino.inf`.
 
 Sur la branche, AMD : `msiexec` rend 0 en 11 s, `C:\Program Files\7-Zip` tient ses programmes, `7z.dll` et ses langues, `7zFM.exe`
-ouvre « 7-Zip File Manager » et se ferme avec 0. Le parcours (archiver un fichier, l'extraire, comparer) reste à
-faire. OpenOffice, dont l'installeur NSIS lance un MSI, n'a pas été remesuré (1 500 s de banc).
+ouvre « 7-Zip File Manager » et se ferme avec 0. Le parcours (archiver un fichier, l'extraire, comparer) est fait
+depuis : voir [plus bas](#le-parcours-de-7-zip-le-2026-11-22). OpenOffice, dont l'installeur NSIS lance un MSI, n'a pas été remesuré (1 500 s de banc).
 ### Authenticode : le banc dans une session, le 2026-11-21
 
 Notepad++ 7.9.2 vérifie la signature de ses propres DLL (`SciLexer.dll`) : WinVerifyTrust, puis le certificat du
@@ -604,6 +604,28 @@ chargé, avait vu la boîte à outils arriver juste après les 600 s fixes d'ava
 
 Plancher du GIMP : son installation, sa boîte à outils, sa fermeture par WM_CLOSE, puis chaque étape du parcours, le
 pixel gris et le PNG ; interdits : un parcours qui ne démarre pas ou dépasse son délai.
+
+### Le parcours de 7-Zip, le 2026-11-22
+
+Le parcours de la liste (« archiver un fichier, l'extraire, comparer ») passe par la ligne de commande de 7-Zip,
+`7z.exe`, dans un fichier de commandes que `cmd.exe` exécute : `C:\WINDOWS\system32\cmd.exe /c C:\APPS\ROUTE.CMD`.
+`xtask` écrit dans `C:\APPS` le texte à archiver, `ROUTE.TXT` (2 000 lignes numérotées, 133 790 octets :
+`apps::route_text`), et `ROUTE.CMD` (lignes CRLF) : `7z a` crée `ROUTE.7Z`, `7z t` le teste, `7z x -y -oC:\APPS\OUT`
+l'extrait, `fc /b` compare l'extrait à l'original ; chaque étape qui échoue termine `cmd.exe` avec son propre code
+(`exit 1` à `exit 4`). Pas `exit /b N` : le `cmd` de ReactOS 0.4.16 ne le transmet pas. Un fichier de commandes y
+rend le code de sa dernière commande (`Batch`, `base/shell/cmd/batch.c`), et `exit /b` dans un fichier rend 0
+(`CommandExit`, `internal.c`, qui ne pose que `nErrorLevel`) : `cmd /c` finissait avec 0 quand `fc` trouvait une
+différence. C'est le `cmd` épinglé, pas le noyau ; `exit N` arrête l'interpréteur avec N. Le banc décrit le fichier que fait le parcours, quel qu'il soit (`route-output=` de `PROBE.TXT`, `output` de
+`apps::Route`) : sa taille, s'il est un PNG et ses six premiers octets. Rien à corriger dans le noyau : du premier
+coup, « Everything is Ok » aux trois commandes, « FC: no differences encountered », code 0 en 2 à 12 s, `ROUTE.7Z` de
+2 202 octets qui commence par la signature de 7z (`37 7a bc af 27 1c`). Le scénario passe en 73 s (AMD, noyau déjà
+construit).
+
+Plancher de 7-Zip : son installation, son gestionnaire de fichiers, puis chaque étape du parcours (compression, test,
+extraction, comparaison, la ligne finale du fichier de commandes), le code 0 et la signature de l'archive ; interdits :
+un parcours qui ne démarre pas ou dépasse son délai. Vérifié par mutation : `fc /b` qui compare `ROUTE.TXT` à
+`ROUTE.CMD` trouve la différence, le fichier de commandes finit avec 4 et le scénario échoue (la comparaison, la
+ligne finale et le code 0 manquent) ; avec `exit /b 4`, il finissait avec 0.
 
 ### La suite
 
