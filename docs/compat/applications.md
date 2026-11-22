@@ -29,7 +29,7 @@ pour que chaque application teste autre chose. Elles sont rangées de la plus si
 | 6 | AbiWord 2.4.1 (2005) | GPL | NSIS | traitement de texte, polices, RTF | taper, mettre en gras, enregistrer en `.rtf`, rouvrir |
 | 7 | PeaZip 3.9.1 (2011) | LGPL | Inno Setup | Lazarus et Free Pascal (LCL) | ouvrir une archive, l'extraire |
 | 8 | Dev-C++ 4.9.9.2 (2005) | GPL | NSIS | Delphi (VCL), processus `gcc` lancés | ouvrir un projet, le compiler, lancer le programme |
-| 9 | GIMP 2.6.12 (2011) | GPL | Inno Setup | GTK2, nombreuses DLL, fontconfig | ouvrir une image, appliquer un filtre, exporter en PNG |
+| 9 | GIMP 2.6.12 (2011) | GPL | Inno Setup | GTK2, nombreuses DLL, fontconfig | ouvrir une image, appliquer un filtre, exporter en PNG (fait en Script-Fu, le 2026-11-22) |
 | 10 | Apache OpenOffice 4.1.17 (2026) | Apache 2.0 | NSIS, qui déballe son installeur MSI | très grosse application, runtimes de Visual C++ (WinSxS, à mesurer) | Writer : taper, enregistrer en `.odt`, rouvrir |
 
 ### Les installeurs épinglés
@@ -583,6 +583,26 @@ Restent à son démarrage, sans handler : NtUserGetThreadDesktop, NtUserGetObjec
 NtUserGetDoubleClickTime, NtUserMapVirtualKeyEx, NtGdiModifyWorldTransform, NtGdiGetRegionData,
 NtGdiExtCreateRegion ; une DIB section de 1 bit refusée. Son parcours (ouvrir une image, un filtre, l'export PNG)
 reste à faire.
+
+### Le parcours du GIMP, le 2026-11-22
+
+Le parcours de la liste (« ouvrir une image, appliquer un filtre, exporter en PNG ») tourne en Script-Fu, sans
+interface : `gimp-console-2.6.exe -i -d -f -b "(load \"C:/APPS/ROUTE.SCM\")" -b "(gimp-quit 0)"`. Le script ouvre
+`C:\APPS\ROUTE.BMP` (32 × 32, la moitié gauche noire, la droite blanche, écrit par `xtask` :
+`apps::half_black_bmp`), le floute (`plug-in-gauss`, rayon 10), l'exporte en `ROUTE.PNG` (`file-png-save`), rouvre le
+PNG et lit le pixel de la frontière : gris (142). Chaque étape passe par un greffon, donc un processus (`file-bmp`,
+`blur-gauss`, `file-png`, `script-fu`), et ses messages vont à la sortie de `gimp-console`. Le banc a pour cela une
+commande de parcours par application (`route` de `xtask/src/apps.rs`, `route=` et `route-seconds=` de `PROBE.TXT`,
+ses fichiers dans `C:\APPS`) : il la lance après le programme, sa sortie et ses erreurs dans
+`C:\APPS\ROUTE.LOG`, puis imprime son code de fin, sa sortie et ce qu'est `ROUTE.PNG`. Résultat : « batch command
+executed successfully », code 0 en 144 s, `ROUTE.PNG` un PNG de 149 octets.
+
+L'attente du programme est devenue déterministe : au-delà de 5 s, le banc attend que le programme montre une autre
+fenêtre que sa première (puis 10 s), au plus `program_seconds` (900 s pour le GIMP) ; un premier run, sur un hôte
+chargé, avait vu la boîte à outils arriver juste après les 600 s fixes d'avant.
+
+Plancher du GIMP : son installation, sa boîte à outils, sa fermeture par WM_CLOSE, puis chaque étape du parcours, le
+pixel gris et le PNG ; interdits : un parcours qui ne démarre pas ou dépasse son délai.
 
 ### La suite
 

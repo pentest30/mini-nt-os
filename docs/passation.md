@@ -1,5 +1,18 @@
 # Notes de passation
 
+- **Le parcours du GIMP** (`claude/gimp-route`, sur la PR 164, M7,
+  [`compat/applications.md`](compat/applications.md#le-parcours-du-gimp-le-2026-11-22) ; demandé le 2026-11-22).
+  Le banc a une commande de parcours par application (`route` de `xtask/src/apps.rs` : commande, délai, fichiers mis
+  dans `C:\APPS` ; `route=`, `route-seconds=` de `PROBE.TXT` ; `run_route` d'`appbench.c` : sortie et erreurs dans
+  `C:\APPS\ROUTE.LOG`, imprimées avec le code de fin et ce qu'est `ROUTE.PNG`). Le GIMP, en Script-Fu par
+  `gimp-console` : ouvre `ROUTE.BMP` (noir et blanc, `apps::half_black_bmp`), le floute, exporte `ROUTE.PNG`, le
+  rouvre : le pixel de la frontière est gris (142) ; code 0 en 144 s ; le parcours de la liste est fait. L'attente
+  du programme ne dépend plus de l'heure : jusqu'à une autre fenêtre que la première (puis 10 s), au plus
+  `program_seconds` (900 s pour le GIMP ; scénario de 2 400 s au plus). Test hôte
+  `gimp_has_a_route_with_its_image_and_script`. Vérifié : lint, 1 256 tests hôte, `app-gimp` (1 466 s : la fenêtre de l'image
+  après 514 s, le parcours en 94 s), `app-keepass` (le délai de 5 s, inchangé). **Suite** : les parcours de 7-Zip, Notepad++,
+  KeePass, AbiWord, PeaZip par la même voie quand ils ont un mode en ligne de commande, sinon par `keys` et la souris
+  de QEMU.
 - **SetThreadPriority : le GIMP démarre** (`claude/thread-base-priority`, sur la PR 163, M7,
   [`compat/applications.md`](compat/applications.md#setthreadpriority-le-gimp-interroge-ses-greffons-le-2026-11-22) ;
   demandé le 2026-11-22). Laissé plus de 16 s, le GIMP montrait la boîte fatale de GLib « error Incorrect function.
