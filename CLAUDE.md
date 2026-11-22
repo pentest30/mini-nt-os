@@ -588,6 +588,7 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   installe ; GIMP s'installe. Les entrées d'un nom long prennent une suite d'emplacements libres consécutifs du
   répertoire (`io::fat::FatVolume::add_entries`, vfatFindDirSpace : un MoveFile fait par copie et effacement
   laissait des trous où le nom long se séparait de son entrée 8.3) : PeaZip s'installe et s'ouvre.
+  NtUserEnumDisplayMonitors (`win32k::monitor::enumerate`) : le GIMP ouvre sa fenêtre « GIMP Startup ».
   Suite : [`docs/passation.md`](docs/passation.md).
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.

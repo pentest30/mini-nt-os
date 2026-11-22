@@ -1,5 +1,18 @@
 # Notes de passation
 
+- **EnumDisplayMonitors : le GIMP s'ouvre** (`claude/enum-display-monitors`, sur la PR 162, M7,
+  [`compat/applications.md`](compat/applications.md#enumdisplaymonitors-le-gimp-souvre-le-2026-11-22) ; demandé le
+  2026-11-22). `gimp-2.6.exe` lisait `0xC` dans `libgdk` après NtUserEnumDisplayMonitors, sans handler (0 : aucun
+  moniteur). Fait comme `monitor.c` de ReactOS (`sys::monitor::nt_user_enum_display_monitors`,
+  `win32k::monitor::search_area`, `intersecting`, `enumerate` ; la borne de la région visible d'un DC lue dans son
+  état, sans rien y changer). Scénario `enum-monitors` (`tests/native/enummon1.c`, AMD et Intel) ; deux mutations le
+  font échouer ; test hôte `monitors_are_enumerated_where_the_area_crosses_them`. Sans la PR 162, le GIMP finissait
+  sur `STATUS_DLL_NOT_FOUND` (`libgimpbase-2.0-0.dll` au nom long coupé par un trou) : la branche part donc d'elle. Sur
+  elle, le GIMP s'installe et ouvre « GIMP Startup » ; il ne se ferme pas sur WM_CLOSE en 15 s ; plancher relevé.
+  Vérifié : lint, 1 253 tests hôte, `enum-monitors` (AMD, Intel), `app-gimp`. **Suite** : ce qui manque à son
+  démarrage (NtUserGetThreadDesktop, NtUserGetObjectInformation, NtUserFindWindowEx, NtUserGetDoubleClickTime,
+  NtUserMapVirtualKeyEx, NtGdiModifyWorldTransform, la DIB section de 1 bit ; SaveDC et RestoreDC sont à une autre
+  session), puis son parcours (ouvrir une image, un filtre, l'export PNG).
 - **Un nom long dans un trou d'un répertoire FAT : PeaZip** (`claude/fat-long-dir-name`, sur la PR 161, M7,
   [`compat/applications.md`](compat/applications.md#un-nom-long-dans-un-trou-le-2026-11-21) ; demandé le
   2026-11-21, la suite de la PR 161). PeaZip ne pouvait créer `res\themes\nographic-embedded\fm-theme.bmp` (« The

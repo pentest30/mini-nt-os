@@ -535,6 +535,27 @@ Vu en chemin, au lancement de `peazip.exe` : NtUserSetClassLong et NtUserChildWi
 section de 24 bits refusée (« not yet ») ; la fenêtre s'ouvre quand même. Son parcours (ouvrir une archive,
 l'extraire) reste à faire.
 
+### EnumDisplayMonitors : le GIMP s'ouvre, le 2026-11-22
+
+`gimp-2.6.exe` lisait l'adresse `0xC` dans `libgdk-win32-2.0-0.dll` juste après NtUserEnumDisplayMonitors, sans
+handler : il rendait 0, EnumDisplayMonitors de `user32` (qui demande le compte, puis les listes) ne rappelait rien, et
+gdk restait sans moniteur. Fait comme `monitor.c` de ReactOS (`sys::monitor::nt_user_enum_display_monitors`,
+`win32k::monitor::search_area`, `intersecting`, `enumerate`) : le nombre de moniteurs que coupe la zone — le
+rectangle donné à l'écran, ou depuis la borne de la région visible du DC, ou cette borne ; ni l'un ni l'autre :
+tout l'écran virtuel —, leurs handles et la partie coupée de chacun. Scénario `enum-monitors`
+(`tests/native/enummon1.c`, AMD et Intel) ; deux mutations le font échouer (sans handler ; les rectangles d'un DC
+non ramenés à son coin).
+
+Une première relance sans la PR 162 a fini sur `STATUS_DLL_NOT_FOUND` : `libgimpbase-2.0-0.dll` avait son nom long
+coupé (« libgimpbase-2 » : la seconde partie dans un trou du répertoire `bin`, le défaut de la PR 162), la
+disposition des trous changeant d'un run à l'autre. Sur la PR 162, le GIMP s'installe (code 0) et `gimp-2.6.exe`
+ouvre sa fenêtre « GIMP Startup » (`gdkWindowToplevel`) ; il ne se ferme pas en 15 s sur WM_CLOSE, le banc le
+termine. Plancher relevé (la fenêtre attendue, toute fin du programme par lui-même interdite).
+
+Vu ensuite dans son démarrage : NtUserGetThreadDesktop, NtUserGetObjectInformation, NtUserFindWindowEx,
+NtUserGetDoubleClickTime, NtUserMapVirtualKeyEx, NtGdiModifyWorldTransform, NtGdiSaveDC et NtGdiRestoreDC (pris par
+une autre session) sans handler, une DIB section de 1 bit refusée.
+
 ### La suite
 
 **Mise à jour du 2026-11-20 : ProcessDebugPort** (`fix/ps-process-debug-port`).
