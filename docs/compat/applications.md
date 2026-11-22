@@ -677,6 +677,37 @@ fermeture avec 0 et les deux lignes du fichier ; interdits : un parcours qui ne 
 programme qui finit seul, « fox » dans le fichier. Vérifié par mutation : sans Alt+A (pas de Replace All), le reste
 du parcours va au bout, mais « fox » reste dans le fichier et le scénario échoue.
 
+### WH_CBT : KeePass n'exécutait pas son OnInitDialog, le 2026-11-22
+
+En écrivant le parcours de KeePass, ses touches (Ctrl+N) et WM_CLOSE n'avaient aucun effet, alors qu'elles lui
+parvenaient : la fenêtre est au premier plan et répond aux messages envoyés ; ses GetMessage et PeekMessage sont ceux
+de la boucle modale de MFC, sans filtre ; WM_KEYDOWN de Ctrl et de N, WM_CLOSE et le WM_COMMAND IDCANCEL que poste
+DefDlgProc sortent de sa file (traces temporaires dans `sys::message`). Mais après eux, aucun NtUserTranslateAccelerator,
+aucun appel de son OnCancel ; NtUserCreateAcceleratorTable n'était jamais appelé ; et MFC envoyait WM_KICKIDLE et
+TTM_RELAYEVENT à la fenêtre 0. Le journal disait pourquoi : « a hook of type 5 is set, but hooks of that type are not
+called yet ». MFC pose un crochet WH_CBT autour de chaque CreateWindowEx et CreateDialog et, dans HCBT_CREATEWND, attache
+son `CWnd` à la fenêtre et la sous-classe. Sans l'appel, le `CDialog` de KeePass n'avait jamais de fenêtre :
+`AfxDlgProc` ne le trouvait pas à WM_INITDIALOG, son OnInitDialog ne tournait pas (ni accélérateurs, ni titre, ni
+contrôles remplis), et ses commandes allaient à DefDlgProc, qui n'en fait rien.
+
+Fait comme ReactOS (`co_UserCreateWindowEx`, `co_IntCallHookProc`, `User32CallHookProcFromKernel`) : WH_CBT est appelé
+pour HCBT_CREATEWND dans `win32k::window::create_window`, une fois la fenêtre et le menu de sa classe faits, avant
+WM_GETMINMAXINFO et WM_NCCREATE (`win32k::hook::create_window`). Le crochet reçoit la fenêtre et un CBT_CREATEWND :
+le style réel, la place et la taille données, les pointeurs de nom et de classe de l'appelant (ReactOS donne pour la
+classe une adresse du noyau ; Mino, l'atome ou le nom que l'appelant a passé) ; ce qu'il change de la place, de la
+taille et de la fenêtre d'avant revient (cette dernière n'est pas encore suivie) ; un résultat non nul refuse la
+fenêtre. Les arguments du rappel sont HOOKPROC_CALLBACK_ARGUMENTS puis HOOKPROC_CBT_CREATEWND_EXTRA_ARGUMENTS
+(`abi::user::CbtCreateWndExtra32`), et NtUserCallNextHookEx lit et réécrit le CBT_CREATEWND de l'appelant. Les autres
+codes de HCBT (ACTIVATE, DESTROYWND, SETFOCUS, MINMAX, MOVESIZE…) ne sont pas encore appelés.
+
+Scénario `cbt-hook` (`tests/native/cbt1.c`, AMD et Intel) : ce que voit le crochet, la sous-classe (le premier
+message est alors WM_GETMINMAXINFO), la largeur qu'il donne, un refus, deux crochets et CallNextHookEx, une boîte de
+dialogue vue comme #32770 avant WM_INITDIALOG, puis rien une fois décroché ; il échoue si le crochet est appelé pour
+une autre fenêtre et son résultat ignoré. KeePass : son titre devient « KeePass Password Safe » et WM_CLOSE le ferme
+(code 2, l'IDCANCEL de DoModal) ; plancher relevé. WinMerge 2.12.4, un programme MFC lui aussi, qui finissait sur
+0xC0000005 à son lancement (« Application Error »), montre maintenant sa fenêtre principale (`WinMergeWindowClassW`,
+« WinMerge ») et se ferme avec 0 ; plancher relevé (son installation, sa fenêtre, sa fermeture).
+
 ### La suite
 
 **Mise à jour du 2026-11-20 : ProcessDebugPort** (`fix/ps-process-debug-port`).

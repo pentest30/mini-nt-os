@@ -1,5 +1,15 @@
 # Notes de passation
 
+- **WH_CBT à la création d'une fenêtre** (`claude/cbt-hook`, sur la PR 169, M7, USER,
+  [`compat/applications.md`](compat/applications.md#wh_cbt--keepass-nexécutait-pas-son-oninitdialog-le-2026-11-22) ;
+  trouvé par le parcours de KeePass, le 2026-11-22). HCBT_CREATEWND appelé dans `win32k::window::create_window`
+  (`win32k::hook::create_window`, `HookParam`, `abi::user::CbtCreateWndExtra32` ; NtUserCallNextHookEx lit et réécrit le
+  CBT_CREATEWND) : MFC y attache son `CWnd` ; sans lui, KeePass ne faisait jamais son OnInitDialog (ni accélérateurs, ni
+  fermeture) ; WinMerge, MFC aussi, finissait sur 0xC0000005 à son lancement : il montre sa fenêtre et se ferme avec
+  0. Scénario `cbt-hook` (`tests/native/cbt1.c`). Vérifié : lint, 1 263 tests hôte, `cbt-hook` (AMD, Intel ; il échoue
+  si le crochet est appelé pour une autre fenêtre et son résultat ignoré), `hooks` (AMD, Intel), `app-keepass` (titre,
+  fermeture avec 2), `app-winmerge` (fenêtre, fermeture avec 0) ; planchers relevés. **Pas encore** : les autres codes
+  de HCBT, la fenêtre d'avant que rend le crochet ; les autres scénarios `app-*` non relancés.
 - **La langue de l'interface** (`claude/ui-language`, sur la PR 167, M7, Ex,
   [`compat/applications.md`](compat/applications.md#la-langue-de-linterface--notepad-en-néerlandais-le-2026-11-22) ;
   trouvé par le parcours de Notepad++, le 2026-11-22). NtQueryInstallUILanguage et NtQueryDefaultUILanguage
