@@ -88,6 +88,34 @@ const NOTEPADPP_ROUTE_STEPS: &[&str] = &[
     "close",
 ];
 
+/// KeePass's route, through its windows: a new database (Ctrl+N, its
+/// master password twice, two dialogs of the same title), an entry
+/// (Ctrl+Y), saved as `ROUTE.KDB` (Ctrl+S), the program closed, then started
+/// on the database, opened with its password, and the entry's user name
+/// copied (Ctrl+B) for the probe to read on the clipboard. The keys are in
+/// `tests/boot/app-keepass/scenario.txt`.
+const KEEPASS_ROUTE_STEPS: &[&str] = &[
+    "start",
+    "window KeePass Password Safe => main up",
+    "window Create New Password Database => new database",
+    "new-window Create New Password Database => repeat password",
+    "no-window Create New Password Database => database created",
+    "window Add Entry => add entry",
+    "no-window Add Entry => entry added",
+    "window Save As => save as",
+    "window ROUTE.KDB - KeePass Password Safe => saved",
+    "close",
+    r"start C:\APPS\ROUTE.KDB",
+    "window Open Database - ROUTE.KDB => open database",
+    "window ROUTE.KDB - KeePass Password Safe => database opened",
+    "clipboard => copied",
+    "close",
+];
+
+/// The most steps a route has: the probe takes no more
+/// (`ROUTE_STEPS` of `tests/native/appbench.c`), each under 160 characters.
+pub const ROUTE_STEPS: usize = 24;
+
 fn notepadpp_route_files() -> Vec<(&'static str, Vec<u8>)> {
     vec![("ROUTE.TXT", b"Mino route\r\n".to_vec())]
 }
@@ -251,7 +279,13 @@ pub const APPS: [App; 10] = [
         install_seconds: 300,
         program_seconds: 5,
         memory_mb: 256,
-        route: None,
+        route: Some(Route {
+            command: r#""C:\Program Files\KeePass Password Safe\KeePass.exe""#,
+            seconds: 300,
+            files: Vec::new,
+            output: r"C:\APPS\ROUTE.KDB",
+            steps: KEEPASS_ROUTE_STEPS,
+        }),
     },
     App {
         id: "winmerge",
@@ -511,6 +545,8 @@ pub fn probe_commands(app: &App) -> String {
             "route={}\r\nroute-seconds={}\r\nroute-output={}\r\n",
             route.command, route.seconds, route.output
         ));
+        // The table's own invariant: the probe would leave the others.
+        assert!(route.steps.len() <= ROUTE_STEPS, "{}: more route steps than the probe takes", app.id);
         for step in route.steps {
             text.push_str(&format!("route-step={step}\r\n"));
         }
@@ -542,7 +578,7 @@ mod tests {
         assert!(!text.contains("route-step="));
         assert!(APPS
             .iter()
-            .filter(|app| !["gimp", "7zip", "notepadpp"].contains(&app.id))
+            .filter(|app| !["gimp", "7zip", "notepadpp", "keepass"].contains(&app.id))
             .all(|app| app.route.is_none()));
     }
 
@@ -575,17 +611,44 @@ mod tests {
             text.contains("route=\"C:\\Program Files\\Notepad++\\notepad++.exe\" -nosession C:\\APPS\\ROUTE.TXT\r\n")
         );
         assert!(text.contains("route-output=C:\\APPS\\ROUTE.TXT\r\n"));
-        // The steps, in their order, one line each; the probe takes 16.
-        let steps: Vec<&str> = text.lines().filter_map(|line| line.strip_prefix("route-step=")).collect();
-        assert_eq!(steps, route.steps);
-        assert!(steps.len() <= 16 && steps.iter().all(|step| step.len() < 160));
-        assert_eq!(steps.first(), Some(&"start"));
-        assert_eq!(steps.last(), Some(&"close"));
-        // Each wait has a label, each label once: the scenario's keys follow them.
-        let labels: Vec<&str> =
-            steps.iter().filter_map(|step| step.split_once(" => ").map(|(_, label)| label)).collect();
-        assert_eq!(labels.len(), steps.iter().filter(|step| !["start", "close"].contains(step)).count());
-        assert!(labels.iter().all(|label| labels.iter().filter(|other| other.starts_with(label)).count() == 1));
+        assert_eq!(route.steps.first(), Some(&"start"));
+    }
+
+    #[test]
+    fn keepass_has_a_route_through_its_windows() {
+        let app = APPS.iter().find(|app| app.id == "keepass").unwrap();
+        let route = app.route.expect("KeePass's route");
+        assert!((route.files)().is_empty(), "KeePass makes its file");
+        let text = probe_commands(app);
+        assert!(text.contains("route=\"C:\\Program Files\\KeePass Password Safe\\KeePass.exe\"\r\n"));
+        assert!(text.contains("route-output=C:\\APPS\\ROUTE.KDB\r\n"));
+        assert!(route.steps.contains(&"new-window Create New Password Database => repeat password"));
+        assert!(route.steps.contains(&r"start C:\APPS\ROUTE.KDB"), "the second start, on the database");
+    }
+
+    #[test]
+    fn the_steps_of_each_route_go_to_the_probe() {
+        for app in APPS.iter().filter(|app| app.route.is_some_and(|route| !route.steps.is_empty())) {
+            let route = app.route.unwrap();
+            // In their order, one line each, as many as the probe takes.
+            let text = probe_commands(app);
+            let steps: Vec<&str> = text.lines().filter_map(|line| line.strip_prefix("route-step=")).collect();
+            assert_eq!(steps, route.steps, "{}", app.id);
+            assert!(steps.len() <= ROUTE_STEPS && steps.iter().all(|step| step.len() < 160), "{}", app.id);
+            assert_eq!(steps.first(), Some(&"start"), "{}", app.id);
+            assert_eq!(steps.last(), Some(&"close"), "{}", app.id);
+            // Each wait has a label, no label begins another: the
+            // scenario's keys follow them.
+            let starts_or_closes = |step: &&str| step.starts_with("start") || *step == "close";
+            let labels: Vec<&str> =
+                steps.iter().filter_map(|step| step.split_once(" => ").map(|(_, label)| label)).collect();
+            assert_eq!(labels.len(), steps.iter().filter(|step| !starts_or_closes(step)).count(), "{}", app.id);
+            assert!(
+                labels.iter().all(|label| labels.iter().filter(|other| other.starts_with(label)).count() == 1),
+                "{}",
+                app.id
+            );
+        }
     }
 
     #[test]

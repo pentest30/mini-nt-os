@@ -25,8 +25,9 @@ static WCHAR route[2048], route_output[MAX_PATH];
 static DWORD route_seconds = 600;
 /* A route through the program's windows (route-step= lines, in order):
    `start`, `close`, or a wait on its windows that prints its label. */
-static WCHAR route_steps[16][160];
-static unsigned int route_step_count;
+#define ROUTE_STEPS 24
+static WCHAR route_steps[ROUTE_STEPS][160];
+static unsigned int route_step_count, route_steps_dropped;
 
 static unsigned int length(const char *s) { unsigned int n = 0; while (s[n]) ++n; return n; }
 static unsigned int wlength(const WCHAR *s) { unsigned int n = 0; while (s[n]) ++n; return n; }
@@ -94,7 +95,9 @@ static void read_commands(void)
     for (const char *line = text; *line;) {
         const char *end = line;
         while (*end && *end != '\r' && *end != '\n') ++end;
-        if (prefix(line, "route-step=") && route_step_count < 16) {
+        if (prefix(line, "route-step=") && route_step_count == ROUTE_STEPS) {
+            ++route_steps_dropped;
+        } else if (prefix(line, "route-step=")) {
             WCHAR *step = route_steps[route_step_count++];
             int n = MultiByteToWideChar(CP_ACP, 0, line + 11, (int)(end - line - 11), step, 159);
             step[n > 0 ? n : 0] = 0;
@@ -590,6 +593,14 @@ static void run_route(void)
     describe_output();
 }
 
+/* `s` begins with `p`. */
+static BOOL prefix_w(const WCHAR *s, const WCHAR *p)
+{
+    while (*p)
+        if (*s++ != *p++) return FALSE;
+    return TRUE;
+}
+
 /* `part` is in `s`. */
 static BOOL contains(const WCHAR *s, const WCHAR *part)
 {
@@ -601,14 +612,14 @@ static BOOL contains(const WCHAR *s, const WCHAR *part)
     return !*part;
 }
 /* A visible top-level window of `pid` whose title holds `part`. */
-struct find_part { DWORD pid; const WCHAR *part; HWND window; };
+struct find_part { DWORD pid; const WCHAR *part; HWND window; HWND except; };
 static BOOL CALLBACK find_part_window(HWND window, LPARAM argument)
 {
     struct find_part *find = (struct find_part *)argument;
     WCHAR title[260];
     DWORD pid = 0;
     GetWindowThreadProcessId(window, &pid);
-    if (pid == find->pid && IsWindowVisible(window) && GetWindowTextW(window, title, 260) > 0 &&
+    if (pid == find->pid && window != find->except && IsWindowVisible(window) && GetWindowTextW(window, title, 260) > 0 &&
         contains(title, find->part)) {
         find->window = window;
         return FALSE;
@@ -641,12 +652,18 @@ static void print_clipboard(void)
 /* A route through the program's windows (route-step=, in order), the keys
    typed by the scenario (`keys`) when a step prints its label:
    - `start`: starts the route's command line (route=), in C:\APPS;
+     `start ARGUMENTS`: with these after it;
    - `window TEXT => LABEL`: waits for a visible window of the program
      whose title holds TEXT;
    - `no-window TEXT => LABEL`: waits until none has;
    - `clipboard => LABEL`: waits for the clipboard to change, then prints
      its text;
-   - `close`: WM_CLOSE to the program's windows, then its exit code.
+   - `close`: WM_CLOSE to the program's windows, then its exit code;
+   - `new-window TEXT => LABEL`: the same, for another window than the
+     one the last wait found (a second dialog with the first one's title);
+   - `show SECONDS => LABEL`: waits that long, then prints the windows and
+     the clipboard: to find a route's windows, not for a floor (a time is
+     not an event).
    Each wait prints "route step: LABEL"; all of them have route-seconds.
    Then what the file it makes is (route-output=). */
 static void run_window_route(void)
@@ -655,6 +672,9 @@ static void run_window_route(void)
     STARTUPINFOW startup = {0}; PROCESS_INFORMATION process = {0};
     startup.cb = sizeof(startup); startup.lpDesktop = L"WinSta0\\Default";
     DWORD started = GetTickCount();
+    if (route_steps_dropped) DbgPrint(TAG "route: %u steps beyond %u not taken\n", route_steps_dropped, ROUTE_STEPS);
+    /* The window the last wait found. */
+    HWND found = 0;
     for (unsigned int i = 0; i < route_step_count; ++i) {
         WCHAR *step = route_steps[i];
         label[0] = 0;
@@ -664,9 +684,14 @@ static void run_window_route(void)
                 narrow(c + 4, label, sizeof(label));
                 break;
             }
-        if (contains(step, L"start") && step[5] == 0) {
-            DbgPrint(TAG "route: %s\n", narrow(route, line, sizeof(line)));
-            if (!CreateProcessW(0, route, 0, 0, FALSE, 0, 0, L"C:\\APPS", &startup, &process)) {
+        if (prefix_w(step, L"start") && (step[5] == 0 || step[5] == L' ')) {
+            static WCHAR command[2400];
+            unsigned int n = 0;
+            for (const WCHAR *c = route; *c && n < 2300; ++c) command[n++] = *c;
+            for (const WCHAR *c = step + 5; *c && n < 2398; ++c) command[n++] = *c;
+            command[n] = 0;
+            DbgPrint(TAG "route: %s\n", narrow(command, line, sizeof(line)));
+            if (!CreateProcessW(0, command, 0, 0, FALSE, 0, 0, L"C:\\APPS", &startup, &process)) {
                 DbgPrint(TAG "route did not start (error %lu)\n", GetLastError());
                 return;
             }
@@ -677,7 +702,7 @@ static void run_window_route(void)
             DbgPrint(TAG "route step %u without a program: %s\n", i, narrow(step, line, sizeof(line)));
             return;
         }
-        if (contains(step, L"close") && step[5] == 0) {
+        if (prefix_w(step, L"close") && step[5] == 0) {
             DWORD code = 0;
             EnumWindows(close_window, (LPARAM)process.dwProcessId);
             if (WaitForSingleObject(process.hProcess, 15000) == WAIT_OBJECT_0) {
@@ -694,8 +719,32 @@ static void run_window_route(void)
             process.hProcess = 0;
             continue;
         }
+        if (prefix_w(step, L"show ")) {
+            DWORD seconds = 0;
+            for (const WCHAR *d = step + 5; *d >= L'0' && *d <= L'9'; ++d) seconds = seconds * 10 + (*d - L'0');
+            WaitForSingleObject(process.hProcess, seconds * 1000);
+            DbgPrint(TAG "route windows after %lu s:\n", (GetTickCount() - started) / 1000);
+            print_windows(TRUE);
+            /* Whether the program takes the keys: the foreground window, and
+               whether its window answers a sent message. */
+            WCHAR title[160];
+            HWND foreground = GetForegroundWindow();
+            title[0] = 0;
+            if (foreground) GetWindowTextW(foreground, title, 160);
+            DbgPrint(TAG "route foreground: %p \"%s\"\n", foreground, narrow(title, line, sizeof(line)));
+            struct find_part first = {process.dwProcessId, L"", 0, 0};
+            EnumWindows(find_part_window, (LPARAM)&first);
+            DWORD_PTR answer = 0;
+            BOOL answered = first.window && SendMessageTimeoutW(first.window, WM_NULL, 0, 0, SMTO_ABORTIFHUNG, 2000, &answer);
+            DbgPrint(TAG "route window %p answers WM_NULL: %d (error %lu)\n", first.window, answered, GetLastError());
+            DbgPrint(TAG "route clipboard sequence %lu\n", GetClipboardSequenceNumber());
+            print_clipboard();
+            DbgPrint(TAG "route step: %s, after %lu s\n", label, (GetTickCount() - started) / 1000);
+            continue;
+        }
         BOOL clipboard = contains(step, L"clipboard") && step[9] == 0;
-        BOOL none = step[0] == L'n' && step[1] == L'o' && step[2] == L'-';
+        BOOL none = prefix_w(step, L"no-window ");
+        BOOL fresh = prefix_w(step, L"new-window ");
         const WCHAR *part = step;
         while (*part && *part != L' ') ++part;
         if (*part) ++part;
@@ -705,9 +754,10 @@ static void run_window_route(void)
             if (clipboard) {
                 done = GetClipboardSequenceNumber() != sequence;
             } else {
-                struct find_part find = {process.dwProcessId, part, 0};
+                struct find_part find = {process.dwProcessId, part, 0, fresh ? found : 0};
                 EnumWindows(find_part_window, (LPARAM)&find);
                 done = none ? !find.window : find.window != 0;
+                if (done && !none) found = find.window;
             }
             if (done) break;
             DWORD code = 0;
