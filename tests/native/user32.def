@@ -216,3 +216,4 @@ OpenClipboard@4
 RegisterClipboardFormatW@4
 SetClipboardData@8
 SetClipboardViewer@4
+SetParent@8
