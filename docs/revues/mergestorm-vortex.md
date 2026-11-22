@@ -32,9 +32,10 @@ traite l'une d'elles y ajoute la section de sa PR (voir « Ajouter une évaluati
 | [156](https://github.com/pentest30/mini-nt-os/pull/156) | 7 | 3 | 0 | 0 | 2 | 2 | 0 |
 | [157](https://github.com/pentest30/mini-nt-os/pull/157) | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
 | [161](https://github.com/pentest30/mini-nt-os/pull/161) | 2 | 0 | 2 | 0 | 0 | 0 | 2 |
-| **Total** | **73** | **40** | **8** | **4** | **3** | **18** | **6** |
+| [162](https://github.com/pentest30/mini-nt-os/pull/162) | 1 | 1 | 0 | 0 | 0 | 0 | 0 |
+| **Total** | **74** | **41** | **8** | **4** | **3** | **18** | **6** |
 
-Toutes les remarques jusqu'à la PR 157 sont évaluées, puis celles de la PR 161. Restent celles des PR 158 et 159
+Toutes les remarques jusqu'à la PR 157 sont évaluées, puis celles des PR 161 et 162. Restent celles des PR 158 et 159
 (fusionnées), et celles de la PR 160 sur sa branche.
 
 Ce qui ressort :
@@ -286,3 +287,14 @@ Manqués :
   sur `MinoOther`), vérifié par mutation.
 - **SetWindowLong(GWLP_WNDPROC) rendait l'ancienne procédure dans le jeu de la procédure donnée.** Vu par Vortex et
   Codex sur la PR 164, qui contient ce code (voir sa section). Corrigé par `48460d8`.
+
+## PR 162 : les entrées d'un nom long dans une suite d'emplacements libres
+
+Commits relus par Vortex : `22c673a` (rien à corriger), puis `4177f2e`. Évalué le 2026-11-22. Une remarque ; la
+revue de Codex a échoué (limite d'usage).
+
+| Où | Remarque | Verdict | Pourquoi | Suite |
+|---|---|---|---|---|
+| `docs/compat/applications.md:524` | « Le répertoire ne se trouvait ni par son nom long ni par son alias » : `FatVolume::find_entry` compare l'entrée 8.3 sans regarder les entrées de nom long qui la précèdent, et `NOGRAP~1` se trouvait encore ; seul le nom long, celui que PeaZip demande, échouait. | Fondé | `find_entry` : `let short = target.is_some_and(\|target\| ent[0..11] == target)`, où `target` vient de `short_name_11(name)`, indépendamment du nom long en cours. | `afb33aa` : la phrase dit que le nom long ne se trouvait plus, l'alias 8.3 si. |
+
+Aucun défaut manqué vérifié.
