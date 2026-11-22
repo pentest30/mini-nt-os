@@ -13,12 +13,28 @@ timeout = 900
 # What works today, a floor: msiexec installs it in C:\Program Files
 # (NtLockFile for ole32's structured storage, CreateDirectoryW of
 # C:\WINDOWS\Installer\, ProgramFilesDir in mino.inf), and its file
-# manager opens and closes.
+# manager opens and closes. Its route then runs by its command line, a batch
+# file under cmd.exe (C:\APPS\ROUTE.CMD, written by xtask with ROUTE.TXT):
+# 7z.exe archives ROUTE.TXT, tests ROUTE.7Z, extracts it in C:\APPS\OUT, and
+# fc /b finds the extracted file the same; each failed step ends cmd.exe
+# with its own code (exit 1 to exit 4: ReactOS's cmd does not pass on the
+# code of exit /b).
 expect = [appbench] installer started
 expect = [appbench] installer ended: exit code 0
 expect = [appbench] installed: C:\Program Files\7-Zip\7zFM.exe
 expect = [appbench] program window after
 expect = [appbench] program closed: exit code 0
+expect = [appbench] route: C:\WINDOWS\system32\cmd.exe /c C:\APPS\ROUTE.CMD
+expect = route: Compressing  ROUTE.TXT
+expect = route: Testing     ROUTE.TXT
+expect = route: Extracting  ROUTE.TXT
+expect = route: FC: no differences encountered
+expect = route: route: the extracted file is the archived one
+expect = [appbench] route ended: exit code 0
+expect = [appbench] route: ROUTE.7Z,
+expect = begins 37 7a bc af 27 1c
 expect = [appbench] 7-Zip 9.20: report done
 forbid = NtLockFile (0x0069) is not implemented
 forbid = *** STOP:
+forbid = [appbench] route still running after
+forbid = [appbench] route did not start

@@ -48,13 +48,45 @@ pub struct App {
 }
 
 /// A route: a command line the probe runs (its output captured in
-/// `C:\APPS\ROUTE.LOG`), how long it may take, and the files it needs in
-/// `C:\APPS` (name, bytes).
+/// `C:\APPS\ROUTE.LOG`), how long it may take, the files it needs in
+/// `C:\APPS` (name, bytes), and the file it makes, which the probe
+/// describes (its size, its first bytes).
 #[derive(Clone, Copy)]
 pub struct Route {
     pub command: &'static str,
     pub seconds: u32,
     pub files: fn() -> Vec<(&'static str, Vec<u8>)>,
+    pub output: &'static str,
+}
+
+/// 7-Zip's route, by its command line (`7z.exe`) in a batch file: archive
+/// `ROUTE.TXT`, test the archive, extract it elsewhere, compare (`fc /b`).
+/// Each step that fails ends `cmd.exe` with its own code: `exit N`, not
+/// `exit /b N`, which the `cmd` of ReactOS 0.4.16 does not pass on (a
+/// batch returns the code of its last command, 0 for `exit /b`).
+const SEVEN_ZIP_ROUTE_SCRIPT: &str = r#"@echo off
+"C:\Program Files\7-Zip\7z.exe" a C:\APPS\ROUTE.7Z C:\APPS\ROUTE.TXT
+if errorlevel 1 exit 1
+"C:\Program Files\7-Zip\7z.exe" t C:\APPS\ROUTE.7Z
+if errorlevel 1 exit 2
+"C:\Program Files\7-Zip\7z.exe" x -y -oC:\APPS\OUT C:\APPS\ROUTE.7Z
+if errorlevel 1 exit 3
+fc /b C:\APPS\ROUTE.TXT C:\APPS\OUT\ROUTE.TXT
+if errorlevel 1 exit 4
+echo route: the extracted file is the archived one
+"#;
+
+/// A text of `lines` numbered lines (CRLF), to archive.
+pub fn route_text(lines: u32) -> Vec<u8> {
+    (0..lines)
+        .flat_map(|i| {
+            format!("line {i:05}: the quick brown fox jumps over the lazy dog, {} times\r\n", i % 97).into_bytes()
+        })
+        .collect()
+}
+
+fn seven_zip_route_files() -> Vec<(&'static str, Vec<u8>)> {
+    vec![("ROUTE.TXT", route_text(2000)), ("ROUTE.CMD", SEVEN_ZIP_ROUTE_SCRIPT.replace('\n', "\r\n").into_bytes())]
 }
 
 /// GIMP's route, by Script-Fu in batch mode (`gimp-console`, no interface):
@@ -144,7 +176,12 @@ pub const APPS: [App; 10] = [
         install_seconds: 300,
         program_seconds: 5,
         memory_mb: 256,
-        route: None,
+        route: Some(Route {
+            command: r"C:\WINDOWS\system32\cmd.exe /c C:\APPS\ROUTE.CMD",
+            seconds: 300,
+            files: seven_zip_route_files,
+            output: r"C:\APPS\ROUTE.7Z",
+        }),
     },
     App {
         id: "notepadpp",
@@ -268,6 +305,7 @@ pub const APPS: [App; 10] = [
             command: r#""C:\Program Files\GIMP-2.0\bin\gimp-console-2.6.exe" -i -d -f -b "(load \"C:/APPS/ROUTE.SCM\")" -b "(gimp-quit 0)""#,
             seconds: 600,
             files: gimp_route_files,
+            output: r"C:\APPS\ROUTE.PNG",
         }),
     },
     App {
@@ -428,7 +466,10 @@ pub fn probe_commands(app: &App) -> String {
         app.install_seconds, app.program, app.program_seconds
     ));
     if let Some(route) = app.route {
-        text.push_str(&format!("route={}\r\nroute-seconds={}\r\n", route.command, route.seconds));
+        text.push_str(&format!(
+            "route={}\r\nroute-seconds={}\r\nroute-output={}\r\n",
+            route.command, route.seconds, route.output
+        ));
     }
     text
 }
@@ -453,7 +494,27 @@ mod tests {
         let text = probe_commands(gimp);
         assert!(text.contains("route=\"C:\\Program Files\\GIMP-2.0\\bin\\gimp-console-2.6.exe\" -i -d -f -b "));
         assert!(text.contains("route-seconds=600\r\n"));
-        assert!(APPS.iter().filter(|app| app.id != "gimp").all(|app| app.route.is_none()));
+        assert!(text.contains("route-output=C:\\APPS\\ROUTE.PNG\r\n"));
+        assert!(APPS.iter().filter(|app| app.id != "gimp" && app.id != "7zip").all(|app| app.route.is_none()));
+    }
+
+    #[test]
+    fn seven_zip_has_a_route_by_its_command_line() {
+        let seven = APPS.iter().find(|app| app.id == "7zip").unwrap();
+        let route = seven.route.expect("7-Zip's route");
+        let files = (route.files)();
+        assert_eq!(files.iter().map(|(name, _)| *name).collect::<Vec<_>>(), ["ROUTE.TXT", "ROUTE.CMD"]);
+        assert_eq!(files[0].1.iter().filter(|&&byte| byte == b'\n').count(), 2000);
+        assert_eq!(route_text(1), b"line 00000: the quick brown fox jumps over the lazy dog, 0 times\r\n");
+        let script = String::from_utf8(files[1].1.clone()).unwrap();
+        assert!(script.split_inclusive('\n').all(|line| line.ends_with("\r\n")), "a batch file of CRLF lines");
+        assert!(
+            script.contains("\r\n\"C:\\Program Files\\7-Zip\\7z.exe\" a C:\\APPS\\ROUTE.7Z C:\\APPS\\ROUTE.TXT\r\n")
+        );
+        assert!(script.contains("\r\nfc /b C:\\APPS\\ROUTE.TXT C:\\APPS\\OUT\\ROUTE.TXT\r\n"));
+        let text = probe_commands(seven);
+        assert!(text.contains("route=C:\\WINDOWS\\system32\\cmd.exe /c C:\\APPS\\ROUTE.CMD\r\n"));
+        assert!(text.contains("route-output=C:\\APPS\\ROUTE.7Z\r\n"));
     }
 
     #[test]
