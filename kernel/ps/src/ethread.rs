@@ -153,6 +153,10 @@ pub struct EThread {
     /// BreakOnTermination : un thread critique, dont la fin arrête le système
     /// (`crate::exit`).
     critical: AtomicBool,
+    /// Saturation de KTHREAD : 1 ou -1 quand sa priorité de base est la plus
+    /// haute ou la plus basse de la classe de son processus
+    /// (THREAD_PRIORITY_TIME_CRITICAL, THREAD_PRIORITY_IDLE), 0 sinon.
+    saturation: core::sync::atomic::AtomicI8,
     /// Win32Thread : ce que win32k garde de lui, une fois devenu un thread
     /// GUI ; rendu avec lui.
     win32_thread: KSpinLock<Option<Arc<dyn Any + Send + Sync>>>,
@@ -529,6 +533,34 @@ impl EThread {
         ke::sched::thread_priority(self.ke_tid()?)
     }
 
+    /// KeSetBasePriorityThread : sa priorité de base devient celle de son
+    /// processus plus `increment` ([`base_priority_of`]) ; une saturation
+    /// (`increment` de ±16) est gardée pour [`base_increment`].
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn set_base_increment(&self, increment: i32) {
+        let (base, saturation) = base_priority_of(self.process.base_priority(), increment);
+        self.saturation.store(saturation, Ordering::Release);
+        if let Some(tid) = self.ke_tid() {
+            ke::sched::set_base_priority(tid, base);
+        }
+    }
+
+    /// KeQueryBasePriorityThread : sa priorité de base moins celle de son
+    /// processus, ou ±16 si elle est saturée.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn base_increment(&self) -> i32 {
+        let saturation = self.saturation.load(Ordering::Acquire);
+        if saturation != 0 {
+            return i32::from(saturation) * abi::process::THREAD_BASE_PRIORITY_SATURATION;
+        }
+        let process_base = self.process.base_priority();
+        i32::from(self.base_priority().unwrap_or(process_base)) - i32::from(process_base)
+    }
+
     /// Sa priorité de base, sans boost ; `None` avant que Ke ne l'ordonnance.
     ///
     /// # IRQL
@@ -536,6 +568,32 @@ impl EThread {
     pub fn base_priority(&self) -> Option<u8> {
         ke::sched::thread_base_priority(self.ke_tid()?)
     }
+}
+
+/// KeSetBasePriorityThread, sans le thread : la priorité de base d'un thread
+/// d'un processus de priorité de base `process_base` à qui on donne
+/// `increment`, et sa saturation. ±16 sature (1 ou -1) ; la priorité est
+/// celle du processus plus l'incrément, gardée dans la classe du
+/// processus : de 16 à 31 pour un processus temps réel, sinon de 1 à 15.
+pub fn base_priority_of(process_base: u8, increment: i32) -> (u8, i8) {
+    let saturation = if increment.abs() >= abi::process::THREAD_BASE_PRIORITY_SATURATION {
+        if increment > 0 {
+            1
+        } else {
+            -1
+        }
+    } else {
+        0
+    };
+    let low_realtime = i32::from(ke::sched::LOW_REALTIME_PRIORITY);
+    let high = ke::sched::PRIORITY_LEVELS as i32 - 1;
+    let base = i32::from(process_base).saturating_add(increment);
+    let base = if i32::from(process_base) >= low_realtime {
+        base.clamp(low_realtime, high)
+    } else {
+        base.clamp(1, low_realtime - 1)
+    };
+    (base as u8, saturation)
 }
 
 impl Drop for EThread {
@@ -814,6 +872,7 @@ fn start_thread(
             resume_event: DispatcherEvent::new(KObjectType::SynchronizationEvent),
             suspend_apc: UnsafeCell::new(MaybeUninit::uninit()),
             critical: AtomicBool::new(false),
+            saturation: core::sync::atomic::AtomicI8::new(0),
             win32_thread: KSpinLock::new(None),
             impersonation: KSpinLock::new(None),
         },
@@ -918,4 +977,26 @@ fn create_teb(process: &EProcess, tid: ThreadId, stack: &InitialTeb) -> Result<u
 /// MmDeleteTeb : rend la page du TEB, si l'espace d'adresses existe encore.
 pub(crate) fn delete_teb(process: &EProcess, teb: u32) {
     let _ = process.with_space(|space| space.free(u64::from(teb), 0, FreeType::MEM_RELEASE));
+}
+
+#[cfg(test)]
+mod base_priority_tests {
+    use super::base_priority_of;
+
+    #[test]
+    fn a_thread_base_priority_stays_in_its_process_class() {
+        // A normal process (8): from 6 to 10, saturated at 15 and 1.
+        assert_eq!(base_priority_of(8, 0), (8, 0));
+        assert_eq!(base_priority_of(8, 2), (10, 0), "THREAD_PRIORITY_HIGHEST");
+        assert_eq!(base_priority_of(8, -2), (6, 0), "THREAD_PRIORITY_LOWEST");
+        assert_eq!(base_priority_of(8, 16), (15, 1), "THREAD_PRIORITY_TIME_CRITICAL: below real time");
+        assert_eq!(base_priority_of(8, -16), (1, -1), "THREAD_PRIORITY_IDLE");
+        // An idle process (4) at its lowest, a high one (13) at its highest.
+        assert_eq!(base_priority_of(4, -2), (2, 0));
+        assert_eq!(base_priority_of(13, 2), (15, 0), "kept below real time");
+        // A real-time process (24): from 16 to 31.
+        assert_eq!(base_priority_of(24, 16), (31, 1));
+        assert_eq!(base_priority_of(24, -16), (16, -1));
+        assert_eq!(base_priority_of(24, 6), (30, 0), "any increment in real time");
+    }
 }
