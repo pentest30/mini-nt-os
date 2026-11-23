@@ -19,8 +19,9 @@ static char name[128];
 static DWORD timeout_seconds = 300;
 /* How long the program runs after its first window before WM_CLOSE. */
 static DWORD settle_seconds = 5;
-/* The route of the M7 list (route=), and how long it may take. */
-static WCHAR route[2048];
+/* The route of the M7 list (route=), how long it may take, and the file
+   it makes (route-output=). */
+static WCHAR route[2048], route_output[MAX_PATH];
 static DWORD route_seconds = 600;
 
 static unsigned int length(const char *s) { unsigned int n = 0; while (s[n]) ++n; return n; }
@@ -81,6 +82,7 @@ static void read_commands(void)
     if (!value_of("log", log_path, MAX_PATH)) log_path[0] = 0;
     if (!value_of("visible", visible, 1024)) visible[0] = 0;
     if (!value_of("route", route, 2048)) route[0] = 0;
+    if (!value_of("route-output", route_output, MAX_PATH)) route_output[0] = 0;
     if (value_of("route-seconds", value, 128)) {
         route_seconds = 0;
         for (WCHAR *d = value; *d >= L'0' && *d <= L'9'; ++d) route_seconds = route_seconds * 10 + (*d - L'0');
@@ -477,7 +479,8 @@ static void run_program(void)
 
 /* The route (the "Parcours" column of docs/compat/applications.md): its
    command line, its output (stdout and stderr) in C:\APPS\ROUTE.LOG, its
-   exit code, then its output line by line and what C:\APPS\ROUTE.PNG is. */
+   exit code, then its output line by line and what the file it makes is
+   (route-output=: its size, whether it is a PNG, its first bytes). */
 static char route_text[16384];
 static void run_route(void)
 {
@@ -529,19 +532,26 @@ static void run_route(void)
         while (*p && *p != '\n') ++p;
         if (*p) ++p;
     }
-    HANDLE png = CreateFileW(L"C:\\APPS\\ROUTE.PNG", GENERIC_READ, FILE_SHARE_READ, 0, OPEN_EXISTING, 0, 0);
-    if (png == INVALID_HANDLE_VALUE) {
-        DbgPrint(TAG "route: no ROUTE.PNG (error %lu)\n", GetLastError());
+    if (!route_output[0]) return;
+    const WCHAR *name = route_output;
+    for (const WCHAR *c = route_output; *c; ++c)
+        if (*c == L'\\') name = c + 1;
+    char shown[64];
+    narrow(name, shown, sizeof(shown));
+    HANDLE made = CreateFileW(route_output, GENERIC_READ, FILE_SHARE_READ, 0, OPEN_EXISTING, 0, 0);
+    if (made == INVALID_HANDLE_VALUE) {
+        DbgPrint(TAG "route: no %s (error %lu)\n", shown, GetLastError());
         return;
     }
     unsigned char signature[8] = {0};
-    DWORD read = 0, size = GetFileSize(png, 0);
-    ReadFile(png, signature, sizeof(signature), &read, 0);
-    CloseHandle(png);
-    static const unsigned char expected[8] = {0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n'};
+    DWORD read = 0, size = GetFileSize(made, 0);
+    ReadFile(made, signature, sizeof(signature), &read, 0);
+    CloseHandle(made);
+    static const unsigned char png[8] = {0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n'};
     BOOL is_png = read == 8;
-    for (unsigned int i = 0; i < 8; ++i) is_png &= signature[i] == expected[i];
-    DbgPrint(TAG "route: ROUTE.PNG, %lu bytes, a PNG %d\n", size, is_png);
+    for (unsigned int i = 0; i < 8; ++i) is_png &= signature[i] == png[i];
+    DbgPrint(TAG "route: %s, %lu bytes, a PNG %d, begins %02x %02x %02x %02x %02x %02x\n", shown, size, is_png,
+             signature[0], signature[1], signature[2], signature[3], signature[4], signature[5]);
 }
 
 DWORD WINAPI GuiStartup(void)
