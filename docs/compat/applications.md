@@ -540,6 +540,30 @@ attendre la version d'Inno ni les privilèges, écrits au début (à corriger da
 La suite pour ces applications : le nom long d'un répertoire créé (PeaZip), NtUserEnumDisplayMonitors (GIMP),
 FileRenameInformation (tous les Inno).
 
+### Un nom long dans un trou, le 2026-11-21
+
+PeaZip copiait ses fichiers puis ne pouvait créer `res\themes\nographic-embedded\fm-theme.bmp` (« The system cannot
+find the path specified »). Les emplacements du répertoire `themes` sur le disque du run (lus emplacement par
+emplacement, les effacés compris) : les deux entrées de nom long de `nographic-embedded` dans les emplacements 2
+et 3, son entrée 8.3 `NOGRAP~1` dans le 10, entre elles les entrées de deux fichiers. Les emplacements 2 et 3 étaient
+un trou : Inno déplace chaque fichier installé par MoveFile, que `kernel32` fait par une copie puis un effacement
+(FileRenameInformation manque), et l'effacé laisse ses emplacements libres. `io::fat` mettait chaque entrée d'un nom
+dans le premier emplacement libre, une à une : le nom long, séparé de son entrée 8.3, n'était plus reconnu, et le
+répertoire ne se trouvait plus par son nom long, celui que PeaZip demande ; son alias `NOGRAP~1` se trouvait encore
+(`FatVolume::find_entry` compare l'entrée 8.3 seule).
+
+Comme `vfatFindDirSpace` de `vfatfs` (FATAddEntry), les entrées d'un nom prennent maintenant une suite
+d'emplacements libres consécutifs (`FatVolume::add_entries`, d'un cluster au suivant au besoin) ; un trou trop
+court est sauté, un trou qui suffit est repris, et sans suite assez longue le répertoire grandit avant que rien ne
+soit écrit. PeaZip s'installe (code 0 en 91 s, « Installation process succeeded »), `peazip.exe` ouvre sa fenêtre
+« PeaZip » et se ferme avec 0 sur WM_CLOSE ; plancher relevé. Test hôte
+`a_long_name_takes_a_run_of_free_slots_past_a_short_hole`, qui échoue sans le correctif (l'entrée 8.3 à
+l'emplacement 7, la disposition du disque de PeaZip).
+
+Vu en chemin, au lancement de `peazip.exe` : NtUserSetClassLong et NtUserChildWindowFromPointEx sans handler, une DIB
+section de 24 bits refusée (« not yet ») ; la fenêtre s'ouvre quand même. Son parcours (ouvrir une archive,
+l'extraire) reste à faire.
+
 ### La suite
 
 **Mise à jour du 2026-11-20 : ProcessDebugPort** (`fix/ps-process-debug-port`).

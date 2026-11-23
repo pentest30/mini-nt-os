@@ -17,19 +17,25 @@ timeout = 900
 # over comctl32 6's Edit, a Unicode class asked in ANSI, gets a call
 # procedure (CALLPROCDATA, win32k::callproc; without it, the control wrote
 # UTF-16 into the Delphi heap, and setup.tmp ended on STATUS_STACK_OVERFLOW).
-# It copies its files, then cannot create one in a directory with a long
-# name of 18 characters (nographic-embedded: the entry has no long name,
-# "The system cannot find the path specified") and rolls back, see
-# docs/compat/applications.md.
+# It installs, and peazip.exe opens its window and closes on WM_CLOSE: a
+# name's long-name entries take a run of free slots of the directory
+# (io::fat::FatVolume::add_entries; before, nographic-embedded had its long
+# name in a hole that a moved file left and its 8.3 entry at the end, and
+# PeaZip rolled back), see docs/compat/applications.md.
 expect = [appbench] installer started
 expect = Setup version: Inno Setup version 5.4.2
 expect = User privileges: Administrative
 expect = Created temporary directory:
 expect = Starting the installation process.
-expect = [appbench] installer ended: exit code
+expect = Installation process succeeded.
+expect = [appbench] installer ended: exit code 0
+expect = [appbench] installed: C:\Program Files\PeaZip\peazip.exe
+expect = [appbench] program started
+expect = [appbench] program window after
 expect = [appbench] PeaZip 3.9.1: report done
 forbid = Unable to create a temporary file
 forbid = User privileges: None
 forbid = [appbench] installer still running after
 forbid = [appbench] installer ended: exit code c00000fd
+forbid = [appbench] program ended by itself: exit code c0000005
 forbid = *** STOP:

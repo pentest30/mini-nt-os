@@ -585,8 +585,9 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   convertit ; la classe d'un contrôle de `user32` se voit par la procédure du client du jeu demandé, un contrôle
   créé en ANSI est une fenêtre ANSI (`window::creation_procedure`) ; scénario `ansi-controls`. Le TEdit de Delphi
   appelait l'Edit Unicode de `comctl32` 6 avec des messages ANSI et son WM_GETTEXT écrasait le tas : Inno Setup 5.4
-  installe (PeaZip copie ses fichiers, puis bute sur un répertoire à nom long de 18 caractères écrit sans son nom
-  long).
+  installe ; GIMP s'installe. Les entrées d'un nom long prennent une suite d'emplacements libres consécutifs du
+  répertoire (`io::fat::FatVolume::add_entries`, vfatFindDirSpace : un MoveFile fait par copie et effacement
+  laissait des trous où le nom long se séparait de son entrée 8.3) : PeaZip s'installe et s'ouvre.
   Suite : [`docs/passation.md`](docs/passation.md).
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.

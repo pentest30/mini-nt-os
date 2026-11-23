@@ -1,5 +1,24 @@
 # Notes de passation
 
+- **Un nom long dans un trou d'un répertoire FAT : PeaZip** (`claude/fat-long-dir-name`, sur la PR 161, M7,
+  [`compat/applications.md`](compat/applications.md#un-nom-long-dans-un-trou-le-2026-11-21) ; demandé le
+  2026-11-21, la suite de la PR 161). PeaZip ne pouvait créer `res\themes\nographic-embedded\fm-theme.bmp` (« The
+  system cannot find the path specified »). Les emplacements du répertoire `themes` sur le disque du run : les deux
+  entrées de nom long de `nographic-embedded` dans les emplacements 2 et 3, son entrée 8.3 `NOGRAP~1` dans le 10 —
+  un trou laissé par une entrée effacée : Inno déplace chaque fichier par MoveFile, que `kernel32` fait par une copie
+  puis un effacement (FileRenameInformation manque). `io::fat::add_named_entry` mettait chaque entrée dans le premier
+  emplacement libre, une à une ; le nom long, séparé de son entrée 8.3, n'était plus reconnu. Comme
+  `vfatFindDirSpace` de `vfatfs` (FATAddEntry) : les entrées d'un nom prennent une suite d'emplacements libres
+  consécutifs (`FatVolume::add_entries`, d'un cluster au suivant au besoin), le répertoire grandit sinon, avant que
+  rien ne soit écrit. Test hôte `a_long_name_takes_a_run_of_free_slots_past_a_short_hole` (qui échoue sans le
+  correctif : l'entrée 8.3 à l'emplacement 7, comme sur le disque de PeaZip) ;
+  `a_long_name_that_cannot_be_written_leaves_no_entry` adapté (rien n'est plus écrit). PeaZip s'installe (code 0
+  en 91 s) et `peazip.exe` ouvre sa fenêtre et se ferme avec 0 ; plancher relevé. Vérifié : lint, 1 253 tests hôte ; `app-peazip`, `app-keepass`, `logon`,
+  `persistence`, `power-cut`, `installer-finish` et `notepad-save` (ces quatre derniers sur AMD et Intel) passent ;
+  `fsck.vfat` manque sur l'hôte Windows. **Suite** :
+  le parcours de PeaZip (ouvrir une archive, l'extraire) ; à son lancement, NtUserSetClassLong,
+  NtUserChildWindowFromPointEx et les DIB sections de 24 bits manquent ; FileRenameInformation (chaque MoveFile des
+  Inno est une copie et un effacement, ce qui fait ces trous).
 - **CALLPROCDATA : Inno Setup 5.4 installe** (`claude/callprocdata`, sur la PR 158, M7,
   [`compat/m6-fenetres.md`](compat/m6-fenetres.md) étape 47,
   [`compat/applications.md`](compat/applications.md#callprocdata-inno-setup-54-installe-le-2026-11-21) ; demandé le
