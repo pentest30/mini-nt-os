@@ -73,6 +73,9 @@ pub const STATUS_NOT_IMPLEMENTED: NtStatus = NtStatus(0xC000_0002);
 pub const STATUS_INVALID_INFO_CLASS: NtStatus = NtStatus(0xC000_0003);
 pub const STATUS_INFO_LENGTH_MISMATCH: NtStatus = NtStatus(0xC000_0004);
 pub const STATUS_ACCESS_VIOLATION: NtStatus = NtStatus(0xC000_0005);
+/// Une page d'une section de fichier n'a pas pu être lue du fichier à sa
+/// faute.
+pub const STATUS_IN_PAGE_ERROR: NtStatus = NtStatus(0xC000_0006);
 pub const STATUS_INVALID_HANDLE: NtStatus = NtStatus(0xC000_0008);
 /// NtSetTimerResolution sans résolution posée pour le processus.
 pub const STATUS_TIMER_RESOLUTION_NOT_SET: NtStatus = NtStatus(0xC000_0245);

@@ -525,29 +525,35 @@ impl AddressSpace {
             let va = addr.checked_add(done as u64).ok_or(STATUS_ACCESS_VIOLATION)?;
             let (page, offset) = (va & !(PAGE - 1), (va & (PAGE - 1)) as usize);
             let chunk = (len - done).min(PAGE as usize - offset);
-            let mut vad = self.vad.lock();
-            let mut tables = self.tables();
-            let mut faulted = false;
-            loop {
-                if let Some(entry) = tables.leaf_entry(VirtAddr::new(page)) {
-                    let flags = entry.flags();
-                    let usable = flags.contains(PageTableFlags::PRESENT)
-                        && (access != Access::Write || flags.contains(PageTableFlags::WRITABLE));
-                    if usable {
-                        copy((hhdm() + entry.addr().as_u64() + offset as u64) as *mut u8, done, chunk);
-                        break;
+            'page: loop {
+                let (section, index) = {
+                    let mut vad = self.vad.lock();
+                    let mut tables = self.tables();
+                    let mut faulted = false;
+                    loop {
+                        if let Some(entry) = tables.leaf_entry(VirtAddr::new(page)) {
+                            let flags = entry.flags();
+                            let usable = flags.contains(PageTableFlags::PRESENT)
+                                && (access != Access::Write || flags.contains(PageTableFlags::WRITABLE));
+                            if usable {
+                                copy((hhdm() + entry.addr().as_u64() + offset as u64) as *mut u8, done, chunk);
+                                break 'page;
+                            }
+                        }
+                        // Once resolved, the page must be usable: a second fault
+                        // would mean the tables disagree with the VAD.
+                        if faulted {
+                            return Err(STATUS_ACCESS_VIOLATION);
+                        }
+                        match self.resolve_fault(&mut vad, &mut tables, page, access) {
+                            Outcome::Done(STATUS_SUCCESS) => faulted = true,
+                            Outcome::Done(status) => return Err(status),
+                            Outcome::ReadIn(section, index) => break (section, index),
+                        }
                     }
-                }
-                // Once resolved, the page must be usable: a second fault would
-                // mean the tables disagree with the VAD.
-                if faulted {
-                    return Err(STATUS_ACCESS_VIOLATION);
-                }
-                let status = self.resolve_fault(&mut vad, &mut tables, page, access);
-                if status != STATUS_SUCCESS {
-                    return Err(status);
-                }
-                faulted = true;
+                };
+                // The VAD lock released: the file read, then the page again.
+                section.read_in(index)?;
             }
             done += chunk;
         }
@@ -556,19 +562,53 @@ impl AddressSpace {
 
     /// Résout une faute de page à `addr`, dans la moitié basse, d'après la
     /// VAD (`fault::resolve`) : `STATUS_SUCCESS` si l'accès peut reprendre,
-    /// sinon l'exception qu'il lève (`STATUS_NO_MEMORY` sans page libre).
+    /// sinon l'exception qu'il lève (`STATUS_NO_MEMORY` sans page libre,
+    /// `STATUS_IN_PAGE_ERROR` si la page d'un fichier ne se lit pas).
+    ///
+    /// La page d'une section de fichier pas encore lue se lit verrou de la
+    /// VAD relâché (`Section::read_in`), puis la faute reprend du début
+    /// (MmNotPresentFaultSectionView de ReactOS et son
+    /// STATUS_MM_RESTART_OPERATION) : la vue a pu changer pendant la lecture.
     ///
     /// # IRQL
-    /// < DISPATCH_LEVEL.
+    /// < DISPATCH_LEVEL. Peut bloquer (la lecture d'un fichier).
     pub fn access_fault(&self, addr: u64, access: Access) -> NtStatus {
-        let mut vad = self.vad.lock();
-        let mut tables = self.tables();
-        self.resolve_fault(&mut vad, &mut tables, addr & !(PAGE - 1), access)
+        let page = addr & !(PAGE - 1);
+        loop {
+            let (section, index) = {
+                let mut vad = self.vad.lock();
+                let mut tables = self.tables();
+                match self.resolve_fault(&mut vad, &mut tables, page, access) {
+                    Outcome::Done(status) => return status,
+                    Outcome::ReadIn(section, index) => (section, index),
+                }
+            };
+            // Once read, the page stays the segment's while the section
+            // lives (held here): the next pass finds it.
+            if let Err(status) = section.read_in(index) {
+                return status;
+            }
+        }
     }
 
     /// [`access_fault`](Self::access_fault) sur la page `page`, sous le
     /// verrou de la VAD que tient l'appelant (`vad`), avec ses tables.
-    fn resolve_fault(&self, vad: &mut VadTree, tables: &mut MmPageTables, page: u64, access: Access) -> NtStatus {
+    fn resolve_fault(&self, vad: &mut VadTree, tables: &mut MmPageTables, page: u64, access: Access) -> Outcome {
+        Outcome::Done(match self.resolve_fault_locked(vad, tables, page, access) {
+            Ok(status) => status,
+            Err(read_in) => return read_in,
+        })
+    }
+
+    /// [`resolve_fault`](Self::resolve_fault) : `Err` pour une page de
+    /// section à lire d'abord.
+    fn resolve_fault_locked(
+        &self,
+        vad: &mut VadTree,
+        tables: &mut MmPageTables,
+        page: u64,
+        access: Access,
+    ) -> Result<NtStatus, Outcome> {
         let node = vad.find(page);
         // Faults go by the rights of the page: those of the VAD's protection,
         // with execute if DEP is off.
@@ -579,7 +619,7 @@ impl AddressSpace {
         match fault::resolve(state, backing, pte_state(tables, page), access) {
             Resolution::DemandZero(protect) => {
                 let Some(frame) = pfn::allocate_page(PageUsage::UserPrivate) else {
-                    return STATUS_NO_MEMORY;
+                    return Ok(STATUS_NO_MEMORY);
                 };
                 // SAFETY: a page just allocated, reached through the HHDM.
                 unsafe { core::ptr::write_bytes((hhdm() + frame.to_phys()) as *mut u8, 0, PAGE as usize) };
@@ -590,35 +630,37 @@ impl AddressSpace {
                     unsafe { tables.try_map_page(VirtAddr::new(page), PhysAddr::new(frame.to_phys()), flags) }
                 {
                     pfn::free_page(frame);
-                    return status;
+                    return Ok(status);
                 }
                 fault::count_demand_zero();
-                STATUS_SUCCESS
+                Ok(STATUS_SUCCESS)
             }
             Resolution::MapShared(protect) => {
                 let (section, index) = vad.find(page).and_then(|node| node.section_page(page)).expect("a view page");
                 let frame = match section.page(index) {
-                    Ok(frame) => frame,
-                    Err(status) => return status,
+                    Ok(Some(frame)) => frame,
+                    Ok(None) => return Err(Outcome::ReadIn(section.clone(), index)),
+                    Err(status) => return Ok(status),
                 };
                 let (writable, executable) = fault::page_rights(protect, true);
                 let flags = MmPageTables::leaf_flags(writable, executable, true) | PTE_SHARED;
                 // SAFETY: the page has no physical page in this space (resolve
                 // said so); the frame stays the section's.
                 match unsafe { tables.try_map_page(VirtAddr::new(page), PhysAddr::new(frame.to_phys()), flags) } {
-                    Ok(()) => STATUS_SUCCESS,
-                    Err(status) => status,
+                    Ok(()) => Ok(STATUS_SUCCESS),
+                    Err(status) => Ok(status),
                 }
             }
             Resolution::CopyOnWrite(protect) => {
                 let node = vad.find_mut(page).expect("a committed page has its VAD");
                 let (section, index) = node.section_page(page).map(|(s, i)| (s.clone(), i)).expect("a view page");
                 let shared = match section.page(index) {
-                    Ok(frame) => frame,
-                    Err(status) => return status,
+                    Ok(Some(frame)) => frame,
+                    Ok(None) => return Err(Outcome::ReadIn(section, index)),
+                    Err(status) => return Ok(status),
                 };
                 let Some(copy) = pfn::allocate_page(PageUsage::UserPrivate) else {
-                    return STATUS_NO_MEMORY;
+                    return Ok(STATUS_NO_MEMORY);
                 };
                 // SAFETY: two distinct pages reached through the HHDM: the
                 // section's, read, and a page just allocated.
@@ -644,26 +686,26 @@ impl AddressSpace {
                             unsafe { tables.try_map_page(VirtAddr::new(page), PhysAddr::new(copy.to_phys()), flags) }
                         {
                             pfn::free_page(copy);
-                            return status;
+                            return Ok(status);
                         }
                     }
                 }
                 // The VAD keeps the protection asked for, without the copy.
                 let (_, run) = node.run_at(page).expect("a page of its VAD");
                 node.protect(page, page + PAGE, run.protect.without_copy());
-                STATUS_SUCCESS
+                Ok(STATUS_SUCCESS)
             }
             Resolution::Remap(protect) => {
                 set_rights(tables, page, protect);
-                STATUS_SUCCESS
+                Ok(STATUS_SUCCESS)
             }
             Resolution::Guard => {
                 let node = vad.find_mut(page).expect("a committed page has its VAD");
                 let (_, run) = node.run_at(page).expect("a page of its VAD");
                 node.protect(page, page + PAGE, run.protect - PageProtect::GUARD);
-                STATUS_GUARD_PAGE_VIOLATION
+                Ok(STATUS_GUARD_PAGE_VIOLATION)
             }
-            Resolution::AccessViolation => STATUS_ACCESS_VIOLATION,
+            Resolution::AccessViolation => Ok(STATUS_ACCESS_VIOLATION),
         }
     }
 
@@ -743,6 +785,14 @@ impl AddressSpace {
         // rien n'utilise ; leurs pages ne sont libérées qu'une fois.
         unsafe { free_tables(space.directory_table_base(), 4, KERNEL_HALF) };
     }
+}
+
+/// Ce que rend une faute résolue sous le verrou de la VAD.
+enum Outcome {
+    /// `STATUS_SUCCESS` si l'accès peut reprendre, sinon son exception.
+    Done(NtStatus),
+    /// La page `index` de la section est à lire d'abord, verrou relâché.
+    ReadIn(Arc<Section>, u64),
 }
 
 /// Le `PageMapper` d'un espace : un commit ne projette rien (la faute le
