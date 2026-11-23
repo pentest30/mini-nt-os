@@ -31,9 +31,10 @@ traite l'une d'elles y ajoute la section de sa PR (voir « Ajouter une évaluati
 | [155](https://github.com/pentest30/mini-nt-os/pull/155) | 3 | 3 | 0 | 0 | 0 | 0 | 0 |
 | [156](https://github.com/pentest30/mini-nt-os/pull/156) | 7 | 3 | 0 | 0 | 2 | 2 | 0 |
 | [157](https://github.com/pentest30/mini-nt-os/pull/157) | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
-| **Total** | **71** | **40** | **6** | **4** | **3** | **18** | **4** |
+| [160](https://github.com/pentest30/mini-nt-os/pull/160) | 6 | 6 | 0 | 0 | 0 | 0 | 0 |
+| **Total** | **77** | **46** | **6** | **4** | **3** | **18** | **4** |
 
-Toutes les remarques jusqu'à la PR 157 sont évaluées.
+Toutes les remarques jusqu'à la PR 160 sont évaluées.
 
 Ce qui ressort :
 
@@ -260,5 +261,20 @@ Commit relu par les bots : `4cb8cad`. Évalué le 2026-11-21. Une remarque, post
 |---|---|---|---|---|
 | `tests/native/auth1.c:100` | Le résultat de WinVerifyTrust est imprimé, jamais vérifié, et le scénario ne l'attend pas : une régression de la vérification de confiance laisse `authenticode` vert, alors que la PR dit WinVerifyTrust à 0 vérifié. | Fondé | La sonde allait jusqu'à « PASS » quel que soit `trust` ; les étapes suivantes ne lisent que le certificat du signataire. Sans les DLL enregistrées, WinVerifyTrust rendait `0x80070057` et le scénario aurait passé. | `1026f1c` : la sonde s'arrête si `trust` n'est pas 0, et le scénario attend `[auth] WinVerifyTrust: 0`. |
 | idem (Codex, P2) | La même. | Fondé | Voir la ligne précédente. | `1026f1c`. |
+
+Aucun défaut manqué vérifié.
+
+## PR 160 : SaveDC/RestoreDC, ExtCreatePen et l'effacement parent
+
+Commit relu par les bots : `9997c91`. Évalué le 2026-11-21. Vortex a posté trois remarques, Codex trois (P2).
+
+| Où | Remarque | Verdict | Pourquoi | Suite |
+|---|---|---|---|---|
+| `kernel/win32k/src/gdi/pen.rs:58` | Le style stocké garde les bits PS_GEOMETRIC et ceux des embouts et jointures : le dessin compare le style à PS_SOLID et PS_NULL (dib.rs), et PS_GEOMETRIC \| PS_SOLID s'y dessine pointillé. | Fondé | `Self::create(style, …)` stockait le mot entier ; dib.rs:269 `let dotted = pen.style != PS_SOLID`. | Le style passe par `Pen::extended`, qui ne garde que ses quatre bits ; test `an_extended_style_keeps_only_its_base_style` (géométrique plein, les embouts partent, cosmétique non plein refusé). |
+| `kernel/win32k/src/paint.rs:980` | Le bloc de doc de `expose` est resté sur la constante insérée (`# IRQL` attaché au const), et le COLOR_MENUBAR de class.rs se double. | Fondé | La doc (`/// # IRQL`) précédait le const, plus la fonction : `expose` perdait sa documentation, exigée des fonctions publiques du noyau. | Le const disparaît de paint.rs (celui de class.rs devient `pub(crate)` et sert qualifié) ; la doc revient sur `expose`. |
+| `tests/boot/app-npp-interactive/scenario.txt:32` | Les clics répètent le même déplacement relatif depuis la position courante : le premier arrive sur le bouton, les suivants dérivent vers le bord. | Fondé | `move:` est relatif et rien ne ramène le curseur : le deuxième clic partait de (360, 358) vers (80, 316). | Seul le premier clic se déplace ; le bouton tient le même emplacement sur chaque page, les suivants ne font que press:1 release (commentaire récrit). |
+| `kernel/win32k/src/gdi/dc.rs:246` (Codex) | Save/Restore ne touche pas aux attributs du propriétaire : la position courante et les origines se lisent chez lui (`current_position`, `logical_origin`), la restauration de `state.position` ne sert à rien. | Fondé | DC_vCopyState copie tout le `pdcattr` (`*pdcDst->pdcattr = *pdcSrc->pdcattr`) ; chez Mino, `current_position` lit `attr + offset_of!(DcAttr32, current)`. | Une pose garde aussi les octets des attributs (`SavedState.attrs`), et la restauration les écrit chez le propriétaire — sauf `vis_rect_region`, qui reste celle d'aujourd'hui (« Get/SetDCState() don't change hVisRgn field »). |
+| `kernel/win32k/src/gdi/dc.rs:207` (Codex) | La pile de sauvegardes survit à la reprise du DC du cache : le prochain emprunteur hérite des niveaux du précédent. | Fondé | `take` réécrivait `state` seul, `disown` prenait `state` seul ; les poses restaient. | `clear_saves` dans `take` et `disown` ; la pile (et ses attributs) ne traverse plus un emprunt. |
+| `kernel/win32k/src/gdi/dc.rs:280` (Codex) | Le bitmap d'un DC en mémoire revient par affectation directe : la surface gardée reste marquée choisie, l'ancienne jamais libérée, la région visible et le drapeau DIBSECTION décrivent l'ancienne. | Fondé | `select_bitmap` fait `select`/`deselect`, cale `vis` à la taille et pose DC_DIBSECTION ; l'affectation shuntait tout. | La restauration passe par la sélection : `select` de la surface sauvée, `deselect` de l'ancienne, `vis` à sa taille (`restore_state(hdc, …)`). |
 
 Aucun défaut manqué vérifié.

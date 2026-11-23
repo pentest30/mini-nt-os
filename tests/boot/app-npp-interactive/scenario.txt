@@ -1,0 +1,43 @@
+# M7 bench: the Notepad++ 7.9.2 installer (NSIS) run VISIBLE in the session
+# (interactive: no /S), its wizard driven by QEMU's mouse to reach the
+# progress page, where the drawing is checked (the header, the bitmap at the
+# left, the progress bar). The bench runs as the shell of the logged-on user
+# (session). The floor: the wizard's pages advance (the bench prints each
+# window of the installer), and the pixels of the progress page.
+features = test-smss, interactive
+requires = userland, native
+session = APPBENCH.EXE
+boots = 2
+app = notepadpp
+interactive = yes
+cpus = default
+timeout = 1500
+
+expect = We are logged on
+expect = the bench starts in the user's session
+expect = [appbench] installer started
+expect = [appbench] window: PID
+
+# The screen: 1280x800, the cursor starts at its centre (640, 400). The
+# wizard's window sits at (0, 0)-(497, 378): the button bar holds
+# Volgende > (Next) at (323, 348)-(398, 368) — the same slot carries
+# I Agree on the licence page and Install on the components page — and
+# Kanselleer at (410, 348)-(483, 368). A click is the moves to the button
+# (the PS/2 queue holds packets of at most 127 pixels) then press and
+# release. The moves are relative and nothing resets the cursor: the first
+# click goes from the centre to the button, and the cursor stays there —
+# the button holds the same slot on every page (Next, I Agree, Install),
+# so the next clicks are just a press and a release. They go at fixed
+# times from the installer's start (the wizard draws its pages in the
+# first seconds; the bench answers a dialog of the installer itself after
+# 10 s of quiet, so the clicks must run ahead of it): the welcome page,
+# the licence, the directory, the components, and Install.
+keys = [appbench] installer started => pause:5000 move:-127,-16 move:-127,-16 move:-26,-10 press:1 release pause:8000 press:1 release pause:8000 press:1 release pause:8000 press:1 release pause:8000 press:1 release
+
+# The screen checks below never match yet (a black corner): the capture in
+# screen.ppm is what this run is for — the last one lands on the progress
+# page.
+screen = 0 0 000000
+screen-wait = 40
+
+forbid = *** STOP:
