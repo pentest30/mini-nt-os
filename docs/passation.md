@@ -8,6 +8,20 @@
   sa pile, et Notepad++ s'installait en néerlandais ou en anglais selon le run. Scénario `ui-language`
   (`tests/native/uilang1.c`). Vérifié : lint, 1 261 tests hôte, `ui-language` (AMD, Intel ; sans les handlers, il
   échoue). Pas encore relancé : les scénarios `app-*` des autres installeurs NSIS.
+- **Le parcours de Notepad++** (`claude/notepadpp-route`, sur la PR 168, M7,
+  [`compat/applications.md`](compat/applications.md#le-parcours-de-notepad-le-2026-11-22) ; demandé le 2026-11-22).
+  Le banc a des parcours par étapes (`steps` d'`apps::Route`, `route-step=`, `run_window_route` d'`appbench.c` :
+  `start`, `close`, `window TEXTE`, `no-window TEXTE`, `clipboard`, chaque attente imprime son étiquette, à laquelle
+  les `keys` du scénario s'accrochent ; le fichier fait est imprimé ligne à ligne s'il est un texte court).
+  Notepad++ (`-nosession` : sinon la session remettait, après le Ctrl+A, la sélection du mot que Ctrl+H avait
+  prise) ouvre `ROUTE.TXT`, une ligne tapée, « fox » remplacé par « cat » (Ctrl+H, Alt+A), Ctrl+S ; rouvert, son
+  texte copié dans le presse-papiers, que le banc lit. Le correctif du noyau qu'il a demandé est la PR 168 (la langue
+  de l'interface : Notepad++ s'installait en néerlandais) ; le parcours en 23 s ; le parcours de la liste est fait.
+  Test hôte `notepadpp_has_a_route_through_its_windows`. Vérifié : lint, tests hôte, `app-notepadpp` (AMD, 246 s ;
+  deux runs avec `-nosession`, dont la mutation sans Alt+A, qui échoue sur « fox »). Pas relancé : `app-7zip`,
+  `app-gimp` (leur ligne du fichier fait est inchangée ; un texte court en a de plus). **Dette** : le
+  texte d'une fenêtre d'un autre processus ne se lit pas par WM_GETTEXT (`win32k::sent::unmarshalled`). **Suite** :
+  les parcours de KeePass, AbiWord, PeaZip par la même voie.
 - **Le parcours de 7-Zip** (`claude/7zip-route`, sur la PR 165, M7,
   [`compat/applications.md`](compat/applications.md#le-parcours-de-7-zip-le-2026-11-22) ; demandé le 2026-11-22).
   Par sa ligne de commande : `cmd.exe /c C:\APPS\ROUTE.CMD`, un fichier de commandes que `xtask` écrit avec le texte

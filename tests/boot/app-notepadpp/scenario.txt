@@ -13,7 +13,18 @@ timeout = 900
 # What works today, a floor: it installs, and in the user's session
 # (session: lsass, the providers minoinit registers) its Authenticode
 # check of its own DLLs passes; its main window opens (WM_CREATE asks
-# SystemNumaProcessorMap through kernel32) and closes with 0.
+# SystemNumaProcessorMap through kernel32) and closes with 0. Its route
+# then goes through its windows (route-step in xtask/src/apps.rs): it opens
+# C:\APPS\ROUTE.TXT ("Mino route"), a line is typed at its end, Ctrl+H
+# replaces "fox" with "cat" (Replace All), Ctrl+S saves; opened again, its
+# text goes to the clipboard (Ctrl+A, Ctrl+C), which the bench reads.
+
+keys = [appbench] route step: editor up => ctrl-end "the quick brown fox jumps"
+keys = [appbench] route step: typed => ctrl-h
+keys = [appbench] route step: replace dialog => "fox" tab "cat" alt-a esc
+keys = [appbench] route step: replaced => ctrl-s
+keys = [appbench] route step: reopened => ctrl-a ctrl-c
+
 expect = [appbench] installer started
 expect = [appbench] installer ended: exit code 0
 expect = [appbench] installed: C:\Program Files\Notepad++\notepad++.exe
@@ -22,6 +33,17 @@ expect = [appbench] program window after
 expect = [appbench] window: PID
 expect = - Notepad++"
 expect = [appbench] program closed: exit code 0
+expect = [appbench] route step: editor up
+expect = [appbench] route step: typed
+expect = [appbench] route step: replace dialog
+expect = [appbench] route step: replaced
+expect = [appbench] route step: saved
+expect = [appbench] route step: reopened
+expect = [appbench] route step: copied
+expect = route clipboard: the quick brown cat jumps
+expect = [appbench] route program closed: exit code 0
+expect = route file: Mino route
+expect = route file: the quick brown cat jumps
 expect = [appbench] Notepad++ 7.9.2: report done
 forbid = Can't initialize plug-ins directory
 forbid = [appbench] installer still running after
@@ -30,3 +52,7 @@ forbid = DLL signature verification failed
 forbid = Exception On WM_CREATE
 forbid = sys: NtQuerySystemInformation class 0x37 is not implemented
 forbid = *** STOP:
+forbid = [appbench] route still running after
+forbid = [appbench] route did not start
+forbid = [appbench] route program ended by itself
+forbid = route file: the quick brown fox

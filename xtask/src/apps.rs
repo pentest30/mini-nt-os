@@ -50,13 +50,46 @@ pub struct App {
 /// A route: a command line the probe runs (its output captured in
 /// `C:\APPS\ROUTE.LOG`), how long it may take, the files it needs in
 /// `C:\APPS` (name, bytes), and the file it makes, which the probe
-/// describes (its size, its first bytes).
+/// describes (its size, its first bytes, a short text's lines). With
+/// `steps`, the probe goes through the program's windows instead, the
+/// scenario's `keys` typed at the label each step prints (`start`, `close`,
+/// `window TEXT => LABEL`, `no-window TEXT => LABEL`, `clipboard => LABEL`:
+/// `run_window_route` of `tests/native/appbench.c`).
 #[derive(Clone, Copy)]
 pub struct Route {
     pub command: &'static str,
     pub seconds: u32,
     pub files: fn() -> Vec<(&'static str, Vec<u8>)>,
     pub output: &'static str,
+    pub steps: &'static [&'static str],
+}
+
+/// Notepad++'s route, through its windows: open `ROUTE.TXT`, type a line
+/// (the title gets its `*`), replace a word (Ctrl+H, Replace All), save
+/// (Ctrl+S, the `*` goes), close, open it again and copy its text (Ctrl+A,
+/// Ctrl+C) for the probe to read on the clipboard. The keys are in
+/// `tests/boot/app-notepadpp/scenario.txt`. No word the scenario types
+/// begins like another of the file, so that word completion (from the first
+/// letter) proposes none. `-nosession`: the second start reads the file from
+/// the disk, without the session of the first (which keeps its selection,
+/// the word that Ctrl+H selected: put back after the window shows its
+/// title, it undid the Ctrl+A that came before it).
+const NOTEPADPP_ROUTE_STEPS: &[&str] = &[
+    "start",
+    "window ROUTE.TXT => editor up",
+    "window * => typed",
+    "window Replace => replace dialog",
+    "no-window Replace => replaced",
+    "no-window * => saved",
+    "close",
+    "start",
+    "window ROUTE.TXT => reopened",
+    "clipboard => copied",
+    "close",
+];
+
+fn notepadpp_route_files() -> Vec<(&'static str, Vec<u8>)> {
+    vec![("ROUTE.TXT", b"Mino route\r\n".to_vec())]
 }
 
 /// 7-Zip's route, by its command line (`7z.exe`) in a batch file: archive
@@ -181,6 +214,7 @@ pub const APPS: [App; 10] = [
             seconds: 300,
             files: seven_zip_route_files,
             output: r"C:\APPS\ROUTE.7Z",
+            steps: &[],
         }),
     },
     App {
@@ -196,7 +230,13 @@ pub const APPS: [App; 10] = [
         install_seconds: 300,
         program_seconds: 5,
         memory_mb: 256,
-        route: None,
+        route: Some(Route {
+            command: r#""C:\Program Files\Notepad++\notepad++.exe" -nosession C:\APPS\ROUTE.TXT"#,
+            seconds: 300,
+            files: notepadpp_route_files,
+            output: r"C:\APPS\ROUTE.TXT",
+            steps: NOTEPADPP_ROUTE_STEPS,
+        }),
     },
     App {
         id: "keepass",
@@ -306,6 +346,7 @@ pub const APPS: [App; 10] = [
             seconds: 600,
             files: gimp_route_files,
             output: r"C:\APPS\ROUTE.PNG",
+            steps: &[],
         }),
     },
     App {
@@ -473,6 +514,9 @@ pub fn probe_commands_for(app: &App, interactive: bool) -> String {
             "route={}\r\nroute-seconds={}\r\nroute-output={}\r\n",
             route.command, route.seconds, route.output
         ));
+        for step in route.steps {
+            text.push_str(&format!("route-step={step}\r\n"));
+        }
     }
     text
 }
@@ -498,7 +542,11 @@ mod tests {
         assert!(text.contains("route=\"C:\\Program Files\\GIMP-2.0\\bin\\gimp-console-2.6.exe\" -i -d -f -b "));
         assert!(text.contains("route-seconds=600\r\n"));
         assert!(text.contains("route-output=C:\\APPS\\ROUTE.PNG\r\n"));
-        assert!(APPS.iter().filter(|app| app.id != "gimp" && app.id != "7zip").all(|app| app.route.is_none()));
+        assert!(!text.contains("route-step="));
+        assert!(APPS
+            .iter()
+            .filter(|app| !["gimp", "7zip", "notepadpp"].contains(&app.id))
+            .all(|app| app.route.is_none()));
     }
 
     #[test]
@@ -518,6 +566,29 @@ mod tests {
         let text = probe_commands_for(seven, false);
         assert!(text.contains("route=C:\\WINDOWS\\system32\\cmd.exe /c C:\\APPS\\ROUTE.CMD\r\n"));
         assert!(text.contains("route-output=C:\\APPS\\ROUTE.7Z\r\n"));
+    }
+
+    #[test]
+    fn notepadpp_has_a_route_through_its_windows() {
+        let app = APPS.iter().find(|app| app.id == "notepadpp").unwrap();
+        let route = app.route.expect("Notepad++'s route");
+        assert_eq!((route.files)(), [("ROUTE.TXT", b"Mino route\r\n".to_vec())]);
+        let text = probe_commands_for(app, false);
+        assert!(
+            text.contains("route=\"C:\\Program Files\\Notepad++\\notepad++.exe\" -nosession C:\\APPS\\ROUTE.TXT\r\n")
+        );
+        assert!(text.contains("route-output=C:\\APPS\\ROUTE.TXT\r\n"));
+        // The steps, in their order, one line each; the probe takes 16.
+        let steps: Vec<&str> = text.lines().filter_map(|line| line.strip_prefix("route-step=")).collect();
+        assert_eq!(steps, route.steps);
+        assert!(steps.len() <= 16 && steps.iter().all(|step| step.len() < 160));
+        assert_eq!(steps.first(), Some(&"start"));
+        assert_eq!(steps.last(), Some(&"close"));
+        // Each wait has a label, each label once: the scenario's keys follow them.
+        let labels: Vec<&str> =
+            steps.iter().filter_map(|step| step.split_once(" => ").map(|(_, label)| label)).collect();
+        assert_eq!(labels.len(), steps.iter().filter(|step| !["start", "close"].contains(step)).count());
+        assert!(labels.iter().all(|label| labels.iter().filter(|other| other.starts_with(label)).count() == 1));
     }
 
     #[test]
