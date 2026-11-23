@@ -33,10 +33,11 @@ traite l'une d'elles y ajoute la section de sa PR (voir « Ajouter une évaluati
 | [157](https://github.com/pentest30/mini-nt-os/pull/157) | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
 | [158](https://github.com/pentest30/mini-nt-os/pull/158) | 4 | 2 | 0 | 0 | 0 | 2 | 0 |
 | [159](https://github.com/pentest30/mini-nt-os/pull/159) | 3 | 2 | 0 | 0 | 0 | 1 | 0 |
-| **Total** | **78** | **44** | **6** | **4** | **3** | **21** | **4** |
+| [160](https://github.com/pentest30/mini-nt-os/pull/160) | 6 | 6 | 0 | 0 | 0 | 0 | 0 |
+| **Total** | **84** | **50** | **6** | **4** | **3** | **21** | **4** |
 
-Toutes les remarques jusqu'à la PR 159 sont évaluées ; celles des PR 160 à 164 le sont sur leurs branches (celles de
-la PR 160 en partie).
+Toutes les remarques jusqu'à la PR 157 sont évaluées, puis celles des PR 158 à 160. Les remarques de Vortex sur la PR
+160 à `f623515` et `dd65dcd` ne sont pas encore dans sa section.
 
 Ce qui ressort :
 
@@ -289,5 +290,20 @@ Commit relu par les bots : `ea11f71`. Évalué le 2026-11-22, après la fusion. 
 | `kernel/mm/src/section.rs:460` | `read_in` ne regarde pas combien d'octets le lecteur a lus : une lecture courte au milieu du fichier (une lecture partielle d'Io, un fichier raccourci depuis la création du segment) laisse des zéros, gardés comme son contenu ; en faire une erreur, ou ne compléter de zéros que jusqu'à la taille du fichier. | Sans suite | MmMakeSegmentResident de ReactOS ignore aussi la longueur lue (`Iosb.Information`) et prend STATUS_END_OF_FILE pour une réussite ; ses pages arrivent à zéro. Io ne rend moins qu'à la fin du fichier ; un fichier raccourci se lit jusqu'à sa nouvelle fin, des zéros après, comme le dit le commentaire du code. | Aucune. |
 | `kernel/mm/src/address_space.rs:583` (Codex, P1) | Deux fautes sur une même page : la première lit le fichier verrou relâché, la seconde lit et projette la page ; à la reprise, la première trouve la page présente et accessible, et `fault::resolve` y voit une faute sans cause : violation d'accès. Accepter la page déjà là, comme `AddressSpace::copy`. | Fondé | `fault::resolve` rend `AccessViolation` pour une page présente qui permet l'accès, en supposant que rien ne la projette entre la faute et le verrou de la VAD ; depuis cette PR, `access_fault` relâche ce verrou pour lire, et la lecture peut bloquer (sur le verrou du volume, par exemple). MmNotPresentFaultSectionView de ReactOS commence par MmIsPagePresent et rend alors STATUS_SUCCESS (« another thread could load the page »). | `23db3d6` : une faute qui reprend après une lecture et trouve la page présente avec les droits voulus réussit (`fault::pte_allows`) ; test hôte `a_page_mapped_meanwhile_allows_the_access_it_has_the_rights_for`. La course n'a pas de test : il faudrait une lecture qui bloque au bon moment, et `AddressSpace` n'a pas de tests hôte. |
 | `kernel/io/src/file.rs:583` (Codex, P2) | Deux NtCreateSection du même fichier qui manquent l'un et l'autre la recherche font chacun leur segment ; `Cache::insert` remplace l'entrée de l'autre, et des vues partagées de l'une et de l'autre section n'ont pas les mêmes pages. | Fondé | `data_segment` fait `lookup`, `create`, puis `insert`, chacun sous sa propre prise du verrou : une préemption entre les deux (les services tournent interruptions actives) laisse passer l'autre. Des octets d'image se dédoublaient sans mal ; un segment ne le peut pas. | `36611e1` : `Cache::insert` rend, sous le même verrou, ce qu'une autre section du même fichier y a mis entre-temps (`data_segment` et `image_contents` le prennent) ; test hôte `the_second_of_two_sections_made_at_once_takes_the_first_ones_content` (vérifié par mutation). |
+
+Aucun défaut manqué vérifié.
+
+## PR 160 : SaveDC/RestoreDC, ExtCreatePen et l'effacement parent
+
+Commit relu par les bots : `9997c91`. Évalué le 2026-11-21. Vortex a posté trois remarques, Codex trois (P2).
+
+| Où | Remarque | Verdict | Pourquoi | Suite |
+|---|---|---|---|---|
+| `kernel/win32k/src/gdi/pen.rs:58` | Le style stocké garde les bits PS_GEOMETRIC et ceux des embouts et jointures : le dessin compare le style à PS_SOLID et PS_NULL (dib.rs), et PS_GEOMETRIC \| PS_SOLID s'y dessine pointillé. | Fondé | `Self::create(style, …)` stockait le mot entier ; dib.rs:269 `let dotted = pen.style != PS_SOLID`. | Le style passe par `Pen::extended`, qui ne garde que ses quatre bits ; test `an_extended_style_keeps_only_its_base_style` (géométrique plein, les embouts partent, cosmétique non plein refusé). |
+| `kernel/win32k/src/paint.rs:980` | Le bloc de doc de `expose` est resté sur la constante insérée (`# IRQL` attaché au const), et le COLOR_MENUBAR de class.rs se double. | Fondé | La doc (`/// # IRQL`) précédait le const, plus la fonction : `expose` perdait sa documentation, exigée des fonctions publiques du noyau. | Le const disparaît de paint.rs (celui de class.rs devient `pub(crate)` et sert qualifié) ; la doc revient sur `expose`. |
+| `tests/boot/app-npp-interactive/scenario.txt:32` | Les clics répètent le même déplacement relatif depuis la position courante : le premier arrive sur le bouton, les suivants dérivent vers le bord. | Fondé | `move:` est relatif et rien ne ramène le curseur : le deuxième clic partait de (360, 358) vers (80, 316). | Seul le premier clic se déplace ; le bouton tient le même emplacement sur chaque page, les suivants ne font que press:1 release (commentaire récrit). |
+| `kernel/win32k/src/gdi/dc.rs:246` (Codex) | Save/Restore ne touche pas aux attributs du propriétaire : la position courante et les origines se lisent chez lui (`current_position`, `logical_origin`), la restauration de `state.position` ne sert à rien. | Fondé | DC_vCopyState copie tout le `pdcattr` (`*pdcDst->pdcattr = *pdcSrc->pdcattr`) ; chez Mino, `current_position` lit `attr + offset_of!(DcAttr32, current)`. | Une pose garde aussi les octets des attributs (`SavedState.attrs`), et la restauration les écrit chez le propriétaire — sauf `vis_rect_region`, qui reste celle d'aujourd'hui (« Get/SetDCState() don't change hVisRgn field »). |
+| `kernel/win32k/src/gdi/dc.rs:207` (Codex) | La pile de sauvegardes survit à la reprise du DC du cache : le prochain emprunteur hérite des niveaux du précédent. | Fondé | `take` réécrivait `state` seul, `disown` prenait `state` seul ; les poses restaient. | `clear_saves` dans `take` et `disown` ; la pile (et ses attributs) ne traverse plus un emprunt. |
+| `kernel/win32k/src/gdi/dc.rs:280` (Codex) | Le bitmap d'un DC en mémoire revient par affectation directe : la surface gardée reste marquée choisie, l'ancienne jamais libérée, la région visible et le drapeau DIBSECTION décrivent l'ancienne. | Fondé | `select_bitmap` fait `select`/`deselect`, cale `vis` à la taille et pose DC_DIBSECTION ; l'affectation shuntait tout. | La restauration passe par la sélection : `select` de la surface sauvée, `deselect` de l'ancienne, `vis` à sa taille (`restore_state(hdc, …)`). |
 
 Aucun défaut manqué vérifié.
