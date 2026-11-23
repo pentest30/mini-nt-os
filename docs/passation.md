@@ -1,5 +1,16 @@
 # Notes de passation
 
+- **Le répertoire de msi.dll : l'installeur d'OpenOffice** (`claude/installer-location`, sur `main`, M7 ; demandé
+  le 2026-11-23 : dans VirtualBox, « This package requires at least the version '2.0' of the Windows Installer. You
+  have Windows Installer '0.1244568.1244716' »). Le `setup.exe` d'Apache OpenOffice ne charge `msi.dll` que du
+  répertoire que nomme `HKLM\Software\Microsoft\Windows\CurrentVersion\Installer\InstallerLocation`
+  (`aoo_msi_load`) ; sans la valeur, `aoo_MsiDllGetVersion` rend `HRESULT_FROM_WIN32(GetLastError())`, 0 sans
+  erreur en cours, et CheckVersion affiche sa DLLVERSIONINFO jamais remplie (des adresses de la pile). syssetup.inf
+  l'écrit à l'installation de ReactOS ([Classes], AddReg de RegistrationPhase2 : `%11%`) ; la clé manquait aux
+  ruches du LiveCD. `tools/mkhive/mino.inf` l'écrit (`C:\WINDOWS\system32`). Test hôte
+  `the_mino_layer_installs_a_system_that_logs_on` ; scénario `installer-location` (`tests/native/msiver1.c`, en
+  session sur le disque de 7-Zip, qui a `msi.dll` : la recherche de `setup.exe`, DllGetVersion rend 4.5.6001), qui
+  échoue sans la valeur (vérifié).
 - **La fenêtre de PeaZip et sa fermeture** (`claude/peazip-window`, sur la PR 174, M7, le banc,
   [`compat/applications.md`](compat/applications.md#la-fenêtre-de-peazip-et-sa-fermeture-le-2026-11-23) ; demandé le
   2026-11-23). Rien à corriger dans Mino. Le gestionnaire se peint : la capture d'un scénario vient quand tous ses
