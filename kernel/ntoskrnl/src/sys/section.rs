@@ -3,9 +3,13 @@
 //! nom, en projeter une vue dans un processus et la retirer, dire ce qu'elle
 //! est (NtQuerySection).
 //!
-//! Une section de fichier prend une copie des octets du fichier
-//! (`io_manager::File::read_all`, `mm::section`) : ce qui s'écrit dans une
-//! vue n'y retourne pas.
+//! Une section de données d'un fichier ne lit rien à sa création
+//! (ADR-024, proposée) : elle prend le segment du fichier
+//! (`mm::section::FileSegment`, partagé par `io::section_cache::DATA`), dont
+//! une faute de page lit chaque page par Io ([`FilePages`]). Une section
+//! d'image lit ses en-têtes et les données de ses sections
+//! (`io_manager::File::image_contents`, `ImageLayout::extent`), pas ce qui
+//! les suit. Ce qui s'écrit dans une vue ne retourne pas au fichier.
 //!
 //! Une section du fichier d'échange peut être réservée (`SEC_RESERVE` : ses
 //! pages se commitent par NtAllocateVirtualMemory dans une vue) et basée
@@ -15,6 +19,7 @@
 //! Pas encore : `SEC_BASED` pour un fichier (`STATUS_NOT_IMPLEMENTED`,
 //! journalisé une fois), `ZeroBits` d'une vue, NtExtendSection.
 
+use alloc::boxed::Box;
 use alloc::sync::Arc;
 use core::sync::atomic::{AtomicBool, Ordering};
 
@@ -29,10 +34,11 @@ use io_manager::{File, FILE_TYPE};
 use ke::usermem::UserPtr;
 use mm::address_space::ViewOptions;
 use mm::section::{
-    create_section_object, Section, SECTION_MAP_EXECUTE, SECTION_MAP_READ, SECTION_MAP_WRITE, SECTION_TYPE,
+    create_section_object, FileReader, FileSegment, ImageLayout, Section, SECTION_MAP_EXECUTE, SECTION_MAP_READ,
+    SECTION_MAP_WRITE, SECTION_TYPE,
 };
 use mm::vad::PageProtect;
-use ob::{AccessMask, Handle, ObjectRef};
+use ob::{AccessMask, Handle, Object, ObjectRef};
 use ps::eprocess::PROCESS_VM_OPERATION;
 
 use super::object::{create_named, open_by_name};
@@ -98,6 +104,44 @@ fn section_access(protect: PageProtect) -> AccessMask {
     access
 }
 
+/// Ce qui lit les pages du segment d'un fichier (`mm::section::FileReader`) :
+/// Io, par l'objet fichier sur lequel la première section du segment a été
+/// créée, que le segment tient (le `FilePointer` de la zone de contrôle de
+/// NT).
+struct FilePages(Arc<Object<File>>);
+
+/// Une lecture d'une page de fichier a déjà échoué.
+static PAGE_READ_FAILURE_REPORTED: AtomicBool = AtomicBool::new(false);
+
+impl FileReader for FilePages {
+    /// Lit par Io (MiReadPage). La faute de page arrive interruptions
+    /// masquées par sa porte, sous DISPATCH_LEVEL (`hal::idt` l'a vérifié) :
+    /// le système de fichiers attend le disque et prend ses verrous
+    /// (`KGuardedMutex`), interruptions permises le temps de la lecture. Un
+    /// fichier effacé depuis (son entrée n'est plus) ne se lit plus :
+    /// `STATUS_IN_PAGE_ERROR` pour la faute. Les APC noyau normaux attendent
+    /// la fin de la faute (`ntoskrnl::page_fault_hook`).
+    ///
+    /// # IRQL
+    /// < DISPATCH_LEVEL, sans verrou tournant tenu. Peut bloquer.
+    fn read(&self, offset: u64, buffer: &mut [u8]) -> Result<usize, NtStatus> {
+        let masked = !x86_64::instructions::interrupts::are_enabled();
+        if masked {
+            x86_64::instructions::interrupts::enable();
+        }
+        let result = self.0.node().and_then(|_| self.0.read(offset, buffer));
+        if masked {
+            x86_64::instructions::interrupts::disable();
+        }
+        if let Err(status) = result {
+            if !PAGE_READ_FAILURE_REPORTED.swap(true, Ordering::Relaxed) {
+                log::warn!("sys: page at {offset:#x} of '{}' not read for its section: {status}", self.0.path());
+            }
+        }
+        result
+    }
+}
+
 /// `SEC_BASED` pour un fichier a déjà été demandé.
 static BASED_FILE_REPORTED: AtomicBool = AtomicBool::new(false);
 /// Une vue demandée avec un type d'allocation pas encore implémenté a été
@@ -156,13 +200,19 @@ fn create_section(arguments: &[u32]) -> Result<NtStatus, NtStatus> {
             if file.is_directory() {
                 return Err(STATUS_INVALID_FILE_FOR_SECTION);
             }
-            // The bytes another section of the unchanged file holds, else
-            // the file read whole (io::section_cache).
-            let bytes: Arc<[u8]> = file.contents()?;
             if allocation & SEC_IMAGE != 0 {
-                Section::create_image_of(bytes, file.path())?
+                // Its headers and the raw data of its sections, which
+                // another image section of the unchanged file may hold
+                // (io::section_cache::IMAGES).
+                let (bytes, file_size) = file.image_contents(ImageLayout::extent)?;
+                Section::create_image_from(bytes, file_size, file.path())?
             } else {
-                Section::create_data_file(bytes, size, protect)?
+                // Nothing read: the file's segment, which another data
+                // section of the unchanged file may hold
+                // (io::section_cache::DATA); a fault reads a page in.
+                let reader = file.clone();
+                let segment = file.data_segment(|length| Ok(FileSegment::new(Box::new(FilePages(reader)), length)))?;
+                Section::create_paged_data_file(segment, size, protect)?
             }
         }
     };

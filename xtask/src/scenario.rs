@@ -154,6 +154,9 @@ pub struct Scenario {
     /// its installer and the probe's command file go to a larger system
     /// disk `C:`, which holds the whole ReactOS tree.
     pub app: Option<String>,
+    /// The bench runs the installer visible (`interactive`), without its
+    /// silent switches: QEMU's mouse drives its wizard.
+    pub interactive: bool,
     /// The boot that ends with a power cut, and the markers after which it
     /// is cut.
     pub power_cut: Option<(u32, Sequence)>,
@@ -320,6 +323,7 @@ impl Scenario {
             shell: false,
             keys: Vec::new(),
             app: None,
+            interactive: false,
             power_cut: None,
             expect_last: Vec::new(),
             expect: Vec::new(),
@@ -360,6 +364,10 @@ impl Scenario {
                 "forbid-line-start" => sc.forbid_line_start.push(value.to_string()),
                 "initial-command" => sc.initial_command = Some(value.to_string()),
                 "session" => sc.session = Some(value.to_string()),
+                "interactive" => match value {
+                    "yes" => sc.interactive = true,
+                    _ => return Err(format!("{}: unknown interactive `{value}`", at())),
+                },
                 "shell" => match value {
                     "explorer" => sc.shell = true,
                     _ => return Err(format!("{}: unknown shell `{value}`", at())),
