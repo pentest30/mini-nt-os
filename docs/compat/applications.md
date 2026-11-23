@@ -27,7 +27,7 @@ pour que chaque application teste autre chose. Elles sont rangées de la plus si
 | 4 | WinMerge 2.12.4 (2009) | GPL | Inno Setup | MFC, vues côte à côte | comparer deux fichiers, fusionner une différence, enregistrer |
 | 5 | SumatraPDF 2.5.2 (2014) | GPL | le sien | rendu de pages, défilement | ouvrir un PDF fourni, page suivante, zoom |
 | 6 | AbiWord 2.4.1 (2005) | GPL | NSIS | traitement de texte, polices, RTF | taper, mettre en gras, enregistrer en `.rtf`, rouvrir |
-| 7 | PeaZip 3.9.1 (2011) | LGPL | Inno Setup | Lazarus et Free Pascal (LCL) | ouvrir une archive, l'extraire (l'extraction par `-ext2folder`, le 2026-11-23 ; l'ouverture attend les bitmaps de 24 bits) |
+| 7 | PeaZip 3.9.1 (2011) | LGPL | Inno Setup | Lazarus et Free Pascal (LCL) | ouvrir une archive, l'extraire (fait le 2026-11-23 : l'archive listée dans son titre, l'extraction par `-ext2folder`) |
 | 8 | Dev-C++ 4.9.9.2 (2005) | GPL | NSIS | Delphi (VCL), processus `gcc` lancés | ouvrir un projet, le compiler, lancer le programme |
 | 9 | GIMP 2.6.12 (2011) | GPL | Inno Setup | GTK2, nombreuses DLL, fontconfig | ouvrir une image, appliquer un filtre, exporter en PNG (fait en Script-Fu, le 2026-11-22) |
 | 10 | Apache OpenOffice 4.1.17 (2026) | Apache 2.0 | NSIS, qui déballe son installeur MSI | très grosse application, runtimes de Visual C++ (WinSxS, à mesurer) | Writer : taper, enregistrer en `.odt`, rouvrir |
@@ -758,6 +758,30 @@ Plancher de PeaZip : son installation, ce qu'il montre, puis l'extraction (l'ét
 lignes) ; interdits : un parcours qui ne démarre pas ou dépasse son délai. Vérifié par mutation : un octet des données
 de l'archive changé, 7-Zip écrit quand même le fichier (« QeaZip… », son CRC faux) et le scénario échoue sur sa
 première ligne.
+
+### Les bitmaps de 24 bits : PeaZip ouvre son gestionnaire, le 2026-11-23
+
+Les surfaces de 24 bits par pixel (`win32k::gdi::surface::Format::Bgr` : BGR, trois octets, les lignes alignées sur
+32 bits) : les DIB sections de 24 bits et CreateBitmap de 24 bits (ses lignes données alignées sur 16 bits) ; le
+moteur dessine sur leurs pixels décodés en 32 bits ([`decode_bgr`]), puis réécrit ceux qui ont changé
+([`encode_bgr`]), comme pour les DIB sections indexées ; GetObject dit 24 bits, GetDIBits écrit des lignes de 24
+bits, une copie (BITMAP_CopyBitmap) garde sa profondeur. Les DIB sections de 1 bit (les masques des images de la
+LCL) sont des DIB sections indexées de deux couleurs. Scénario `bitmap-24` (`tests/native/bmp24.c`, AMD et Intel) :
+CreateBitmap de 24 bits (GetObject, ses bits relus), une DIB section de 24 bits (son DIBSECTION, un pixel écrit par le
+processus et lu par le noyau, un autre peint par le noyau et lu par le processus, le remplissage de la ligne gardé),
+GetDIBits de 24 bits, BitBlt vers 32 bits, une DIB section de 1 bit ; sans la modification, CreateBitmap et
+CreateDIBSection rendent NULL et il échoue.
+
+PeaZip montre son gestionnaire (« Computer's root ») au lieu de la boîte de la LCL, et ouvre une archive : son titre la
+résume, « ROUTE.ZIP - 0 dir(s), 1 file(s), 66 B > 66 B (100%) », ce que le parcours attend. Le banc : une étape
+`file` n'échoue plus quand le programme finit entre deux attentes (une seule attente, son résultat gardé ; la course
+faisait dire « ended by itself »). Le parcours : l'archive ouverte en 26 s, extraite en 67 s ; le scénario en 287 s
+(AMD). Au premier lancement, le gestionnaire ne paraît pas toujours dans les 5 s du banc (sa première fenêtre au bout
+de 3 à 12 s) : le plancher ne l'attend que par le parcours.
+
+Pas encore : la fenêtre du gestionnaire, visible et placée (64,64)-(942,604), WS_OVERLAPPEDWINDOW, n'apparaît pas sur
+la capture de l'écran ; et elle ne se ferme pas sur WM_CLOSE (le banc la termine au bout de 15 s). Les deux sont à
+mesurer ensemble (les messages qu'elle tire de sa file, ses WM_PAINT).
 
 ### La suite
 

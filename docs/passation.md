@@ -1,5 +1,14 @@
 # Notes de passation
 
+- **Les bitmaps de 24 bits** (`claude/surface-24bit`, sur la PR 172, M7, GDI,
+  [`compat/applications.md`](compat/applications.md#les-bitmaps-de-24-bits--peazip-ouvre-son-gestionnaire-le-2026-11-23) ;
+  demandé le 2026-11-23 après le diagnostic de PeaZip). `surface::Format::Bgr` (DIB sections et CreateBitmap de 24
+  bits, `decode_bgr`, `encode_bgr`), GetDIBits de 24 bits, les DIB sections de 1 bit (indexées). Scénario `bitmap-24`
+  (`tests/native/bmp24.c`). PeaZip ouvre son gestionnaire et une archive (son titre la liste : l'étape « opened » du
+  parcours) ; la course d'une étape `file` corrigée dans le banc. Vérifié : lint, tests hôte, `bitmap-24` (AMD,
+  Intel ; sans la modification, il échoue), `app-peazip` (l'archive ouverte en 26 s, extraite en 67 s), `bitmap`,
+  `icons`, `cursor`, `notepad-saveas`, `folder-view` (AMD). **Pas encore** : le gestionnaire
+  de PeaZip n'apparaît pas sur l'écran et ne se ferme pas sur WM_CLOSE ; les DIB sections de 16 bits.
 - **Le parcours de PeaZip** (`claude/peazip-route`, sur la PR 171, M7,
   [`compat/applications.md`](compat/applications.md#le-parcours-de-peazip-le-2026-11-23) ; demandé le 2026-11-23).
   L'extraction : `peazip.exe -ext2folder C:\APPS\ROUTE.ZIP` (`zip::stored` écrit l'archive), l'étape `file CHEMIN`
