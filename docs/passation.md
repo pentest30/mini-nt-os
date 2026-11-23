@@ -1,7 +1,8 @@
 # Notes de passation
 
-- **Les images des boîtes de msiexec** (`claude/msi-picture`, sur `main` ; demandé le 2026-11-23 : la page
-  d'accueil du MSI de 7-Zip, dans VirtualBox, restait vide ; « Failed to load bitmap "WixUI_Bmp_Dialog" »).
+- **Les images des boîtes de msiexec** (`claude/msi-picture`, sur `main` ; trouvé le 2026-11-23 en cherchant
+  pourquoi la page d'accueil du MSI de 7-Zip restait vide, qui était le DC du parent, PR 177 : ce MSI n'a pas
+  d'image, et « Failed to load bitmap "WixUI_Bmp_Dialog" » y reste).
   `msi.dll` charge ses images par OleLoadPicture, et l'`oleaut32` de ReactOS 0.4.16 décode tout, un BMP aussi,
   par WIC (`OLEPictureImpl_LoadWICDecoder`, CLSID_WICImagingFactory et CLSID_WICBmpDecoder) : `windowscodecs.dll`
   doit être enregistré. syssetup.inf l'enregistre (OleControlDlls), `minoinit` non : REGDB_E_CLASSNOTREG.
