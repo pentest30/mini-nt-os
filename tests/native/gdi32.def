@@ -45,3 +45,8 @@ SetTextColor@8
 StretchBlt@44
 StretchDIBits@52
 TextOutW@20
+GetBkColor@4
+GetCurrentPositionEx@8
+MoveToEx@16
+RestoreDC@8
+SaveDC@4

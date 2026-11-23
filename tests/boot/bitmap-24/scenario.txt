@@ -1,0 +1,32 @@
+# Bitmaps of 24 bits per pixel (tests/native/bmp24.c, MinGW, linked to
+# ReactOS's kernel32 and gdi32): BMP24.EXE takes the place of winlogon.exe.
+# CreateBitmap of 24 bits (GetObject: 24 bits, lines of 16 bits; its bits
+# back by GetDIBits), CreateDIBSection of 24 bits (its DIBSECTION, lines of
+# 32 bits), a pixel written by the process and read by the kernel, a pixel
+# painted by the kernel and read by the process (BGR, the padding kept),
+# GetDIBits of 24 bits, BitBlt into a DIB section of 32 bits; a DIB section
+# of 1 bit, black and white (the masks of the LCL's images). The LCL of
+# Lazarus (PeaZip) makes its images in 24 bits: without them, PeaZip stopped
+# on "Failed to get raw image description from bitmap". See
+# docs/compat/applications.md.
+features = test-smss
+requires = userland, native
+initial-command = BMP24.EXE
+cpus     = default, intel
+timeout  = 120
+
+expect = [bmp24] on WinSta0\Default
+expect = [bmp24] step 1: CreateBitmap of 24 bits 1: GetObject 24, 16x16, 24 bits, 48 bytes a line
+expect = [bmp24] step 1: its bits: 2 lines, ff0000 00ff00 0000ff 000000
+expect = [bmp24] step 2: CreateDIBSection of 24 bits 1, bits 1: GetObject 84, 24 bits, 12 bytes a line, biBitCount 24, size 24
+expect = [bmp24] step 3: written by the process, read by the kernel: ff0000
+expect = [bmp24] step 4: PatBlt 1: (1,0) 00 00 ff, (0,0) ff 00 00, padding ee ee ee
+expect = [bmp24] step 5: described 2: 24 bits; 2 lines, top line ff 00 00 00 00 ff
+expect = [bmp24] step 6: BitBlt 1: 0000ff ff0000 000000
+expect = [bmp24] step 7: a DIB section of 1 bit: GetObject 84, 1 bit, 4 bytes a line; (0,0) ffffff, (1,0) 000000; PatBlt 1: 80 80
+expect = [bmp24] done
+
+forbid = *** STOP:
+forbid = a DIB section of 24 bits per pixel
+forbid = a DIB section of 1 bits per pixel
+forbid = GetDIBits of 24 bits per pixel: not yet

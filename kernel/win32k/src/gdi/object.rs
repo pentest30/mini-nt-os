@@ -41,7 +41,7 @@ pub fn get_object(handle: u32, pid: u32, count: u32, data: bool) -> (u32, Vec<u8
             let dib = surface.user_bits(pid);
             let colors = match surface.format() {
                 super::surface::Format::Indexed { palette, .. } => palette.len() as u32,
-                super::surface::Format::Bgrx => 0,
+                super::surface::Format::Bgr | super::surface::Format::Bgrx => 0,
             };
             bitmap_description((width, height), (surface.bit_count(), colors), dib, count, data)
         }
@@ -70,7 +70,7 @@ pub fn font_description(logfont: &LogFontW32, count: u32, data: bool) -> (u32, V
 }
 
 /// BITMAP_GetObject : un bitmap de `width` × `height` de `bits_pixel` bits
-/// par pixel (1, 4, 8 ou 32 ; `colors` dans la table d'une DIB section
+/// par pixel (1, 4, 8, 24 ou 32 ; `colors` dans la table d'une DIB section
 /// indexée) ; `dib`, pour une DIB section, l'adresse de ses pixels chez
 /// l'appelant. Le BITMAP (ses lignes alignées sur 16 bits, sur 32 pour une
 /// DIB section), ou le DIBSECTION d'une DIB section si `count` le tient (les

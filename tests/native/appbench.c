@@ -651,7 +651,18 @@ static BOOL CALLBACK print_controls_of(HWND window, LPARAM pid)
         int count = 0;
         title[0] = 0;
         GetWindowTextW(window, title, 160);
-        DbgPrint(TAG "route controls of \"%s\":\n", narrow(title, line, sizeof(line)));
+        RECT place = {0}, seen = {0};
+        GetWindowRect(window, &place);
+        /* Its visible area: the clip box of its window DC (its frame
+           included); NULLREGION (1) when nothing of it can be drawn. */
+        HDC dc = GetWindowDC(window);
+        int kind = dc ? GetClipBox(dc, &seen) : 0;
+        if (dc) ReleaseDC(window, dc);
+        DbgPrint(TAG "route controls of \"%s\" (%ld,%ld)-(%ld,%ld), style %08lx, ex %08lx%s, visible %d "
+                     "(%ld,%ld)-(%ld,%ld):\n",
+                 narrow(title, line, sizeof(line)), place.left, place.top, place.right, place.bottom,
+                 (DWORD)GetWindowLongW(window, GWL_STYLE), (DWORD)GetWindowLongW(window, GWL_EXSTYLE),
+                 IsIconic(window) ? ", minimized" : "", kind, seen.left, seen.top, seen.right, seen.bottom);
         EnumChildWindows(window, print_control, (LPARAM)&count);
     }
     return TRUE;
@@ -797,9 +808,11 @@ static void run_window_route(void)
             }
             if (done) break;
             DWORD code = 0;
-            if (WaitForSingleObject(process.hProcess, 250) == WAIT_OBJECT_0 && file) {
+            /* One wait: its program may end between two (a race). */
+            BOOL ended = WaitForSingleObject(process.hProcess, 250) == WAIT_OBJECT_0;
+            if (ended && file) {
                 Sleep(250);
-            } else if (WaitForSingleObject(process.hProcess, 0) == WAIT_OBJECT_0) {
+            } else if (ended) {
                 GetExitCodeProcess(process.hProcess, &code);
                 DbgPrint(TAG "route program ended by itself at \"%s\": exit code %lx\n", label, code);
                 CloseHandle(process.hThread);

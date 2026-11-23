@@ -22,12 +22,20 @@ timeout = 900
 # (io::fat::FatVolume::add_entries; before, nographic-embedded had its long
 # name in a hole that a moved file left and its 8.3 entry at the end, and
 # PeaZip rolled back), see docs/compat/applications.md.
-# Its route then extracts C:\APPS\ROUTE.ZIP (written by xtask, stored) by
-# its command line, peazip.exe -ext2folder: PeaZip hands it to its 7-Zip and
-# its launcher and ends first; the bench waits for C:\APPS\ROUTE\ROUTE.TXT
-# and prints its two lines. Not yet: PeaZip's file manager stops on LCL's
-# "Failed to get raw image description from bitmap" (24-bit bitmaps,
-# refused by win32k), the "program window" above.
+# Its file manager opens ("Computer's root", when it is up within the
+# bench's 5 s; the route waits for it): the LCL makes its images in
+# 24 bits and their masks in 1 bit, which win32k now has (before, it stopped
+# on "Failed to get raw image description from bitmap"). Its route opens
+# C:\APPS\ROUTE.ZIP (written by xtask, stored), which the manager lists in
+# its title, then extracts it by its command line, peazip.exe -ext2folder:
+# PeaZip hands it to its 7-Zip and its launcher and ends first; the bench
+# waits for C:\APPS\ROUTE\ROUTE.TXT and prints its two lines. The manager
+# paints (a scenario's screen capture comes once all its markers are seen,
+# after the route). It does not close on WM_CLOSE, and the bench ends it:
+# PeaZip waits for its second detached `cmd.exe /c rmdir`, which ReactOS's
+# cmd freezes when it writes its error to a stderr handle that is NULL
+# (conutils leaves the stream's critical section uninitialized), a defect of
+# ReactOS, see docs/compat/applications.md.
 expect = [appbench] installer started
 expect = Setup version: Inno Setup version 5.4.2
 expect = User privileges: Administrative
@@ -38,6 +46,7 @@ expect = [appbench] installer ended: exit code 0
 expect = [appbench] installed: C:\Program Files\PeaZip\peazip.exe
 expect = [appbench] program started
 expect = [appbench] program window after
+expect = [appbench] route step: opened
 expect = [appbench] route: "C:\Program Files\PeaZip\peazip.exe" -ext2folder C:\APPS\ROUTE.ZIP
 expect = [appbench] route step: extracted
 expect = [appbench] route: ROUTE.TXT, 66 bytes
@@ -50,5 +59,7 @@ forbid = [appbench] installer still running after
 forbid = [appbench] installer ended: exit code c00000fd
 forbid = [appbench] program ended by itself: exit code c0000005
 forbid = *** STOP:
+forbid = a DIB section of 24 bits per pixel
+forbid = a DIB section of 1 bits per pixel
 forbid = [appbench] route still running after
 forbid = [appbench] route did not start
