@@ -310,8 +310,10 @@ fn ids_list() -> String {
 }
 
 /// The command file of the probe for `app`: one `key=value` per line, which
-/// `tests/native/appbench.c` reads from `C:\APPS\PROBE.TXT`.
-pub fn probe_commands(app: &App) -> String {
+/// `tests/native/appbench.c` reads from `C:\APPS\PROBE.TXT`. With
+/// `interactive`, the installer runs visible: no silent switch, QEMU's
+/// mouse drives its wizard.
+pub fn probe_commands_for(app: &App, interactive: bool) -> String {
     let installer = format!(r"C:\{APPS_DIR}\{}", app.file);
     let (install, log) = match app.kind {
         Kind::Msi => (format!(r#""C:\WINDOWS\SYSTEM32\MSIEXEC.EXE" /i {installer} /qn /l*v {INSTALL_LOG}"#), true),
@@ -319,6 +321,7 @@ pub fn probe_commands(app: &App) -> String {
         Kind::Inno => (format!(r#""{installer}" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /LOG="{INSTALL_LOG}""#), true),
         Kind::Sumatra => (format!(r#""{installer}" /s"#), false),
     };
+    let install = if interactive { format!(r#""{installer}""#) } else { install };
     let mut text = format!("name={}\r\ninstall={install}\r\n", app.name);
     if log {
         text.push_str(&format!("log={INSTALL_LOG}\r\n"));
@@ -369,19 +372,19 @@ mod tests {
 
     #[test]
     fn the_probe_runs_each_kind_of_installer_silently() {
-        let msi = probe_commands(find("7zip").unwrap());
+        let msi = probe_commands_for(find("7zip").unwrap(), false);
         assert!(msi.contains(
             r#"install="C:\WINDOWS\SYSTEM32\MSIEXEC.EXE" /i C:\APPS\7z920.msi /qn /l*v C:\APPS\INSTALL.LOG"#
         ));
         assert!(msi.contains(r"log=C:\APPS\INSTALL.LOG"));
-        let nsis = probe_commands(find("notepadpp").unwrap());
+        let nsis = probe_commands_for(find("notepadpp").unwrap(), false);
         assert!(nsis.contains(r#"install="C:\APPS\npp.7.9.2.Installer.exe" /S"#) && !nsis.contains("log="));
         assert!(nsis.contains("visible=\"C:\\APPS\\npp.7.9.2.Installer.exe\"\r\n"), "a failure shown");
         assert!(!msi.contains("visible="));
-        let inno = probe_commands(find("keepass").unwrap());
+        let inno = probe_commands_for(find("keepass").unwrap(), false);
         assert!(inno.contains(r#"/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /LOG="C:\APPS\INSTALL.LOG""#));
         assert!(inno.contains("timeout=300\r\nprogram=C:\\Program Files\\KeePass Password Safe\\KeePass.exe\r\n"));
-        assert!(probe_commands(find("sumatrapdf").unwrap()).contains(r#"-install.exe" /s"#));
+        assert!(probe_commands_for(find("sumatrapdf").unwrap(), false).contains(r#"-install.exe" /s"#));
     }
 
     #[test]

@@ -30,7 +30,7 @@ static ALIAS: AtomicPtr<KUserSharedData> = AtomicPtr::new(ptr::null_mut());
 /// PASSIVE_LEVEL, au démarrage.
 pub fn init() -> Result<*mut KUserSharedData, NtStatus> {
     let section = Section::create_pagefile(PAGE_SIZE, PageProtect::READWRITE)?;
-    let page = section.page(0)?;
+    let page = section.page(0)?.ok_or(abi::ntstatus::STATUS_INVALID_PARAMETER)?;
     let hhdm = crate::HHDM_OFFSET.load(Ordering::Acquire);
     let alias = (hhdm + page.to_phys()) as *mut KUserSharedData;
     let raw = Arc::into_raw(section).cast_mut();

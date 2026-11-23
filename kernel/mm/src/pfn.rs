@@ -394,6 +394,31 @@ pub fn for_each_outside(start: u64, end: u64, excluded: &[(u64, u64)], mut f: im
     }
 }
 
+/// Pose une fois, pour les tests hôte qui allouent des pages (sections) :
+/// la base des pages du système sur un tampon de l'hôte de `HOST_PAGES`
+/// pages, que le HHDM désigne (la page `n` est à `HHDM_OFFSET + n * 4096`).
+#[cfg(test)]
+pub(crate) fn init_for_host_tests() {
+    extern crate std;
+    use std::boxed::Box;
+
+    const HOST_PAGES: u64 = 4096;
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let layout = core::alloc::Layout::from_size_align((HOST_PAGES * 4096) as usize, 4096).unwrap();
+        // SAFETY: a non-zero size; the buffer is leaked, alive for the tests.
+        let base = unsafe { std::alloc::alloc_zeroed(layout) };
+        assert!(!base.is_null());
+        crate::HHDM_OFFSET.store(base as u64, core::sync::atomic::Ordering::Release);
+        let pfns = Box::leak(std::vec![MmPfn::FREE; HOST_PAGES as usize].into_boxed_slice());
+        let links = Box::leak(std::vec![FreeLink::UNUSED; HOST_PAGES as usize].into_boxed_slice());
+        let mut frames = PAGE_FRAMES.lock();
+        // SAFETY: arrays of the tests, never freed.
+        unsafe { frames.init(pfns.as_mut_ptr(), links.as_mut_ptr(), HOST_PAGES) };
+        frames.add_free(Pfn(0), HOST_PAGES);
+    });
+}
+
 #[cfg(test)]
 mod tests {
     extern crate std;

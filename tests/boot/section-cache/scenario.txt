@@ -1,30 +1,41 @@
-# The sections of a file share what was read of it (io::section_cache), and
-# a file is read in runs of sectors, an ATA command per run of 256 sectors
-# (io::fat, io::disk): tests/native/section1.c (MinGW, ReactOS's kernel32)
-# takes the place of winlogon.exe; C: is the ATA system disk. It writes
-# 2 MiB to C:\SECTION.BIN and times three sections of it (NtCreateSection):
-# the first reads the file, the second (the first still open) reads
-# nothing, the third (both closed) reads it again. The times are logged,
-# not judged, except that the second takes less than a tenth of the first.
+# The data sections of a file read nothing when they are made, a fault reads
+# a page of a view from the file (64 KiB at a time), and the sections of an
+# unchanged file share what was read (ADR-024, mm::section::FileSegment,
+# io::section_cache); a file is read in runs of sectors, an ATA command per
+# run of 256 sectors (io::fat, io::disk): tests/native/section1.c (MinGW,
+# ReactOS's kernel32) takes the place of winlogon.exe; C: is the ATA system
+# disk. It writes 3 MiB to C:\SECTION.BIN (the disk has 4 MiB free); a first
+# section of it and a byte in the middle of its view take less than a
+# quarter of the walk through its whole view, which reads the rest (reading
+# the whole file at the creation made it the reverse: 0 without ADR-024); a
+# second section, the first open, finds its pages read; a third, both
+# closed, reads the file again. The times are logged.
 features = test-smss, interactive
 requires = userland, native
 initial-command = SECTION1.EXE
 disk     = system
 cpus     = default, intel
-timeout  = 180
+timeout  = 240
 
 expect = [boot] Io: system disk \Device\HarddiskVolume1 (ATA, secondary master, FAT32
-expect = [section] C:\SECTION.BIN written: 2097152 bytes
+expect = [section] C:\SECTION.BIN written: 3145728 bytes
 expect = [section] first section: its bytes 1, in
+expect = [section] the section read nothing, a fault read its page: 1
 expect = [section] second section, the first open: its bytes 1, in
-expect = [section] the second took less than a tenth of the first: 1
+expect = [section] the second's pages are the first's: 1
 expect = [section] both closed, a third: its bytes 1, in
 # A write drops what the sections shared: a new section reads the file.
 expect = [section] after a write at its start, a new section sees it: 1
+expect = [section] a copy-on-write view keeps its write to itself: 1
+expect = [section] a shared write is seen by the other view: 1, and by another section: 1
+expect = [section] a file of 5000 bytes: its last byte 1, zeros after it 1, a view past its end refused 1
 # A section of \KnownDlls holds shell32.dll: its data section reads nothing.
 expect = [section] shell32.dll as a data file: MZ 1, in
 expect = [section] done
 
 forbid = *** STOP:
 forbid = [section] no view
+forbid = [section] no copy-on-write view
+forbid = [section] no shared view
 forbid = [section] the write failed
+forbid = not read for its section

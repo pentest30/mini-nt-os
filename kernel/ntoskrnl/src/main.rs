@@ -340,6 +340,9 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     hal::timer::set_clock_hook(Some(ke::clock::ki_clock_interrupt));
     sys::gates::install();
     sys::exceptions::install();
+    // From here on (a current thread for Ke), in a critical region: the page
+    // of a file's section is read at its fault (ADR-024).
+    hal::idt::set_page_fault_hook(Some(sys::exceptions::page_fault_hook));
     sys::apc::install();
     shared_data::init();
     win32k::init().expect("the USER shared section");
