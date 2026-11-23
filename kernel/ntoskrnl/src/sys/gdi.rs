@@ -77,6 +77,61 @@ pub(super) fn nt_gdi_rectangle(arguments: &[u32]) -> NtStatus {
     }
 }
 
+/// NtGdiSaveDC(hdc) : l'état du DC posé sur sa pile de sauvegardes
+/// (`win32k::gdi::dc::save_dc`) ; 0 et `ERROR_INVALID_HANDLE` pour un DC qui
+/// n'est pas au processus.
+pub(super) fn nt_gdi_save_dc(arguments: &[u32]) -> NtStatus {
+    let [hdc] = arguments[..1] else { unreachable!("1 argument") };
+    match win32k::gdi::dc::save_dc(hdc) {
+        Ok(saved) => NtStatus(saved as u32),
+        Err(error) => fail(error, 0),
+    }
+}
+
+/// NtGdiRestoreDC(hdc, iSaveLevel) : BOOL, l'état du DC remis comme à
+/// l'identifiant `level` — négatif, depuis le haut de la pile, -1 la
+/// dernière pose — les poses d'après effacées
+/// (`win32k::gdi::dc::restore_dc`) ; FALSE et `ERROR_INVALID_PARAMETER`
+/// pour un identifiant qui ne désigne rien de la pile, FALSE et
+/// `ERROR_INVALID_HANDLE` pour un DC qui n'est pas au processus.
+pub(super) fn nt_gdi_restore_dc(arguments: &[u32]) -> NtStatus {
+    let [hdc, level] = arguments[..2] else { unreachable!("2 arguments") };
+    match win32k::gdi::dc::restore_dc(hdc, level as i32) {
+        Ok(restored) => NtStatus(u32::from(restored)),
+        Err(error) => fail(error, 0),
+    }
+}
+
+/// NtGdiExtCreatePen(dwPenStyle, ulWidth, ulBrushStyle, ulColor,
+/// ulClientHatch, ulHatch, dwStyleCount, pUnsafeStyle, cjDIB, bOldStylePen,
+/// hBrush) : HPEN, le stylo étendu au processus courant
+/// (`win32k::gdi::pen::Pen::ext_create`, les longs de style lus puis jetés) ;
+/// 0 et `ERROR_INVALID_PARAMETER` pour un style ou un pinceau refusé, 0 et
+/// `ERROR_NOT_ENOUGH_MEMORY` sans place, 0 et `ERROR_INVALID_HANDLE` pour un
+/// DC qui n'est pas au processus.
+pub(super) fn nt_gdi_ext_create_pen(arguments: &[u32]) -> NtStatus {
+    let [style, width, brush, color, _client_hatch, _hatch, count, styles, _dib, _old, _brush_h] = arguments[..11]
+    else {
+        unreachable!("11 arguments")
+    };
+    if count > 16 {
+        return fail(abi::winerror::ERROR_INVALID_PARAMETER, 0);
+    }
+    if count > 0 {
+        if styles == 0 {
+            return fail(abi::winerror::ERROR_INVALID_PARAMETER, 0);
+        }
+        if ke::usermem::probe_for_read(u64::from(styles), count as usize * 4, 1).is_err() {
+            return fail(abi::winerror::ERROR_INVALID_PARAMETER, 0);
+        }
+    }
+    match win32k::gdi::pen::Pen::ext_create(style, width as i32, brush, color) {
+        Ok(handle) => NtStatus(handle),
+        Err(STATUS_INVALID_PARAMETER) => fail(abi::winerror::ERROR_INVALID_PARAMETER, 0),
+        Err(_) => fail(abi::winerror::ERROR_NOT_ENOUGH_MEMORY, 0),
+    }
+}
+
 /// NtGdiGetDCObject(hdc, ObjectType) : HANDLE, l'objet du type
 /// GDI_OBJECT_TYPE_* choisi dans le DC (`win32k::gdi::dc::get_dc_object`) ;
 /// NULL et `ERROR_INVALID_HANDLE` pour un DC qui n'est pas au processus,

@@ -22,9 +22,24 @@
 //! la vue rend `STATUS_IMAGE_NOT_AT_BASE`, et `ntdll` applique les relocations
 //! sur des pages qui se copient à l'écriture.
 //!
-//! Le fichier est une copie de ses octets en mémoire, lus par Io à la
-//! création de la section (`sys::section`) : les écritures dans une vue
-//! partagée d'une section de fichier n'y retournent pas.
+//! Une section de données d'un fichier ouvert (NtCreateSection,
+//! `sys::section`) ne lit rien à sa création (ADR-024, proposée) : ses pages
+//! sont celles d'un [`FileSegment`], le segment du fichier que partagent
+//! toutes ses sections de données tant que le fichier ne change pas (le
+//! `DataSectionObject` des SECTION_OBJECT_POINTERS de NT ; Io le retrouve,
+//! `io::section_cache`). La première faute sur une page d'une vue la fait
+//! lire du fichier ([`FileSegment::read_in`], par un [`FileReader`] d'Io),
+//! verrou de la VAD relâché, à l'IRQL de la faute (sous DISPATCH_LEVEL),
+//! avec les pages absentes de ses 64 Kio alignés (MmMakeSegmentResident de
+//! ReactOS) ; puis la faute reprend (STATUS_MM_RESTART_OPERATION de
+//! ReactOS). Les écritures dans une vue partagée vont aux pages du segment,
+//! que voient les autres vues et sections du fichier, mais pas au fichier.
+//!
+//! Une section d'image lit à sa création ses en-têtes et les données de ses
+//! sections ([`ImageLayout::extent`]), pas ce qui suit (les données ajoutées
+//! d'un installeur) : une copie que les écritures du fichier ne changent pas.
+//! Les sections créées par le noyau d'octets déjà en mémoire (NLS, ntdll,
+//! tests) gardent ces octets ([`Section::create_data_file`]).
 //!
 //! L'objet section d'Ob ([`SECTION_TYPE`], [`create_section_object`]) tient
 //! la section ; une vue la tient aussi, et survit donc à la fermeture du
@@ -45,19 +60,24 @@
 //! NtUnmapViewOfSection) sont dans `ntoskrnl::sys::section`.
 //!
 //! Pas encore : le décommit des pages d'une section, `SEC_BASED` pour un
-//! fichier, NtExtendSection, vues dans l'espace système,
-//! retour au fichier, partage des pages d'un même fichier entre ses sections.
+//! fichier, NtExtendSection, vues dans l'espace système d'une section de
+//! fichier, retour au fichier (pages modifiées), cohérence avec les
+//! écritures du fichier (une page déjà lue garde ce qu'elle avait, une page
+//! lue après l'écriture voit le fichier écrit), pages d'image à la faute.
 //!
 //! WI7e Ch.5 §Section Objects
 
+use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicU64, Ordering};
 
 use abi::ntstatus::{
     NtStatus, STATUS_INVALID_IMAGE_FORMAT, STATUS_INVALID_PAGE_PROTECTION, STATUS_INVALID_PARAMETER,
-    STATUS_MAPPED_FILE_SIZE_ZERO, STATUS_NO_MEMORY, STATUS_SECTION_PROTECTION, STATUS_SECTION_TOO_BIG,
+    STATUS_IN_PAGE_ERROR, STATUS_MAPPED_FILE_SIZE_ZERO, STATUS_NO_MEMORY, STATUS_SECTION_PROTECTION,
+    STATUS_SECTION_TOO_BIG,
 };
 use hal::sync::KSpinLock;
 use ob::{AccessMask, GenericMapping, Object, ObjectType};
@@ -184,13 +204,25 @@ impl ImageLayout {
     /// (section et fichier alignés pareil) est tout entière
     /// `EXECUTE_WRITECOPY`, comme sur XP.
     pub fn new(file: &[u8]) -> Result<Self, NtStatus> {
+        Self::parse(file, file.len() as u64)
+    }
+
+    /// Comme [`new`](Self::new), d'après `bytes`, le début d'un fichier de
+    /// `file_size` octets qui tient ses en-têtes et les données de ses
+    /// sections ([`extent`](Self::extent)) ; ce qui manque à `bytes` est
+    /// `STATUS_INVALID_IMAGE_FORMAT`.
+    pub fn parse(bytes: &[u8], file_size: u64) -> Result<Self, NtStatus> {
         let invalid = |_| STATUS_INVALID_IMAGE_FORMAT;
-        let pe = pe::Pe32::parse(file).map_err(invalid)?;
+        // Pe32 reads its optional header and section table without checking
+        // they are there: a short file is refused before.
+        headers_end(bytes).ok_or(STATUS_INVALID_IMAGE_FORMAT)?;
+        let available = file_size.min(bytes.len() as u64);
+        let pe = pe::Pe32::parse(bytes).map_err(invalid)?;
         let (header, opt) = (pe.file_header(), pe.optional_header());
         let size_of_image = u64::from(opt.size_of_image).next_multiple_of(PAGE);
         let size_of_headers = u64::from(opt.size_of_headers);
         let section_alignment = u64::from(opt.section_alignment);
-        if size_of_image == 0 || size_of_headers > file.len() as u64 || size_of_headers > size_of_image {
+        if size_of_image == 0 || size_of_headers > available || size_of_headers > size_of_image {
             return Err(STATUS_INVALID_IMAGE_FORMAT);
         }
         let info = ImageInfo {
@@ -207,7 +239,7 @@ impl ImageLayout {
             dll_characteristics: opt.dll_characteristics,
             loader_flags: opt.loader_flags,
             contains_code: opt.size_of_code != 0 || opt.address_of_entry_point != 0,
-            file_size: file.len() as u64,
+            file_size,
         };
         let pages = size_of_image / PAGE;
         let mut copies = alloc::vec![(0, 0, size_of_headers)];
@@ -220,10 +252,7 @@ impl ImageLayout {
             let (raw_offset, raw_size) = (u64::from(section.pointer_to_raw_data), u64::from(section.size_of_raw_data));
             let size = if virtual_size == 0 { raw_size } else { virtual_size };
             let copied = raw_size.min(size);
-            if va < end_of_previous
-                || va + size > size_of_image
-                || (copied != 0 && raw_offset + copied > file.len() as u64)
-            {
+            if va < end_of_previous || va + size > size_of_image || (copied != 0 && raw_offset + copied > available) {
                 return Err(STATUS_INVALID_IMAGE_FORMAT);
             }
             if section_alignment >= PAGE && !va.is_multiple_of(PAGE) {
@@ -246,6 +275,29 @@ impl ImageLayout {
             }
         }
         Ok(Self { info, protects, copies })
+    }
+
+    /// Combien d'octets du début d'un fichier de `file_size` octets une
+    /// section d'image lit, d'après `head`, son début : ses en-têtes
+    /// (`SizeOfHeaders`) et les données de ses sections, pas ce qui les suit
+    /// (les données qu'un installeur ajoute à son exécutable). Tout le
+    /// fichier si `head` ne tient pas ses en-têtes ou si ce n'est pas un
+    /// PE32 : [`parse`](Self::parse) en jugera sur le fichier entier.
+    pub fn extent(head: &[u8], file_size: u64) -> u64 {
+        if headers_end(head).is_none() {
+            return file_size;
+        }
+        let Ok(pe) = pe::Pe32::parse(head) else { return file_size };
+        let mut end = u64::from(pe.optional_header().size_of_headers);
+        for section in pe.sections() {
+            let (virtual_size, raw_size) = (u64::from(section.virtual_size), u64::from(section.size_of_raw_data));
+            let size = if virtual_size == 0 { raw_size } else { virtual_size };
+            let copied = raw_size.min(size);
+            if copied != 0 {
+                end = end.max(u64::from(section.pointer_to_raw_data) + copied);
+            }
+        }
+        end.min(file_size)
     }
 
     /// Remplit `page`, la page `index` de l'image, depuis `file` : les octets
@@ -292,15 +344,199 @@ pub fn view_protection_allowed(section: PageProtect, view: PageProtect) -> bool 
     (!view.executable() || section.executable()) && (!writes_shared(view) || writes_shared(section))
 }
 
+/// La fin des en-têtes d'un PE32 au début de `head` : en-tête optionnel et
+/// table des sections compris ; `None` si `head` ne les tient pas.
+fn headers_end(head: &[u8]) -> Option<usize> {
+    let u16_at = |at: usize| head.get(at..at.checked_add(2)?).map(|b| usize::from(u16::from_le_bytes([b[0], b[1]])));
+    let u32_at =
+        |at: usize| head.get(at..at.checked_add(4)?).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize);
+    let optional_header = u32_at(0x3C)?.checked_add(4 + core::mem::size_of::<pe::ImageFileHeader>())?;
+    let file_header = optional_header - core::mem::size_of::<pe::ImageFileHeader>();
+    let sections = u16_at(file_header + 2)?;
+    let optional_size = u16_at(file_header + 16)?;
+    let table = optional_header.checked_add(optional_size)?;
+    let end = table
+        .checked_add(sections * core::mem::size_of::<pe::ImageSectionHeader>())?
+        .max(optional_header.checked_add(core::mem::size_of::<pe::ImageOptionalHeader32>())?);
+    (end <= head.len()).then_some(end)
+}
+
+/// Ce qui lit un fichier pour le segment de ses sections de données : Io,
+/// par `ntoskrnl::sys::section`.
+pub trait FileReader: Send + Sync {
+    /// Lit les octets du fichier à partir de `offset` dans `buffer` (de la
+    /// mémoire du noyau) ; rend combien, moins à la fin du fichier.
+    ///
+    /// # IRQL
+    /// < DISPATCH_LEVEL, sans verrou tournant tenu : l'IRQL d'une faute de
+    /// page. Peut bloquer.
+    fn read(&self, offset: u64, buffer: &mut [u8]) -> Result<usize, NtStatus>;
+}
+
+/// Les pages qu'une faute fait lire ensemble : 64 Kio, alignés
+/// (MmMakeSegmentResident de ReactOS pour un fichier de données).
+pub const READ_CLUSTER_PAGES: u64 = 16;
+
+/// Les pages lues des fichiers pour leurs segments, depuis le démarrage.
+static FILE_PAGES_READ: AtomicU64 = AtomicU64::new(0);
+
+/// Les pages lues des fichiers pour leurs segments depuis le démarrage.
+///
+/// # IRQL
+/// Tout niveau.
+pub fn file_pages_read() -> u64 {
+    FILE_PAGES_READ.load(Ordering::Relaxed)
+}
+
+/// Le segment d'un fichier : ses pages lues, que partagent toutes ses
+/// sections de données (le `DataSectionObject` de NT). Il ne lit rien à sa
+/// création ; [`read_in`](Self::read_in) lit une page à sa première faute.
+/// Ses pages restent jusqu'à sa disparition, avec sa dernière section.
+pub struct FileSegment {
+    reader: Box<dyn FileReader>,
+    /// La taille du fichier à la création du segment.
+    size: u64,
+    /// Les pages lues, par indice dans le fichier.
+    pages: KSpinLock<BTreeMap<u64, Pfn>>,
+}
+
+impl FileSegment {
+    /// Le segment d'un fichier de `size` octets, que `reader` lit.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn new(reader: Box<dyn FileReader>, size: u64) -> Arc<Self> {
+        Arc::new(Self { reader, size, pages: KSpinLock::new(BTreeMap::new()) })
+    }
+
+    /// La taille du fichier à sa création.
+    pub fn size(&self) -> u64 {
+        self.size
+    }
+
+    /// Le nombre de pages lues.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn resident_pages(&self) -> usize {
+        self.pages.lock().len()
+    }
+
+    /// La page `index`, si elle est lue.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn resident(&self, index: u64) -> Option<Pfn> {
+        self.pages.lock().get(&index).copied()
+    }
+
+    /// MmMakeSegmentResident : lit la page `index` du fichier, avec celles
+    /// qui manquent autour d'elle dans ses 64 Kio alignés
+    /// ([`READ_CLUSTER_PAGES`], [`missing_run`]), par une seule lecture ; des
+    /// zéros après la fin du fichier. Rien à faire si elle est déjà lue ; une
+    /// page lue entre-temps par une autre faute garde la sienne.
+    ///
+    /// # Errors
+    /// `STATUS_IN_PAGE_ERROR` si la lecture échoue (rien n'est gardé),
+    /// `STATUS_NO_MEMORY` sans page libre.
+    ///
+    /// # IRQL
+    /// < DISPATCH_LEVEL, sans verrou tournant tenu (le lecteur peut
+    /// bloquer). Peut bloquer.
+    pub fn read_in(&self, index: u64) -> Result<(), NtStatus> {
+        let pages = self.size.div_ceil(PAGE).max(index + 1);
+        let (first, end) = {
+            let resident = self.pages.lock();
+            if resident.contains_key(&index) {
+                return Ok(());
+            }
+            missing_run(index, pages, |page| resident.contains_key(&page))
+        };
+        let mut buffer = alloc::vec![0u8; ((end - first) * PAGE) as usize];
+        let from = first * PAGE;
+        let wanted = (end * PAGE).min(self.size.max(from)) - from;
+        if wanted != 0 {
+            // Fewer bytes than asked (the file got shorter): zeros after.
+            self.reader.read(from, &mut buffer[..wanted as usize]).map_err(|_| STATUS_IN_PAGE_ERROR)?;
+        }
+        let hhdm = crate::HHDM_OFFSET.load(Ordering::Acquire);
+        let mut frames = Vec::with_capacity((end - first) as usize);
+        for (page, bytes) in (first..end).zip(buffer.chunks_exact(PAGE as usize)) {
+            let Some(frame) = pfn::allocate_page(PageUsage::Section) else {
+                frames.into_iter().for_each(|(_, frame)| pfn::free_page(frame));
+                return Err(STATUS_NO_MEMORY);
+            };
+            // SAFETY: a page just allocated, reached through the HHDM, that
+            // nothing else uses yet.
+            unsafe { core::ptr::copy_nonoverlapping(bytes.as_ptr(), (hhdm + frame.to_phys()) as *mut u8, bytes.len()) };
+            frames.push((page, frame));
+        }
+        let mut resident = self.pages.lock();
+        let mut inserted = 0;
+        for (page, frame) in frames {
+            match resident.entry(page) {
+                alloc::collections::btree_map::Entry::Vacant(slot) => {
+                    slot.insert(frame);
+                    inserted += 1;
+                }
+                // Read meanwhile by another fault: its page may be mapped.
+                alloc::collections::btree_map::Entry::Occupied(_) => pfn::free_page(frame),
+            }
+        }
+        FILE_PAGES_READ.fetch_add(inserted, Ordering::Relaxed);
+        Ok(())
+    }
+}
+
+impl Drop for FileSegment {
+    fn drop(&mut self) {
+        // Its last section is gone, and every view held one: no page table
+        // maps these pages any more.
+        for &page in self.pages.lock().values() {
+            pfn::free_page(page);
+        }
+    }
+}
+
+impl core::fmt::Debug for FileSegment {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "FileSegment({:#x} bytes, {} pages read)", self.size, self.resident_pages())
+    }
+}
+
+/// Les pages à lire pour la page `index` d'un fichier de `pages` pages :
+/// la suite des pages non lues (`resident` dit celles qui le sont) qui la
+/// contient, dans ses [`READ_CLUSTER_PAGES`] alignées. Rend (première,
+/// fin exclue).
+pub fn missing_run(index: u64, pages: u64, resident: impl Fn(u64) -> bool) -> (u64, u64) {
+    let cluster = index - index % READ_CLUSTER_PAGES;
+    let limit = (cluster + READ_CLUSTER_PAGES).min(pages);
+    let mut first = index;
+    while first > cluster && !resident(first - 1) {
+        first -= 1;
+    }
+    let mut end = index + 1;
+    while end < limit && !resident(end) {
+        end += 1;
+    }
+    (first, end)
+}
+
 /// D'où viennent les pages d'une section.
 enum Source {
     Zero,
     File(Arc<[u8]>),
-    Image { file: Arc<[u8]>, layout: ImageLayout },
+    Image {
+        file: Arc<[u8]>,
+        layout: ImageLayout,
+    },
+    /// Le segment d'un fichier : ses pages se lisent à la faute.
+    Segment(Arc<FileSegment>),
 }
 
 impl Source {
-    /// Remplit `page`, la page `index` de la section.
+    /// Remplit `page`, la page `index` de la section, pour une source en
+    /// mémoire.
     fn fill(&self, index: u64, page: &mut [u8]) {
         match self {
             Source::Zero => page.fill(0),
@@ -311,6 +547,7 @@ impl Source {
                 page[..end - start].copy_from_slice(&file[start..end]);
             }
             Source::Image { file, layout } => layout.fill(file, index, page),
+            Source::Segment(_) => unreachable!("a segment's pages are read in, not filled"),
         }
     }
 }
@@ -423,6 +660,39 @@ impl Section {
         Ok(Self::new(SectionKind::DataFile, size, protect, Source::File(file)))
     }
 
+    /// Une section de données du fichier dont `segment` tient les pages, de
+    /// `size` octets (0 : tout le fichier, qui ne peut être vide) ;
+    /// `STATUS_SECTION_TOO_BIG` au-delà du fichier. Rien n'est lu : ses pages
+    /// sont celles du segment, lues à leur première faute.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn create_paged_data_file(
+        segment: Arc<FileSegment>,
+        size: u64,
+        protect: PageProtect,
+    ) -> Result<Arc<Self>, NtStatus> {
+        check_protection(protect)?;
+        let length = segment.size();
+        if length == 0 {
+            return Err(STATUS_MAPPED_FILE_SIZE_ZERO);
+        }
+        if size > length {
+            return Err(STATUS_SECTION_TOO_BIG);
+        }
+        let size = if size == 0 { length } else { size };
+        Ok(Self::new(SectionKind::DataFile, size, protect, Source::Segment(segment)))
+    }
+
+    /// Le segment du fichier d'une section de données créée par
+    /// [`create_paged_data_file`](Self::create_paged_data_file).
+    pub fn file_segment(&self) -> Option<&Arc<FileSegment>> {
+        match &self.source {
+            Source::Segment(segment) => Some(segment),
+            _ => None,
+        }
+    }
+
     /// Une section de l'image PE32 `file` ([`ImageLayout`]).
     ///
     /// # IRQL
@@ -439,9 +709,20 @@ impl Section {
     /// # IRQL
     /// <= DISPATCH_LEVEL.
     pub fn create_image_of(file: Arc<[u8]>, file_name: &str) -> Result<Arc<Self>, NtStatus> {
-        let layout = ImageLayout::new(&file)?;
+        let size = file.len() as u64;
+        Self::create_image_from(file, size, file_name)
+    }
+
+    /// Comme [`create_image_of`](Self::create_image_of), d'après `bytes`, le
+    /// début d'un fichier de `file_size` octets qui tient ses en-têtes et les
+    /// données de ses sections ([`ImageLayout::extent`]).
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn create_image_from(bytes: Arc<[u8]>, file_size: u64, file_name: &str) -> Result<Arc<Self>, NtStatus> {
+        let layout = ImageLayout::parse(&bytes, file_size)?;
         let size = layout.info.size_of_image;
-        let source = Source::Image { file, layout };
+        let source = Source::Image { file: bytes, layout };
         Ok(Self::named(SectionKind::Image, size, PageProtect::EXECUTE_WRITECOPY, source, Some(file_name.into())))
     }
 
@@ -523,12 +804,16 @@ impl Section {
         }
     }
 
-    /// Le nombre de pages créées.
+    /// Le nombre de pages créées ; celles de son segment pour une section
+    /// de données d'un fichier, que partagent ses autres sections.
     ///
     /// # IRQL
     /// <= DISPATCH_LEVEL.
     pub fn resident_pages(&self) -> usize {
-        self.pages.lock().len()
+        match &self.source {
+            Source::Segment(segment) => segment.resident_pages(),
+            _ => self.pages.lock().len(),
+        }
     }
 
     /// Écrit `data` dans la section en `offset`, par l'alias du noyau de ses
@@ -591,21 +876,27 @@ impl Section {
         let mut done = 0;
         while done < length {
             let at = offset + done as u64;
-            let page = self.page(at / PAGE)?;
+            // A section of the paging file: never a page to read in.
+            let page = self.page(at / PAGE)?.ok_or(STATUS_INVALID_PARAMETER)?;
             done += f((hhdm + page.to_phys()) as *mut u8, (at % PAGE) as usize, done);
         }
         Ok(())
     }
 
     /// La page `index`, créée et remplie au premier besoin ;
-    /// `STATUS_NO_MEMORY` sans page libre.
+    /// `STATUS_NO_MEMORY` sans page libre. `None` pour une page du segment
+    /// d'un fichier qui n'est pas encore lue : [`read_in`](Self::read_in)
+    /// la lira, sans verrou tournant tenu.
     ///
     /// # IRQL
     /// <= DISPATCH_LEVEL.
-    pub(crate) fn page(&self, index: u64) -> Result<Pfn, NtStatus> {
+    pub(crate) fn page(&self, index: u64) -> Result<Option<Pfn>, NtStatus> {
+        if let Source::Segment(segment) = &self.source {
+            return Ok(segment.resident(index));
+        }
         let mut pages = self.pages.lock();
         if let Some(&page) = pages.get(&index) {
-            return Ok(page);
+            return Ok(Some(page));
         }
         let page = pfn::allocate_page(PageUsage::Section).ok_or(STATUS_NO_MEMORY)?;
         let hhdm = crate::HHDM_OFFSET.load(core::sync::atomic::Ordering::Acquire);
@@ -614,7 +905,23 @@ impl Section {
         let bytes = unsafe { core::slice::from_raw_parts_mut((hhdm + page.to_phys()) as *mut u8, PAGE as usize) };
         self.source.fill(index, bytes);
         pages.insert(index, page);
-        Ok(page)
+        Ok(Some(page))
+    }
+
+    /// Lit la page `index` d'une section de données d'un fichier (et ses
+    /// voisines, [`FileSegment::read_in`]) ; rien pour une autre section,
+    /// dont les pages se remplissent en mémoire.
+    ///
+    /// # Errors
+    /// Celles de [`FileSegment::read_in`].
+    ///
+    /// # IRQL
+    /// < DISPATCH_LEVEL, sans verrou tournant tenu. Peut bloquer.
+    pub fn read_in(&self, index: u64) -> Result<(), NtStatus> {
+        match &self.source {
+            Source::Segment(segment) => segment.read_in(index),
+            _ => Ok(()),
+        }
     }
 }
 
@@ -642,7 +949,7 @@ pub fn view_protection(section: &Section, view: PageProtect) -> Result<PageProte
 impl Drop for Section {
     fn drop(&mut self) {
         // No view is left (each holds a reference): no page table maps these
-        // pages any more.
+        // pages any more. A segment's pages go with the segment.
         for &page in self.pages.lock().values() {
             pfn::free_page(page);
         }
@@ -903,5 +1210,209 @@ mod tests {
         assert!(page[5000 - 4096..].iter().all(|&b| b == 0));
         source.fill(2, &mut page);
         assert!(page.iter().all(|&b| b == 0), "past the end of the file");
+    }
+
+    extern crate std;
+    use std::sync::Mutex;
+
+    /// A file in memory that counts its reads: (offset, length) of each.
+    struct CountingReader {
+        bytes: Vec<u8>,
+        reads: Arc<Mutex<Vec<(u64, usize)>>>,
+        fail: Arc<Mutex<bool>>,
+        /// Called once, during the first read (a fault on another thread).
+        during: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    }
+
+    impl FileReader for CountingReader {
+        fn read(&self, offset: u64, buffer: &mut [u8]) -> Result<usize, NtStatus> {
+            let during = self.during.lock().unwrap().take();
+            if let Some(during) = during {
+                during();
+            }
+            if *self.fail.lock().unwrap() {
+                return Err(abi::ntstatus::STATUS_IO_DEVICE_ERROR);
+            }
+            self.reads.lock().unwrap().push((offset, buffer.len()));
+            let start = (offset as usize).min(self.bytes.len());
+            let count = buffer.len().min(self.bytes.len() - start);
+            buffer[..count].copy_from_slice(&self.bytes[start..start + count]);
+            Ok(count)
+        }
+    }
+
+    type Reads = Arc<Mutex<Vec<(u64, usize)>>>;
+
+    /// A segment over `len` bytes of a pattern, its reads and its failure
+    /// switch.
+    fn segment(len: usize) -> (Arc<FileSegment>, Vec<u8>, Reads, Arc<Mutex<bool>>) {
+        crate::pfn::init_for_host_tests();
+        let bytes: Vec<u8> = (0..len).map(|i| (i * 7 + i / 4096) as u8).collect();
+        let reads = Arc::new(Mutex::new(Vec::new()));
+        let fail = Arc::new(Mutex::new(false));
+        let reader =
+            CountingReader { bytes: bytes.clone(), reads: reads.clone(), fail: fail.clone(), during: Mutex::new(None) };
+        (FileSegment::new(Box::new(reader), len as u64), bytes, reads, fail)
+    }
+
+    /// The bytes of a page of the host's PFN database.
+    fn bytes_of(frame: Pfn) -> &'static [u8] {
+        let hhdm = crate::HHDM_OFFSET.load(Ordering::Acquire);
+        // SAFETY: a page of the host buffer (`init_for_host_tests`), alive
+        // while its segment is, which the caller holds.
+        unsafe { core::slice::from_raw_parts((hhdm + frame.to_phys()) as *const u8, PAGE as usize) }
+    }
+
+    #[test]
+    fn a_data_section_of_a_file_reads_nothing_until_a_fault_reads_its_page_in() {
+        let (segment, bytes, reads, _) = segment(300 * 1024);
+        let section = Section::create_paged_data_file(segment.clone(), 0, RO).unwrap();
+        assert_eq!((section.kind(), section.size()), (SectionKind::DataFile, 300 * 1024));
+        assert!(reads.lock().unwrap().is_empty(), "nothing read at its creation");
+        assert_eq!(section.page(20), Ok(None), "not read yet: the fault reads it in, its lock released");
+        section.read_in(20).unwrap();
+        assert_eq!(*reads.lock().unwrap(), [(16 * PAGE, 16 * PAGE as usize)], "its 64 KiB, in one read");
+        let frame = section.page(20).unwrap().expect("read in");
+        assert_eq!(bytes_of(frame), &bytes[20 * PAGE as usize..21 * PAGE as usize]);
+        assert_eq!(section.page(15), Ok(None), "another cluster");
+        assert_eq!(section.resident_pages(), 16);
+        section.read_in(20).unwrap();
+        section.read_in(31).unwrap();
+        assert_eq!(reads.lock().unwrap().len(), 1, "read once");
+        assert!(file_pages_read() >= 16);
+    }
+
+    #[test]
+    fn the_sections_of_a_file_share_the_pages_of_its_segment() {
+        let (segment, _, reads, _) = segment(5 * PAGE as usize);
+        let first = Section::create_paged_data_file(segment.clone(), 0, RO).unwrap();
+        let second = Section::create_paged_data_file(segment.clone(), 2 * PAGE, PageProtect::READWRITE).unwrap();
+        first.read_in(1).unwrap();
+        assert_eq!(first.page(1).unwrap(), second.page(1).unwrap(), "the same page, not a copy");
+        assert!(second.page(1).unwrap().is_some());
+        second.read_in(0).unwrap();
+        assert_eq!(reads.lock().unwrap().len(), 1, "the second section reads nothing more");
+        assert_eq!(second.size(), 2 * PAGE);
+        assert!(core::ptr::eq(&**first.file_segment().unwrap(), &**second.file_segment().unwrap()));
+        drop(first);
+        assert_eq!(second.resident_pages(), 5, "the pages stay with the segment");
+    }
+
+    #[test]
+    fn a_file_that_ends_inside_a_page_reads_zeros_after_its_end() {
+        let (segment, bytes, reads, _) = segment(5000);
+        let section = Section::create_paged_data_file(segment, 0, RO).unwrap();
+        section.read_in(1).unwrap();
+        assert_eq!(*reads.lock().unwrap(), [(0, 5000)], "both pages, no more than the file");
+        let last = bytes_of(section.page(1).unwrap().unwrap());
+        assert_eq!(&last[..5000 - 4096], &bytes[4096..]);
+        assert!(last[5000 - 4096..].iter().all(|&b| b == 0), "zeros past the end of the file");
+        assert_eq!(bytes_of(section.page(0).unwrap().unwrap()), &bytes[..4096]);
+    }
+
+    #[test]
+    fn a_page_past_the_end_of_a_shorter_file_is_zeros() {
+        // The file got shorter after its segment was made: fewer bytes.
+        let (segment, _, reads, _) = segment(3 * PAGE as usize);
+        segment.read_in(7).unwrap();
+        assert_eq!(*reads.lock().unwrap(), [(0, 3 * PAGE as usize)], "no more than the file, in its cluster");
+        assert!(bytes_of(segment.resident(7).unwrap()).iter().all(|&b| b == 0));
+    }
+
+    #[test]
+    fn a_failed_read_keeps_nothing_and_the_next_fault_reads_again() {
+        let (segment, bytes, reads, fail) = segment(2 * PAGE as usize);
+        *fail.lock().unwrap() = true;
+        assert_eq!(segment.read_in(0), Err(STATUS_IN_PAGE_ERROR));
+        assert_eq!(segment.resident_pages(), 0);
+        *fail.lock().unwrap() = false;
+        segment.read_in(0).unwrap();
+        assert_eq!(reads.lock().unwrap().len(), 1);
+        assert_eq!(bytes_of(segment.resident(1).unwrap()), &bytes[4096..]);
+    }
+
+    #[test]
+    fn a_page_read_by_another_fault_meanwhile_keeps_its_frame() {
+        crate::pfn::init_for_host_tests();
+        let bytes = alloc::vec![0x5Au8; 2 * PAGE as usize];
+        let holder: Arc<Mutex<Option<Arc<FileSegment>>>> = Arc::new(Mutex::new(None));
+        let other: Arc<Mutex<Option<Pfn>>> = Arc::new(Mutex::new(None));
+        let (inner, seen) = (holder.clone(), other.clone());
+        let reads = Arc::new(Mutex::new(Vec::new()));
+        let reader = CountingReader {
+            bytes,
+            reads: reads.clone(),
+            fail: Arc::new(Mutex::new(false)),
+            // While the first fault reads, a second one reads page 1 in.
+            during: Mutex::new(Some(Box::new(move || {
+                let segment = inner.lock().unwrap().clone().unwrap();
+                segment.read_in(1).unwrap();
+                *seen.lock().unwrap() = segment.resident(1);
+            }))),
+        };
+        let segment = FileSegment::new(Box::new(reader), 2 * PAGE);
+        *holder.lock().unwrap() = Some(segment.clone());
+        segment.read_in(0).unwrap();
+        assert_eq!(reads.lock().unwrap().len(), 2, "both faults read");
+        let theirs = other.lock().unwrap().expect("the other fault's page");
+        assert_eq!(segment.resident(1), Some(theirs), "the page of the other fault, which a view may map");
+        assert_eq!(segment.resident_pages(), 2);
+        *holder.lock().unwrap() = None;
+    }
+
+    #[test]
+    fn a_fault_reads_the_missing_pages_of_its_aligned_cluster() {
+        let none = |_| false;
+        assert_eq!(missing_run(20, 100, none), (16, 32));
+        assert_eq!(missing_run(0, 3, none), (0, 3), "the end of the file");
+        let some = |page: u64| page == 18 || page == 25;
+        assert_eq!(missing_run(20, 100, some), (19, 25), "between two pages already read");
+        assert_eq!(missing_run(17, 100, some), (16, 18));
+        assert_eq!(missing_run(33, 34, none), (32, 34));
+    }
+
+    #[test]
+    fn a_paged_data_section_checks_its_arguments() {
+        let (segment, ..) = segment(10);
+        assert_eq!(Section::create_paged_data_file(segment.clone(), 11, RO).err(), Some(STATUS_SECTION_TOO_BIG));
+        assert_eq!(Section::create_paged_data_file(segment.clone(), 4, RO).map(|s| s.size()), Ok(4));
+        assert_eq!(
+            Section::create_paged_data_file(segment, 0, RW | PageProtect::GUARD).err(),
+            Some(STATUS_INVALID_PAGE_PROTECTION)
+        );
+        let (empty, ..) = self::segment(0);
+        assert_eq!(Section::create_paged_data_file(empty, 0, RO).err(), Some(STATUS_MAPPED_FILE_SIZE_ZERO));
+    }
+
+    #[test]
+    fn an_image_reads_its_headers_and_sections_not_what_follows() {
+        let mut file = image();
+        // .data has 0x200 bytes of raw data, of which its VirtualSize maps 0x100.
+        let end_of_raw = 0x700;
+        assert_eq!(file.len(), 0x800);
+        file.extend_from_slice(&[0xEE; 0x5000]); // an installer's payload
+        let size = file.len() as u64;
+        assert_eq!(ImageLayout::extent(&file[..0x400], size), end_of_raw, "from its first bytes");
+        let prefix: Arc<[u8]> = Arc::from(&file[..end_of_raw as usize]);
+        let section = Section::create_image_from(prefix, size, "\\SETUP.EXE").unwrap();
+        let layout = section.image().unwrap();
+        assert_eq!(layout.info.file_size, size, "the size of the whole file");
+        assert_eq!(*layout, ImageLayout::new(&file).unwrap(), "the same image as from the whole file");
+        assert_eq!(ImageLayout::extent(&file[..0x40], size), size, "headers cut: the whole file");
+        assert_eq!(ImageLayout::extent(b"not a PE at all, but long enough..............................", 64), 64);
+    }
+
+    #[test]
+    fn a_file_cut_in_its_headers_is_not_an_image() {
+        let file = image();
+        for cut in [0x40, 0x80, 0xB0, 0x150] {
+            assert_eq!(ImageLayout::new(&file[..cut]), Err(STATUS_INVALID_IMAGE_FORMAT), "cut at {cut:#x}");
+        }
+        let prefix = &file[..0x200];
+        assert_eq!(
+            ImageLayout::parse(prefix, file.len() as u64),
+            Err(STATUS_INVALID_IMAGE_FORMAT),
+            "the raw data of .text beyond the bytes given"
+        );
     }
 }

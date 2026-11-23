@@ -547,8 +547,10 @@ fn ids_list() -> String {
 }
 
 /// The command file of the probe for `app`: one `key=value` per line, which
-/// `tests/native/appbench.c` reads from `C:\APPS\PROBE.TXT`.
-pub fn probe_commands(app: &App) -> String {
+/// `tests/native/appbench.c` reads from `C:\APPS\PROBE.TXT`. With
+/// `interactive`, the installer runs visible: no silent switch, QEMU's
+/// mouse drives its wizard.
+pub fn probe_commands_for(app: &App, interactive: bool) -> String {
     let installer = format!(r"C:\{APPS_DIR}\{}", app.file);
     let (install, log) = match app.kind {
         Kind::Msi => (format!(r#""C:\WINDOWS\SYSTEM32\MSIEXEC.EXE" /i {installer} /qn /l*v {INSTALL_LOG}"#), true),
@@ -556,6 +558,7 @@ pub fn probe_commands(app: &App) -> String {
         Kind::Inno => (format!(r#""{installer}" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /LOG="{INSTALL_LOG}""#), true),
         Kind::Sumatra => (format!(r#""{installer}" /s"#), false),
     };
+    let install = if interactive { format!(r#""{installer}""#) } else { install };
     let mut text = format!("name={}\r\ninstall={install}\r\n", app.name);
     if log {
         text.push_str(&format!("log={INSTALL_LOG}\r\n"));
@@ -599,7 +602,7 @@ mod tests {
         let route = gimp.route.expect("GIMP's route");
         let files = (route.files)();
         assert_eq!(files.iter().map(|(name, _)| *name).collect::<Vec<_>>(), ["ROUTE.BMP", "ROUTE.SCM"]);
-        let text = probe_commands(gimp);
+        let text = probe_commands_for(gimp, false);
         assert!(text.contains("route=\"C:\\Program Files\\GIMP-2.0\\bin\\gimp-console-2.6.exe\" -i -d -f -b "));
         assert!(text.contains("route-seconds=600\r\n"));
         assert!(text.contains("route-output=C:\\APPS\\ROUTE.PNG\r\n"));
@@ -624,7 +627,7 @@ mod tests {
             script.contains("\r\n\"C:\\Program Files\\7-Zip\\7z.exe\" a C:\\APPS\\ROUTE.7Z C:\\APPS\\ROUTE.TXT\r\n")
         );
         assert!(script.contains("\r\nfc /b C:\\APPS\\ROUTE.TXT C:\\APPS\\OUT\\ROUTE.TXT\r\n"));
-        let text = probe_commands(seven);
+        let text = probe_commands_for(seven, false);
         assert!(text.contains("route=C:\\WINDOWS\\system32\\cmd.exe /c C:\\APPS\\ROUTE.CMD\r\n"));
         assert!(text.contains("route-output=C:\\APPS\\ROUTE.7Z\r\n"));
     }
@@ -634,7 +637,7 @@ mod tests {
         let app = APPS.iter().find(|app| app.id == "notepadpp").unwrap();
         let route = app.route.expect("Notepad++'s route");
         assert_eq!((route.files)(), [("ROUTE.TXT", b"Mino route\r\n".to_vec())]);
-        let text = probe_commands(app);
+        let text = probe_commands_for(app, false);
         assert!(
             text.contains("route=\"C:\\Program Files\\Notepad++\\notepad++.exe\" -nosession C:\\APPS\\ROUTE.TXT\r\n")
         );
@@ -647,7 +650,7 @@ mod tests {
         let app = APPS.iter().find(|app| app.id == "keepass").unwrap();
         let route = app.route.expect("KeePass's route");
         assert!((route.files)().is_empty(), "KeePass makes its file");
-        let text = probe_commands(app);
+        let text = probe_commands_for(app, false);
         assert!(text.contains("route=\"C:\\Program Files\\KeePass Password Safe\\KeePass.exe\"\r\n"));
         assert!(text.contains("route-output=C:\\APPS\\ROUTE.KDB\r\n"));
         assert!(route.steps.contains(&"new-window Create New Password Database => repeat password"));
@@ -665,7 +668,7 @@ mod tests {
         let mut text = Vec::new();
         crate::zip::extract(&files[0].1, &entries[0], &mut text).expect("ROUTE.TXT");
         assert_eq!(text, PEAZIP_ROUTE_TEXT);
-        let text = probe_commands(app);
+        let text = probe_commands_for(app, false);
         assert!(text.contains("route-output=C:\\APPS\\ROUTE\\ROUTE.TXT\r\n"), "where -ext2folder puts it");
         assert!(text.contains("route-step=file C:\\APPS\\ROUTE\\ROUTE.TXT => extracted\r\n"));
     }
@@ -675,7 +678,7 @@ mod tests {
         for app in APPS.iter().filter(|app| app.route.is_some_and(|route| !route.steps.is_empty())) {
             let route = app.route.unwrap();
             // In their order, one line each, as many as the probe takes.
-            let text = probe_commands(app);
+            let text = probe_commands_for(app, false);
             let steps: Vec<&str> = text.lines().filter_map(|line| line.strip_prefix("route-step=")).collect();
             assert_eq!(steps, route.steps, "{}", app.id);
             assert!(steps.len() <= ROUTE_STEPS && steps.iter().all(|step| step.len() < 160), "{}", app.id);
@@ -729,20 +732,20 @@ mod tests {
 
     #[test]
     fn the_probe_runs_each_kind_of_installer_silently() {
-        let msi = probe_commands(find("7zip").unwrap());
+        let msi = probe_commands_for(find("7zip").unwrap(), false);
         assert!(msi.contains(
             r#"install="C:\WINDOWS\SYSTEM32\MSIEXEC.EXE" /i C:\APPS\7z920.msi /qn /l*v C:\APPS\INSTALL.LOG"#
         ));
         assert!(msi.contains(r"log=C:\APPS\INSTALL.LOG"));
-        let nsis = probe_commands(find("notepadpp").unwrap());
+        let nsis = probe_commands_for(find("notepadpp").unwrap(), false);
         assert!(nsis.contains(r#"install="C:\APPS\npp.7.9.2.Installer.exe" /S"#) && !nsis.contains("log="));
         assert!(nsis.contains("visible=\"C:\\APPS\\npp.7.9.2.Installer.exe\"\r\n"), "a failure shown");
         assert!(!msi.contains("visible="));
-        let inno = probe_commands(find("keepass").unwrap());
+        let inno = probe_commands_for(find("keepass").unwrap(), false);
         assert!(inno.contains(r#"/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /LOG="C:\APPS\INSTALL.LOG""#));
         assert!(inno
             .contains("timeout=300\r\nprogram=C:\\Program Files\\KeePass Password Safe\\KeePass.exe\r\nsettle=5\r\n"));
-        assert!(probe_commands(find("sumatrapdf").unwrap()).contains(r#"-install.exe" /s"#));
+        assert!(probe_commands_for(find("sumatrapdf").unwrap(), false).contains(r#"-install.exe" /s"#));
     }
 
     #[test]

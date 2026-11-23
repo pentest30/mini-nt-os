@@ -9,7 +9,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | Table | Implémentés | Services |
 |---|---:|---:|
 | ntoskrnl | 137 | 296 |
-| win32k | 221 | 737 |
+| win32k | 224 | 737 |
 
 ## ntoskrnl
 
@@ -456,7 +456,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1089` | `NtGdiEqualRgn` | 2 |  |
 | `0x108a` | `NtGdiEudcLoadUnloadLink` | 7 |  |
 | `0x108b` | `NtGdiExcludeClipRect` | 5 |  |
-| `0x108c` | `NtGdiExtCreatePen` | 11 |  |
+| `0x108c` | `NtGdiExtCreatePen` | 11 | ✅ |
 | `0x108d` | `NtGdiExtCreateRegion` | 3 |  |
 | `0x108e` | `NtGdiExtEscape` | 8 |  |
 | `0x108f` | `NtGdiExtFloodFill` | 5 |  |
@@ -567,9 +567,9 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x10f8` | `NtGdiRemoveFontMemResourceEx` | 1 |  |
 | `0x10f9` | `NtGdiResetDC` | 5 |  |
 | `0x10fa` | `NtGdiResizePalette` | 2 |  |
-| `0x10fb` | `NtGdiRestoreDC` | 2 |  |
+| `0x10fb` | `NtGdiRestoreDC` | 2 | ✅ |
 | `0x10fc` | `NtGdiRoundRect` | 7 |  |
-| `0x10fd` | `NtGdiSaveDC` | 1 |  |
+| `0x10fd` | `NtGdiSaveDC` | 1 | ✅ |
 | `0x10fe` | `NtGdiScaleViewportExtEx` | 6 |  |
 | `0x10ff` | `NtGdiScaleWindowExtEx` | 6 |  |
 | `0x1100` | `NtGdiSelectBitmap` | 2 | ✅ |
