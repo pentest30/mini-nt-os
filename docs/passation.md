@@ -1,5 +1,12 @@
 # Notes de passation
 
+- **Les revues des bots des PR 173 à 178** (`claude/reviews-173-178`, sur `main` ; demandé le 2026-11-23 ;
+  [`revues/mergestorm-vortex.md`](revues/mergestorm-vortex.md)). Six remarques sur les PR 174, 176 et 177 ; rien à
+  corriger sur les PR 173, 175 et 178. Corrigé sur la PR 174 (`0179f84`, fusionné dans la PR 176 par `22d4048`) :
+  GetDIBits de 1 bit prend l'index de la table rendue (`dibits::encode_lines`, test hôte
+  `a_one_bit_dib_takes_the_index_of_its_table`), et les temps du parcours de PeaZip viennent d'un même run. Sans
+  suite, comme ReactOS : le DC du parent n'est pas coupé au rectangle de la fenêtre (PR 177). Faux : le test de
+  RestoreDC existe, le scénario `save-restore-dc` (PR 176).
 - **Les revues des bots des PR 158 et 159** (`claude/reviews-158-159`, sur `main` ; demandé le 2026-11-22 ;
   [`revues/mergestorm-vortex.md`](revues/mergestorm-vortex.md)). Les deux PR étaient fusionnées. Corrigé : SetParent
   ne lie plus une fenêtre ni sous un parent détruits pendant son SW_HIDE, et une chaîne de parents plus longue que la
