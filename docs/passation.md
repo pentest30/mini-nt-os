@@ -1,5 +1,14 @@
 # Notes de passation
 
+- **Le parcours de KeePass** (`claude/keepass-route`, sur la PR 170, M7,
+  [`compat/applications.md`](compat/applications.md#le-parcours-de-keepass-le-2026-11-22) ; demandé le 2026-11-22).
+  Au clavier de QEMU, par étapes : une base (le mot de passe deux fois), une entrée, `ROUTE.KDB` enregistré, fermé ;
+  rouvert avec le mot de passe, le nom d'utilisateur copié (Ctrl+B) lu dans le presse-papiers. Le banc a
+  `show SECONDES` (pour explorer les fenêtres d'un parcours), `start ARGUMENTS`, `new-window TEXTE`, 24 étapes (il en
+  laissait au-delà de 16 sans le dire). Le correctif du noyau qu'il a demandé est la PR 170 (WH_CBT). Tests hôte
+  `keepass_has_a_route_through_its_windows`, `the_steps_of_each_route_go_to_the_probe`. Vérifié : lint, tests hôte,
+  `app-keepass` (AMD, 146 s, le parcours en 25 s ; un mauvais mot de passe à la réouverture le fait échouer).
+  **Suite** : les parcours d'AbiWord et de PeaZip par la même voie ; `show` y trouve les fenêtres.
 - **WH_CBT à la création d'une fenêtre** (`claude/cbt-hook`, sur la PR 169, M7, USER,
   [`compat/applications.md`](compat/applications.md#wh_cbt--keepass-nexécutait-pas-son-oninitdialog-le-2026-11-22) ;
   trouvé par le parcours de KeePass, le 2026-11-22). HCBT_CREATEWND appelé dans `win32k::window::create_window`

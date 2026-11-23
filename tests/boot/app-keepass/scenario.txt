@@ -9,7 +9,7 @@ session = APPBENCH.EXE
 boots = 2
 app = keepass
 cpus = default
-timeout = 900
+timeout = 1200
 # What works today, a floor: the loader extracts its setup.tmp
 # (SetEndOfFile: FileAllocationInformation), which finds the user an
 # administrator (CheckTokenMembership: NtAccessCheck), installs the files
@@ -17,7 +17,22 @@ timeout = 900
 # starts and shows its main window (its FLS fields in the PEB untouched by
 # the heap list). MFC ties its dialog to its CDialog in a WH_CBT hook
 # (HCBT_CREATEWND): OnInitDialog runs (its title, its accelerators), and
-# WM_CLOSE (IDCANCEL, OnCancel) ends it, DoModal giving IDCANCEL (2).
+# WM_CLOSE (IDCANCEL, OnCancel) ends it, DoModal giving IDCANCEL (2). Its
+# route then goes through its windows (route-step in xtask/src/apps.rs): a
+# new database, its master password twice (two dialogs of the same title),
+# an entry (Mino, user name mino), saved as C:\APPS\ROUTE.KDB; closed, then
+# started on the database, opened with the password, the entry's user name
+# copied (Ctrl+B), which the bench reads on the clipboard.
+keys = [appbench] route step: main up => ctrl-n
+keys = [appbench] route step: new database => "minopass" ret
+keys = [appbench] route step: repeat password => "minopass" ret
+keys = [appbench] route step: database created => ctrl-y
+keys = [appbench] route step: add entry => "Mino" tab "mino" ret
+keys = [appbench] route step: entry added => ctrl-s
+keys = [appbench] route step: save as => "C:\APPS\ROUTE.KDB" ret
+keys = [appbench] route step: open database => "minopass" ret
+keys = [appbench] route step: database opened => ctrl-b
+
 expect = [appbench] installer started
 expect = Setup version: Inno Setup version 5.3.10
 expect = User privileges: Administrative
@@ -28,6 +43,22 @@ expect = [appbench] program started
 expect = [appbench] program window after
 expect = "KeePass Password Safe"
 expect = [appbench] program closed: exit code 2
+expect = [appbench] route step: main up
+expect = [appbench] route step: new database
+expect = [appbench] route step: repeat password
+expect = [appbench] route step: database created
+expect = [appbench] route step: add entry
+expect = [appbench] route step: entry added
+expect = [appbench] route step: save as
+expect = [appbench] route step: saved
+expect = [appbench] route program closed: exit code 2
+expect = [appbench] route step: open database
+expect = [appbench] route step: database opened
+expect = [appbench] route step: copied
+expect = route clipboard: mino
+expect = [appbench] route ended after
+expect = [appbench] route: ROUTE.KDB,
+expect = begins 03 d9 a2 9a 65 fb
 expect = [appbench] KeePass 1.18: report done
 forbid = Unable to create a temporary file
 forbid = User privileges: None
@@ -35,3 +66,7 @@ forbid = [appbench] program ended by itself: exit code c0000005
 forbid = [appbench] installer still running after
 forbid = [appbench] program still running 15 s after WM_CLOSE
 forbid = *** STOP:
+forbid = [appbench] route still running after
+forbid = [appbench] route did not start
+forbid = [appbench] route program ended by itself
+forbid = steps beyond
