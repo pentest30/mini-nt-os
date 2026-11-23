@@ -56,7 +56,7 @@ const CS_DROPSHADOW: u32 = 0x0002_0000;
 /// COLOR_* (pinceaux des classes du système), COLOR_MENUBAR le dernier.
 const COLOR_BACKGROUND: u32 = 1;
 const COLOR_MENU: u32 = 4;
-const COLOR_MENUBAR: u32 = 30;
+pub(crate) const COLOR_MENUBAR: u32 = 30;
 
 /// Le nom d'une classe donné aux services : un atome entier (MAKEINTATOM)
 /// ou une chaîne.
