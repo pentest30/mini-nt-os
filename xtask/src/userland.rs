@@ -53,7 +53,8 @@ pub fn ntdll(ws: &Workspace) -> Option<PathBuf> {
 /// ADR-012), the Win32 subsystem that `smss` starts (`csrss.exe` and its
 /// server DLLs, M5), the language pack that `gdi32` loads when it starts
 /// (`lpk.dll`, GdiInitializeLanguagePack), the [`KNOWN_DLLS`], the [`FONTS`]
-/// of win32k in `WINDOWS/FONTS`, and then every
+/// of win32k in `WINDOWS/FONTS`, the [`INFS`] of `minoinit` in `WINDOWS/INF`,
+/// and then every
 /// DLL these programs
 /// and DLLs import, directly or not ([`import_closure`]): the loader of ntdll
 /// maps each import, and some of these have long names
@@ -161,7 +162,18 @@ fn files_with(ws: &Workspace, windows_files: &[&str]) -> Option<Vec<(PathBuf, St
     let fonts = FONTS
         .iter()
         .map(|font| fonts_file(ws, font).map(|path| (path, format!("{FONTS_DIR}/{}", font.to_ascii_uppercase()))));
-    system32.chain(windows).chain(fonts).collect()
+    let infs = INFS.iter().map(|inf| windows_file(ws, &format!("inf/{inf}")).map(|path| (path, inf_path(inf))));
+    system32.chain(windows).chain(fonts).chain(infs).collect()
+}
+
+/// The INF files of the boot disk, in `WINDOWS/INF` (`%SystemRoot%\inf`):
+/// `defltwk.inf`, the security defaults of a workstation, whose `[Privilege
+/// Rights]` minoinit gives to the accounts (syssetup's InstallSecurity).
+const INFS: [&str; 1] = ["defltwk.inf"];
+
+/// The path of the INF file `name` on the boot disk.
+fn inf_path(name: &str) -> String {
+    format!("{WINDOWS_DIR}/INF/{}", name.to_ascii_uppercase())
 }
 
 /// Every file of the fetched userland's tree, with its path on a system disk
