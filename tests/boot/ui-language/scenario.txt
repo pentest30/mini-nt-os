@@ -1,0 +1,29 @@
+# The language of the user interface (tests/native/uilang1.c, MinGW,
+# linked to ReactOS's ntdll and kernel32): UILANG1.EXE takes the place of
+# winlogon.exe. NtQueryInstallUILanguage and NtQueryDefaultUILanguage, as
+# ReactOS (ex/locale.c): the install language from Nls\Language
+# (InstallLanguage), the user's from MultiUILanguageId in his Control
+# Panel\Desktop when it is a string, the install language otherwise.
+# Without them, kernel32's GetUserDefaultUILanguage returned what was on its
+# stack, and Notepad++'s installer chose a language at random (Dutch, once).
+# See docs/compat/applications.md.
+features = test-smss
+requires = userland, native
+initial-command = UILANG1.EXE
+cpus     = default, intel
+timeout  = 120
+
+expect = [boot] install UI language: 0x0409 (Nls\Language)
+expect = [uilang] step 1: NtQueryInstallUILanguage 00000000, 0409
+expect = [uilang] the user's Control Panel\Desktop: 00000000
+expect = [uilang] step 2: NtQueryDefaultUILanguage 00000000, 0409
+expect = [uilang] step 2: GetUserDefaultUILanguage 0409, GetSystemDefaultUILanguage 0409
+expect = [uilang] step 3: set 00000000; NtQueryDefaultUILanguage 00000000, 0407; GetUserDefaultUILanguage 0407, GetSystemDefaultUILanguage 0409
+expect = [uilang] step 4: set 00000000; NtQueryDefaultUILanguage 00000000, 0409
+expect = [uilang] step 5: deleted 00000000; NtQueryDefaultUILanguage 00000000, 0409
+expect = [uilang] step 6: outside c0000005 c0000005, misaligned 80000002 80000002
+expect = [uilang] done
+
+forbid = *** STOP:
+forbid = NtQueryDefaultUILanguage (0x0096) is not implemented
+forbid = NtQueryInstallUILanguage (0x00a4) is not implemented

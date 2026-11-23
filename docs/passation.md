@@ -1,5 +1,13 @@
 # Notes de passation
 
+- **La langue de l'interface** (`claude/ui-language`, sur la PR 167, M7, Ex,
+  [`compat/applications.md`](compat/applications.md#la-langue-de-linterface--notepad-en-néerlandais-le-2026-11-22) ;
+  trouvé par le parcours de Notepad++, le 2026-11-22). NtQueryInstallUILanguage et NtQueryDefaultUILanguage
+  (`sys::locale`, `ex::locale::install_ui_language`, `parse_ui_language`) : `InstallLanguage` de `Nls\Language`,
+  puis `MultiUILanguageId` de `HKCU\Control Panel\Desktop`. Sans eux, GetUserDefaultUILanguage de `kernel32` rendait
+  sa pile, et Notepad++ s'installait en néerlandais ou en anglais selon le run. Scénario `ui-language`
+  (`tests/native/uilang1.c`). Vérifié : lint, 1 261 tests hôte, `ui-language` (AMD, Intel ; sans les handlers, il
+  échoue). Pas encore relancé : les scénarios `app-*` des autres installeurs NSIS.
 - **Le parcours de 7-Zip** (`claude/7zip-route`, sur la PR 165, M7,
   [`compat/applications.md`](compat/applications.md#le-parcours-de-7-zip-le-2026-11-22) ; demandé le 2026-11-22).
   Par sa ligne de commande : `cmd.exe /c C:\APPS\ROUTE.CMD`, un fichier de commandes que `xtask` écrit avec le texte

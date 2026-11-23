@@ -201,6 +201,7 @@ pub fn mount_system_hive() {
                 "[boot] SYSTEM hive mounted at \\REGISTRY\\MACHINE\\SYSTEM: {size} bytes, CurrentControlSet = ControlSet{current:03}"
             );
             log::info!("[boot] default locale: {:#06x} (Nls\\Language)", crate::sys::locale::load_system_locale());
+            log::info!("[boot] install UI language: {:#06x} (Nls\\Language)", ex::locale::install_ui_language());
         }
         Err(status) => log::error!("[boot] SYSTEM hive refused: {status}"),
     }

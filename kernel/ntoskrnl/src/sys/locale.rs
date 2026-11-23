@@ -1,7 +1,9 @@
 //! NtQueryDefaultLocale et NtSetDefaultLocale, sur les paramètres régionaux
 //! d'Ex (`ex::locale`), du système et de l'utilisateur ;
 //! [`load_system_locale`] prend ceux du système dans le registre, ceux de
-//! l'utilisateur viennent de son profil.
+//! l'utilisateur viennent de son profil. NtQueryInstallUILanguage et
+//! NtQueryDefaultUILanguage : la langue de l'interface, d'installation et de
+//! l'utilisateur.
 //!
 //! La spécification suivie est ReactOS 0.4.16 (`ntoskrnl/ex/locale.c`).
 
@@ -10,7 +12,10 @@ use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
-use abi::ntstatus::{NtStatus, STATUS_INVALID_PARAMETER, STATUS_OBJECT_NAME_NOT_FOUND, STATUS_SUCCESS};
+use abi::ntstatus::{
+    NtStatus, STATUS_BUFFER_OVERFLOW, STATUS_INVALID_PARAMETER, STATUS_OBJECT_NAME_NOT_FOUND, STATUS_SUCCESS,
+    STATUS_UNSUCCESSFUL,
+};
 use ke::usermem::UserPtr;
 use ob::Object;
 
@@ -26,6 +31,13 @@ const LANGUAGE_GROUPS_KEY: &str = "\\REGISTRY\\MACHINE\\SYSTEM\\CurrentControlSe
 const USERS_KEY: &str = "\\REGISTRY\\USER";
 /// Les paramètres régionaux d'un utilisateur, sous sa ruche.
 const INTERNATIONAL_KEY: &str = "Control Panel\\International";
+/// La langue de l'interface d'un utilisateur (`MultiUILanguageId`), sous sa
+/// ruche.
+const DESKTOP_KEY: &str = "Control Panel\\Desktop";
+
+/// Les octets de données que tient le tampon d'ExpGetCurrentUserUILanguage
+/// (256, moins l'en-tête de KEY_VALUE_PARTIAL_INFORMATION).
+const UI_LANGUAGE_DATA_MAX: usize = 256 - 12;
 
 /// REG_SZ.
 const REG_SZ: u32 = 1;
@@ -75,7 +87,66 @@ pub fn load_system_locale() -> u32 {
     let read = read_string(LANGUAGE_KEY, "Default");
     let locale = read.as_deref().and_then(ex::locale::parse_locale).unwrap_or(ex::locale::DEFAULT_LOCALE);
     ex::locale::set_system_locale(locale);
+    // CmGetSystemControlValues: PsInstallUILanguageId from `InstallLanguage`,
+    // else the language of the system's locale.
+    let install = read_string(LANGUAGE_KEY, "InstallLanguage").as_deref().and_then(ex::locale::parse_locale);
+    ex::locale::set_install_ui_language(install.unwrap_or(locale) as u16);
     locale
+}
+
+/// NtQueryInstallUILanguage(*LanguageId) : la langue d'installation
+/// (`ex::locale::install_ui_language`).
+///
+/// # IRQL
+/// PASSIVE_LEVEL.
+pub(super) fn nt_query_install_ui_language(arguments: &[u32]) -> NtStatus {
+    let [out] = arguments[..1] else { unreachable!("1 argument") };
+    match UserPtr::<u16>::new(out).write(&ex::locale::install_ui_language()) {
+        Ok(()) => STATUS_SUCCESS,
+        Err(status) => status,
+    }
+}
+
+/// ExpGetCurrentUserUILanguage(L"MultiUILanguageId") : la valeur
+/// `MultiUILanguageId` de `HKCU\Control Panel\Desktop`, une chaîne
+/// hexadécimale ([`ex::locale::parse_ui_language`]).
+///
+/// # Errors
+/// Sans la clé ou la valeur, celle de leur ouverture ; une valeur qui n'est
+/// pas REG_SZ : `STATUS_UNSUCCESSFUL` ; plus longue que le tampon de
+/// ReactOS : `STATUS_BUFFER_OVERFLOW`.
+fn user_ui_language() -> Result<u16, NtStatus> {
+    let key = user_key(DESKTOP_KEY)?;
+    let name: Vec<u16> = "MultiUILanguageId".encode_utf16().collect();
+    let value = key.value(&name)?.ok_or(STATUS_OBJECT_NAME_NOT_FOUND)?;
+    if value.data.len() > UI_LANGUAGE_DATA_MAX {
+        return Err(STATUS_BUFFER_OVERFLOW);
+    }
+    if value.data_type != REG_SZ {
+        return Err(STATUS_UNSUCCESSFUL);
+    }
+    // RtlInitUnicodeString: up to the first NUL.
+    let text: Vec<u16> =
+        value.data.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).take_while(|&unit| unit != 0).collect();
+    Ok(ex::locale::parse_ui_language(&String::from_utf16_lossy(&text)))
+}
+
+/// NtQueryDefaultUILanguage(*LanguageId) : la langue de l'interface de
+/// l'utilisateur ([`user_ui_language`]), la langue d'installation à défaut ;
+/// `STATUS_SUCCESS` sauf si `LanguageId` ne s'écrit pas. `kernel32`
+/// (GetUserDefaultUILanguage) ne regarde pas le statut et rend ce qu'il a
+/// sur sa pile : sans ce service, n'importe quelle langue (un installeur
+/// NSIS choisissait le néerlandais).
+///
+/// # IRQL
+/// PASSIVE_LEVEL.
+pub(super) fn nt_query_default_ui_language(arguments: &[u32]) -> NtStatus {
+    let [out] = arguments[..1] else { unreachable!("1 argument") };
+    let language = user_ui_language().unwrap_or_else(|_| ex::locale::install_ui_language());
+    match UserPtr::<u16>::new(out).write(&language) {
+        Ok(()) => STATUS_SUCCESS,
+        Err(status) => status,
+    }
 }
 
 /// NtQueryDefaultLocale(UserProfile, *DefaultLocaleId) : ceux de
@@ -95,12 +166,11 @@ pub(super) fn nt_query_default_locale(arguments: &[u32]) -> NtStatus {
     }
 }
 
-/// RtlOpenCurrentUser, puis `Control Panel\International` : la clé des
-/// paramètres régionaux de l'utilisateur du jeton effectif du thread (celui
-/// qu'il emprunte, sinon le jeton primaire de son processus), sous
-/// `\REGISTRY\USER\<SID>` ; sous `\REGISTRY\USER\.DEFAULT` si sa ruche n'est
-/// pas chargée.
-fn user_international_key() -> Result<Arc<Object<cm::Key>>, NtStatus> {
+/// RtlOpenCurrentUser, puis `path` : une clé de l'utilisateur du jeton
+/// effectif du thread (celui qu'il emprunte, sinon le jeton primaire de son
+/// processus), sous `\REGISTRY\USER\<SID>` ; sous `\REGISTRY\USER\.DEFAULT`
+/// si sa ruche n'est pas chargée.
+fn user_key(path: &str) -> Result<Arc<Object<cm::Key>>, NtStatus> {
     let open = |path: &str| ob::namespace().open(path, None, Some(&cm::KEY_TYPE), abi::object::OBJ_CASE_INSENSITIVE);
     let thread = ps::ethread::current_thread().expect("a system service outside a Ps thread");
     let token = match thread.impersonation() {
@@ -109,14 +179,14 @@ fn user_international_key() -> Result<Arc<Object<cm::Key>>, NtStatus> {
     };
     let user = format!("{USERS_KEY}\\{}", token.user().sid);
     let root = if open(&user).is_ok() { user } else { format!("{USERS_KEY}\\.DEFAULT") };
-    let key = open(&format!("{root}\\{INTERNATIONAL_KEY}"))?;
+    let key = open(&format!("{root}\\{path}"))?;
     ob::downcast::<cm::Key>(&key).ok_or(abi::ntstatus::STATUS_OBJECT_TYPE_MISMATCH)
 }
 
 /// La branche `UserProfile` de NtSetDefaultLocale : 0 relit `Locale` du
 /// profil ; un autre LCID, validé, y est écrit (`%08x`).
 fn set_user_locale(locale: u32) -> Result<(), NtStatus> {
-    let key = user_international_key()?;
+    let key = user_key(INTERNATIONAL_KEY)?;
     let name: Vec<u16> = "Locale".encode_utf16().collect();
     if locale == 0 {
         let value = key.value(&name)?.ok_or(STATUS_OBJECT_NAME_NOT_FOUND)?;
@@ -139,7 +209,7 @@ fn set_user_locale(locale: u32) -> Result<(), NtStatus> {
 /// bits au-dessus de 16, ou dont le groupe de langues n'est pas installé :
 /// `STATUS_INVALID_PARAMETER` ; que `Nls\Locale` ne connaît pas :
 /// `STATUS_OBJECT_NAME_NOT_FOUND`. Ceux de l'utilisateur (`UserProfile`) vont, de
-/// même, dans la valeur `Locale` de son profil ([`user_international_key`] :
+/// même, dans la valeur `Locale` de son profil ([`user_key`] :
 /// `HKCU\Control Panel\International`), que `winlogon` relit et redonne à
 /// l'ouverture de sa session (SetDefaultLanguage) ; sans cette clé, l'erreur
 /// de son ouverture.
