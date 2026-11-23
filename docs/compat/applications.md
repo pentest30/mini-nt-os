@@ -27,7 +27,7 @@ pour que chaque application teste autre chose. Elles sont rangées de la plus si
 | 4 | WinMerge 2.12.4 (2009) | GPL | Inno Setup | MFC, vues côte à côte | comparer deux fichiers, fusionner une différence, enregistrer |
 | 5 | SumatraPDF 2.5.2 (2014) | GPL | le sien | rendu de pages, défilement | ouvrir un PDF fourni, page suivante, zoom |
 | 6 | AbiWord 2.4.1 (2005) | GPL | NSIS | traitement de texte, polices, RTF | taper, mettre en gras, enregistrer en `.rtf`, rouvrir |
-| 7 | PeaZip 3.9.1 (2011) | LGPL | Inno Setup | Lazarus et Free Pascal (LCL) | ouvrir une archive, l'extraire (l'extraction par `-ext2folder`, le 2026-11-23 ; l'ouverture attend les bitmaps de 24 bits) |
+| 7 | PeaZip 3.9.1 (2011) | LGPL | Inno Setup | Lazarus et Free Pascal (LCL) | ouvrir une archive, l'extraire (fait le 2026-11-23 : l'archive listée dans son titre, l'extraction par `-ext2folder`) |
 | 8 | Dev-C++ 4.9.9.2 (2005) | GPL | NSIS | Delphi (VCL), processus `gcc` lancés | ouvrir un projet, le compiler, lancer le programme |
 | 9 | GIMP 2.6.12 (2011) | GPL | Inno Setup | GTK2, nombreuses DLL, fontconfig | ouvrir une image, appliquer un filtre, exporter en PNG (fait en Script-Fu, le 2026-11-22) |
 | 10 | Apache OpenOffice 4.1.17 (2026) | Apache 2.0 | NSIS, qui déballe son installeur MSI | très grosse application, runtimes de Visual C++ (WinSxS, à mesurer) | Writer : taper, enregistrer en `.odt`, rouvrir |
@@ -786,6 +786,77 @@ Plancher de PeaZip : son installation, ce qu'il montre, puis l'extraction (l'ét
 lignes) ; interdits : un parcours qui ne démarre pas ou dépasse son délai. Vérifié par mutation : un octet des données
 de l'archive changé, 7-Zip écrit quand même le fichier (« QeaZip… », son CRC faux) et le scénario échoue sur sa
 première ligne.
+
+### Les bitmaps de 24 bits : PeaZip ouvre son gestionnaire, le 2026-11-23
+
+Les surfaces de 24 bits par pixel (`win32k::gdi::surface::Format::Bgr` : BGR, trois octets, les lignes alignées sur
+32 bits) : les DIB sections de 24 bits et CreateBitmap de 24 bits (ses lignes données alignées sur 16 bits) ; le
+moteur dessine sur leurs pixels décodés en 32 bits ([`decode_bgr`]), puis réécrit ceux qui ont changé
+([`encode_bgr`]), comme pour les DIB sections indexées ; GetObject dit 24 bits, GetDIBits écrit des lignes de 24
+bits, une copie (BITMAP_CopyBitmap) garde sa profondeur. Les DIB sections de 1 bit (les masques des images de la
+LCL) sont des DIB sections indexées de deux couleurs. Scénario `bitmap-24` (`tests/native/bmp24.c`, AMD et Intel) :
+CreateBitmap de 24 bits (GetObject, ses bits relus), une DIB section de 24 bits (son DIBSECTION, un pixel écrit par le
+processus et lu par le noyau, un autre peint par le noyau et lu par le processus, le remplissage de la ligne gardé),
+GetDIBits de 24 bits, BitBlt vers 32 bits, une DIB section de 1 bit ; sans la modification, CreateBitmap et
+CreateDIBSection rendent NULL et il échoue.
+
+PeaZip montre son gestionnaire (« Computer's root ») au lieu de la boîte de la LCL, et ouvre une archive : son titre la
+résume, « ROUTE.ZIP - 0 dir(s), 1 file(s), 66 B > 66 B (100%) », ce que le parcours attend. Le banc : une étape
+`file` n'échoue plus quand le programme finit entre deux attentes (une seule attente, son résultat gardé ; la course
+faisait dire « ended by itself »). Le parcours, sur un même run (AMD, le 2026-11-23) : l'archive ouverte 21 s après
+son début, extraite à 63 s ; le scénario en 306 s. Au premier lancement, le gestionnaire ne paraît pas toujours dans les 5 s du banc (sa première fenêtre au bout
+de 3 à 12 s) : le plancher ne l'attend que par le parcours.
+
+Une fois la PR 160 (SaveDC, RestoreDC) reçue, PeaZip figeait tout le système à son premier RestoreDC : le verrou de
+l'état du DC repris dans `Dc::restore_state` (le même gel que Notepad++ dans VirtualBox), corrigé par la PR 173,
+fusionnée sous cette branche (scénario `save-restore-dc`).
+
+### La fenêtre de PeaZip et sa fermeture, le 2026-11-23
+
+Il restait deux choses : la fenêtre du gestionnaire, visible et placée (64,64)-(942,604), WS_OVERLAPPEDWINDOW, ne
+paraissait pas sur la capture de l'écran ; et elle ne se fermait pas sur WM_CLOSE (le banc la termine au bout de
+15 s). Mesurées l'une après l'autre, aucune ne vient de Mino.
+
+**L'écran.** Un scénario fait sa capture quand tous ses marqueurs ont paru, donc après la fin du parcours, PeaZip
+fermé : la capture montrait le bureau vide. Une capture temporaire prise à l'étape « opened » (les marqueurs suivants
+retirés) montre le gestionnaire peint, son titre, sa barre d'outils, ses colonnes et l'archive. L'étape `show`
+du banc imprime maintenant le style étendu de chaque fenêtre et sa partie visible (la boîte de découpage de son DC
+de fenêtre, GetClipBox : NULLREGION quand rien d'elle ne se dessine).
+
+**La fermeture.** Sur WM_CLOSE, PeaZip lance deux fois `cmd.exe /c rmdir
+"C:\DOCUME~1\ADMINI~1\LOCALS~1\Temp\peazip-tmp\" /s /q` et attend la fin de chacun. Il le lance avec
+DETACHED_PROCESS et sans STARTF_USESTDHANDLES : trace temporaire des paramètres du processus à son premier thread,
+`ConsoleHandle` à −1, les trois handles standard nuls (c'est le `kernel32` de ReactOS du créateur qui les écrit,
+BasePushProcessParameters). Trace temporaire des appels de `cmd.exe` et de `csrss` :
+
+- le premier `cmd` efface le répertoire (NtOpenFile pour DELETE, FileDispositionInformation, NtClose), puis sort
+  (NtTerminateProcess(NULL), le détachement des DLL, BasepExitProcess à `csrss`, qui répond, NtTerminateProcess) ;
+- le second ne trouve plus le répertoire (NtOpenFile : STATUS_OBJECT_NAME_NOT_FOUND) et veut écrire son message
+  d'erreur : NtCreateEvent (EVENT_ALL_ACCESS, SynchronizationEvent, non signalé), puis NtWaitForSingleObject sans
+  délai, pour toujours. C'est RtlpWaitForCriticalSection sur une section critique jamais initialisée.
+
+Le `cmd` de ReactOS écrit par `conutils` (`sdk/lib/conutils`, ReactOS 0.4.16 `51bfc703`, et `master` le
+2026-11-23). `cmd.c` initialise ses flux par `ConStreamInit(StdErr, GetStdHandle(STD_ERROR_HANDLE), …)`.
+ConStreamInitEx (`stream.c`) rend FALSE pour un handle nul ou INVALID_HANDLE_VALUE avant InitializeCriticalSection.
+CON_STREAM_WRITE2 (`outstream.c`) prend `Stream->Lock` sans regarder si le flux est initialisé. Les flux sont des
+globales à zéro, et une section critique à zéro (`LockCount` 0) se voit tenue par personne : la première écriture
+attend sans fin. Un `cmd` détaché sans handle standard se fige donc à son premier message. D'après ces sources,
+ReactOS lui-même ferait de même (pas essayé) : les handles nuls viennent de son `kernel32`, l'attente de sa
+section critique, et Mino n'a rien à y corriger.
+
+Reproduit sans PeaZip (temporaire, au début du banc, scénario `app-7zip`), trois `cmd.exe` lancés avec
+DETACHED_PROCESS :
+
+| Commande | Handles standard | Résultat |
+|---|---|---|
+| `mkdir C:\APPS\T & rmdir "C:\APPS\T\" /s /q` (rien à écrire) | nuls | fini, code 0 |
+| `rmdir "C:\APPS\NOPE\" /s /q` (un message d'erreur) | nuls | encore là au bout de 20 s |
+| la même | un fichier (STARTF_USESTDHANDLES) | fini, code 2 |
+
+Le banc continue de terminer PeaZip 15 s après WM_CLOSE (« route program still running 15 s after WM_CLOSE »), un
+symptôme contourné et maintenant expliqué. Son lancement par `-ext2folder` se ferme seul (code 0). La suite est chez
+ReactOS (`conutils` : initialiser le verrou même sans handle, ou ne pas écrire sur un flux qui n'a pas pu
+s'initialiser). Côté Mino, aucune tâche : un `cmd` corrigé viendrait avec un ReactOS épinglé plus récent.
 
 ### La suite
 
