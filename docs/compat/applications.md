@@ -858,6 +858,33 @@ symptôme contourné et maintenant expliqué. Son lancement par `-ext2folder` se
 ReactOS (`conutils` : initialiser le verrou même sans handle, ou ne pas écrire sur un flux qui n'a pas pu
 s'initialiser). Côté Mino, aucune tâche : un `cmd` corrigé viendrait avec un ReactOS épinglé plus récent.
 
+### Plus de 64 threads : les runtimes de Visual C++ d'OpenOffice, le 2026-11-23
+
+Dans l'image VirtualBox (`cargo xtask image --apps`), l'installeur d'Apache OpenOffice 4.1.17 passe son contrôle de
+version (`InstallerLocation` dans `tools/mkhive/mino.inf`) et lance les runtimes de Visual C++ : `vcredist_x86.exe`,
+puis `install.exe`, qui lance `msiexec.exe`. Dans `install.exe`, `rpcrt4` journalise « couldn't queue work item for
+worker thread, error was 1450 » (`dll/win32/rpcrt4/rpc_server.c:592`), puis une boîte dit « Insufficient system
+resources exist to complete the requested service ». QueueUserWorkItem est RtlQueueWorkItem
+(`sdk/lib/rtl/threadpool.c`), qui crée un thread de travail par RtlCreateUserThread : il rendait
+`STATUS_INSUFFICIENT_RESOURCES` (ERROR_NO_SYSTEM_RESOURCES, 1450), parce que `ke::sched::create_user_thread` rendait
+`None`. Ke n'avait que 64 threads pour tout le système, threads noyau compris (`MAX_THREADS` : la table des TID, et
+chacune des 32 files prêtes, des anneaux de 64). 197 threads utilisateur avaient été créés, plusieurs déjà finis ; XP
+en fait tourner des centaines au repos.
+
+Fait comme ReactOS (KxQueueReadyThread, `ntoskrnl/include/internal/ke_x.h` : le `WaitListEntry` du thread dans
+`DispatcherReadyListHead`) : les files prêtes sont chaînées par des liens que porte chaque thread
+(`ke::sched::ReadyLink`), sans capacité, et l'ordonnanceur n'alloue toujours rien à DISPATCH_LEVEL ; un thread mis
+deux fois en file arrête le système, `delete_thread` refuse un thread encore en file. La table des threads
+(`ThreadTable`) grandit hors du verrou dispatcher : `register_locked` prend la mémoire à PASSIVE_LEVEL
+(`ThreadTable::storage`, le double), la table y copie ses emplacements sous le verrou sans allouer (`grow`), et
+l'ancienne mémoire est rendue après. La mémoire est la seule limite de Ke ; restent 4 096 TEB par processus
+(`ps::ethread`) et 4 096 piles noyau (`mm::kstack::MAX_STACKS`).
+
+Scénario `many-threads` (`tests/native/manythr1.c`, AMD et Intel) : 200 threads qui attendent un événement, tous
+vivants et prêts ensemble derrière leur créateur, puis libérés. Sans le changement : « thread 41 not created (error
+1450) ». Tests hôte : une file de 300 threads, 200 threads prêts de même priorité à tour de rôle, une table qui grandit
+trois fois. L'effet sur OpenOffice reste à mesurer (l'image VirtualBox, ou le scénario `app-openoffice`).
+
 ### La suite
 
 **Mise à jour du 2026-11-20 : ProcessDebugPort** (`fix/ps-process-debug-port`).

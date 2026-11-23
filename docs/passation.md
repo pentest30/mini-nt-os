@@ -1,5 +1,22 @@
 # Notes de passation
 
+- **Plus de 64 threads : la limite de Ke levée** (`claude/ke-thread-limit`, M7,
+  [`compat/applications.md`](compat/applications.md#plus-de-64-threads-les-runtimes-de-visual-c-dopenoffice-le-2026-11-23) ;
+  demandé le 2026-11-23, le blocage d'OpenOffice après la PR 181). Dans l'image VirtualBox, `install.exe` (les
+  runtimes de Visual C++) ne pouvait mettre un travail en file : « couldn't queue work item for worker thread, error
+  was 1450 » (`rpcrt4`, RtlCreateUserThread : `STATUS_INSUFFICIENT_RESOURCES`). Ke n'avait que 64 threads pour tout le
+  système, threads noyau compris (`ke::sched::MAX_THREADS` : la table des TID et les 32 files prêtes, des anneaux).
+  Comme ReactOS (KxQueueReadyThread : le `WaitListEntry` dans `DispatcherReadyListHead`) : files prêtes chaînées par
+  des liens dans chaque thread (`ReadyLink`, sans capacité ; un thread mis deux fois en file arrête le système,
+  `delete_thread` refuse un thread encore en file) ; la table des threads grandit hors du verrou dispatcher
+  (`register_locked`, `ThreadTable::storage`, `grow` : rien n'est alloué ni libéré sous le verrou). `MAX_THREADS`
+  disparaît ; restent 4 096 TEB par processus et 4 096 piles noyau. Scénario `many-threads`
+  (`tests/native/manythr1.c`, 200 threads qui attendent un événement) : sans le changement, « thread 41 not created
+  (error 1450) » ; avec, 200 créés, en attente, puis finis. Tests hôte : une file de 300 threads, 200 threads prêts de
+  même priorité à tour de rôle, une table qui grandit trois fois. Vérifié : lint, 1 292 tests hôte,
+  `many-threads`, `ke-events`, `ke-starvation`, `fpu`, `smoke` (AMD, Intel), `bugcheck` (AMD, son seul processeur).
+  **Suite** : remesurer OpenOffice (l'image VirtualBox avec la PR 181, ou `app-openoffice`) ; le noyau ne journalise
+  ni la fin des threads ni leur nombre vivant.
 - **La fenêtre de PeaZip et sa fermeture** (`claude/peazip-window`, sur la PR 174, M7, le banc,
   [`compat/applications.md`](compat/applications.md#la-fenêtre-de-peazip-et-sa-fermeture-le-2026-11-23) ; demandé le
   2026-11-23). Rien à corriger dans Mino. Le gestionnaire se peint : la capture d'un scénario vient quand tous ses
