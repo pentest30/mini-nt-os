@@ -1,5 +1,17 @@
 # Notes de passation
 
+- **La fenêtre de PeaZip et sa fermeture** (`claude/peazip-window`, sur la PR 174, M7, le banc,
+  [`compat/applications.md`](compat/applications.md#la-fenêtre-de-peazip-et-sa-fermeture-le-2026-11-23) ; demandé le
+  2026-11-23). Rien à corriger dans Mino. Le gestionnaire se peint : la capture d'un scénario vient quand tous ses
+  marqueurs ont paru, après la fin du parcours. Il ne se ferme pas sur WM_CLOSE parce qu'il attend son second
+  `cmd.exe /c rmdir … /s /q`, lancé avec DETACHED_PROCESS sans handles standard : le répertoire déjà effacé, le `cmd`
+  de ReactOS écrit son erreur et attend pour toujours une section critique jamais initialisée (`conutils` :
+  ConStreamInitEx n'initialise pas le verrou d'un flux au handle nul, CON_STREAM_WRITE2 le prend quand même ;
+  0.4.16 et `master`). Mesuré par des traces temporaires (paramètres du processus, appels de `cmd` et de `csrss`) et
+  reproduit sans PeaZip (un `cmd` détaché : sans rien à écrire, fini ; avec une erreur, encore là au bout de 20 s ;
+  avec un handle d'erreur, fini avec 2). Le banc continue de terminer PeaZip 15 s après WM_CLOSE, maintenant
+  documenté ; `show` imprime aussi le style étendu et la partie visible de chaque fenêtre (GetClipBox de son DC de
+  fenêtre). Vérifié : `app-peazip` (AMD). **Suite** : le défaut à signaler à ReactOS ; les DIB sections de 16 bits.
 - **Les bitmaps de 24 bits** (`claude/surface-24bit`, sur les PR 172 et 173, M7, GDI,
   [`compat/applications.md`](compat/applications.md#les-bitmaps-de-24-bits--peazip-ouvre-son-gestionnaire-le-2026-11-23) ;
   demandé le 2026-11-23 après le diagnostic de PeaZip). `surface::Format::Bgr` (DIB sections et CreateBitmap de 24
@@ -10,7 +22,8 @@
   `icons`, `cursor`, `notepad-saveas`, `folder-view` (AMD). Sur la pile qui a reçu la PR 160, PeaZip figeait tout
   le système au premier RestoreDC de son DC (le verrou repris de la PR 160, corrigé par la PR 173, fusionnée ici).
   **Pas encore** : le gestionnaire
-  de PeaZip n'apparaît pas sur l'écran et ne se ferme pas sur WM_CLOSE ; les DIB sections de 16 bits.
+  de PeaZip n'apparaît pas sur l'écran et ne se ferme pas sur WM_CLOSE (mesurés ensuite : l'entrée au-dessus) ; les
+  DIB sections de 16 bits.
 - **RestoreDC figeait tout le système** (`claude/restore-dc-deadlock`, sur `main` ; demandé le 2026-11-23 :
   Notepad++ « totalement freezé » dans VirtualBox). Toute la machine était arrêtée (l'horloge et le journal série
   aussi), le processeur dans `nt_gdi_restore_dc` sur un `lock cmpxchg` / `pause` (VBoxManage `debugvm

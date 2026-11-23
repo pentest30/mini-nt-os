@@ -29,9 +29,13 @@ timeout = 900
 # C:\APPS\ROUTE.ZIP (written by xtask, stored), which the manager lists in
 # its title, then extracts it by its command line, peazip.exe -ext2folder:
 # PeaZip hands it to its 7-Zip and its launcher and ends first; the bench
-# waits for C:\APPS\ROUTE\ROUTE.TXT and prints its two lines. Not yet: the
-# manager does not show on the screen, nor close on WM_CLOSE (the bench
-# ends it).
+# waits for C:\APPS\ROUTE\ROUTE.TXT and prints its two lines. The manager
+# paints (a scenario's screen capture comes once all its markers are seen,
+# after the route). It does not close on WM_CLOSE, and the bench ends it:
+# PeaZip waits for its second detached `cmd.exe /c rmdir`, which ReactOS's
+# cmd freezes when it writes its error to a stderr handle that is NULL
+# (conutils leaves the stream's critical section uninitialized), a defect of
+# ReactOS, see docs/compat/applications.md.
 expect = [appbench] installer started
 expect = Setup version: Inno Setup version 5.4.2
 expect = User privileges: Administrative

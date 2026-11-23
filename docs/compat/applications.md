@@ -811,9 +811,52 @@ Une fois la PR 160 (SaveDC, RestoreDC) reçue, PeaZip figeait tout le système �
 l'état du DC repris dans `Dc::restore_state` (le même gel que Notepad++ dans VirtualBox), corrigé par la PR 173,
 fusionnée sous cette branche (scénario `save-restore-dc`).
 
-Pas encore : la fenêtre du gestionnaire, visible et placée (64,64)-(942,604), WS_OVERLAPPEDWINDOW, n'apparaît pas sur
-la capture de l'écran ; et elle ne se ferme pas sur WM_CLOSE (le banc la termine au bout de 15 s). Les deux sont à
-mesurer ensemble (les messages qu'elle tire de sa file, ses WM_PAINT).
+### La fenêtre de PeaZip et sa fermeture, le 2026-11-23
+
+Il restait deux choses : la fenêtre du gestionnaire, visible et placée (64,64)-(942,604), WS_OVERLAPPEDWINDOW, ne
+paraissait pas sur la capture de l'écran ; et elle ne se fermait pas sur WM_CLOSE (le banc la termine au bout de
+15 s). Mesurées l'une après l'autre, aucune ne vient de Mino.
+
+**L'écran.** Un scénario fait sa capture quand tous ses marqueurs ont paru, donc après la fin du parcours, PeaZip
+fermé : la capture montrait le bureau vide. Une capture temporaire prise à l'étape « opened » (les marqueurs suivants
+retirés) montre le gestionnaire peint, son titre, sa barre d'outils, ses colonnes et l'archive. L'étape `show`
+du banc imprime maintenant le style étendu de chaque fenêtre et sa partie visible (la boîte de découpage de son DC
+de fenêtre, GetClipBox : NULLREGION quand rien d'elle ne se dessine).
+
+**La fermeture.** Sur WM_CLOSE, PeaZip lance deux fois `cmd.exe /c rmdir
+"C:\DOCUME~1\ADMINI~1\LOCALS~1\Temp\peazip-tmp\" /s /q` et attend la fin de chacun. Il le lance avec
+DETACHED_PROCESS et sans STARTF_USESTDHANDLES : trace temporaire des paramètres du processus à son premier thread,
+`ConsoleHandle` à −1, les trois handles standard nuls (c'est le `kernel32` de ReactOS du créateur qui les écrit,
+BasePushProcessParameters). Trace temporaire des appels de `cmd.exe` et de `csrss` :
+
+- le premier `cmd` efface le répertoire (NtOpenFile pour DELETE, FileDispositionInformation, NtClose), puis sort
+  (NtTerminateProcess(NULL), le détachement des DLL, BasepExitProcess à `csrss`, qui répond, NtTerminateProcess) ;
+- le second ne trouve plus le répertoire (NtOpenFile : STATUS_OBJECT_NAME_NOT_FOUND) et veut écrire son message
+  d'erreur : NtCreateEvent (EVENT_ALL_ACCESS, SynchronizationEvent, non signalé), puis NtWaitForSingleObject sans
+  délai, pour toujours. C'est RtlpWaitForCriticalSection sur une section critique jamais initialisée.
+
+Le `cmd` de ReactOS écrit par `conutils` (`sdk/lib/conutils`, ReactOS 0.4.16 `51bfc703`, et `master` le
+2026-11-23). `cmd.c` initialise ses flux par `ConStreamInit(StdErr, GetStdHandle(STD_ERROR_HANDLE), …)`.
+ConStreamInitEx (`stream.c`) rend FALSE pour un handle nul ou INVALID_HANDLE_VALUE avant InitializeCriticalSection.
+CON_STREAM_WRITE2 (`outstream.c`) prend `Stream->Lock` sans regarder si le flux est initialisé. Les flux sont des
+globales à zéro, et une section critique à zéro (`LockCount` 0) se voit tenue par personne : la première écriture
+attend sans fin. Un `cmd` détaché sans handle standard se fige donc à son premier message. D'après ces sources,
+ReactOS lui-même ferait de même (pas essayé) : les handles nuls viennent de son `kernel32`, l'attente de sa
+section critique, et Mino n'a rien à y corriger.
+
+Reproduit sans PeaZip (temporaire, au début du banc, scénario `app-7zip`), trois `cmd.exe` lancés avec
+DETACHED_PROCESS :
+
+| Commande | Handles standard | Résultat |
+|---|---|---|
+| `mkdir C:\APPS\T & rmdir "C:\APPS\T\" /s /q` (rien à écrire) | nuls | fini, code 0 |
+| `rmdir "C:\APPS\NOPE\" /s /q` (un message d'erreur) | nuls | encore là au bout de 20 s |
+| la même | un fichier (STARTF_USESTDHANDLES) | fini, code 2 |
+
+Le banc continue de terminer PeaZip 15 s après WM_CLOSE (« route program still running 15 s after WM_CLOSE »), un
+symptôme contourné et maintenant expliqué. Son lancement par `-ext2folder` se ferme seul (code 0). La suite est chez
+ReactOS (`conutils` : initialiser le verrou même sans handle, ou ne pas écrire sur un flux qui n'a pas pu
+s'initialiser). Côté Mino, aucune tâche : un `cmd` corrigé viendrait avec un ReactOS épinglé plus récent.
 
 ### La suite
 
