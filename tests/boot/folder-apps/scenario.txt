@@ -1,0 +1,27 @@
+# explorer opens C:\APPS (Win+R after the logon, see `folder-view`), where
+# the disk of `app = openoffice` holds the installer of Apache OpenOffice
+# (143 MB). For its icon, shell32 makes three data sections of the file
+# (LoadLibraryEx as a data file): each read the whole file before ADR-024
+# (99 s, 84 s and 86 s on the ATA disk); now a fault reads the pages of the
+# resources only. The icon must show within `screen-wait`.
+features = test-smss, interactive
+requires = userland, native
+shell = explorer
+app = openoffice
+boots = 2
+cpus = default
+timeout = 600
+
+expect = of explorer.exe
+expect = ReadDirectoryChangesW for 'C:\Documents and Settings\Administrator\Desktop'
+keys = ReadDirectoryChangesW for 'C:\Documents and Settings\Administrator\Desktop' => pause:8000 meta_l-r pause:6000 "C:\APPS" ret
+expect = ReadDirectoryChangesW for 'C:\APPS'
+# The installer's icon in the list (Details view): the blue and the green
+# of its gull.
+screen = 14 124 0E85CD
+screen = 20 134 B3D646
+screen-wait = 60
+
+forbid = *** STOP:
+forbid = of explorer.exe (NtStatus
+forbid = not read for its section
