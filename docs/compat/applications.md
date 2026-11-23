@@ -803,8 +803,8 @@ CreateDIBSection rendent NULL et il échoue.
 PeaZip montre son gestionnaire (« Computer's root ») au lieu de la boîte de la LCL, et ouvre une archive : son titre la
 résume, « ROUTE.ZIP - 0 dir(s), 1 file(s), 66 B > 66 B (100%) », ce que le parcours attend. Le banc : une étape
 `file` n'échoue plus quand le programme finit entre deux attentes (une seule attente, son résultat gardé ; la course
-faisait dire « ended by itself »). Le parcours : l'archive ouverte en 26 s, extraite en 67 s ; le scénario en 287 s
-(AMD). Au premier lancement, le gestionnaire ne paraît pas toujours dans les 5 s du banc (sa première fenêtre au bout
+faisait dire « ended by itself »). Le parcours, sur un même run (AMD, le 2026-11-23) : l'archive ouverte 21 s après
+son début, extraite à 63 s ; le scénario en 306 s. Au premier lancement, le gestionnaire ne paraît pas toujours dans les 5 s du banc (sa première fenêtre au bout
 de 3 à 12 s) : le plancher ne l'attend que par le parcours.
 
 Une fois la PR 160 (SaveDC, RestoreDC) reçue, PeaZip figeait tout le système à son premier RestoreDC : le verrou de
