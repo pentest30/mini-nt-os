@@ -1,5 +1,16 @@
 # Notes de passation
 
+- **La fin de session et l'arrêt** (`claude/session-shutdown`, sur la PR 183, M7, second critère ;
+  [`compat/m6-logon.md`](compat/m6-logon.md#la-fin-de-session-et-larrêt-m7-le-2026-11-23) ; demandé le 2026-11-23).
+  Un programme de la session arrête le système par ExitWindowsEx. NtUserSetInformationThread a les classes de
+  `csrss` pour la fin d'une session : `UserThreadUseActiveDesktop`, `UserThreadRestoreDesktop`,
+  `UserThreadInitiateShutdown` et `UserThreadEndShutdown`. Elles passent par `win32k::shutdown` : la décision
+  d'UserInitiateShutdown et WM_LOGONNOTIFY à la fenêtre SAS de `winlogon`. Le bureau d'entrée passe par
+  `ob::HandleTable::find_object`. `ntmarta.dll` est sur le disque (le thread de fin de session de `winlogon`).
+  WM_CLIENTSHUTDOWN devient WM_QUERYENDSESSION, puis WM_ENDSESSION dans DefWindowProc
+  (`defwnd::end_session_messages`). Scénario `session-shutdown` (`tests/native/shutdn1.c`, AMD et Intel) : jusqu'à
+  NtShutdownSystem(power off). **Suite** pour le critère : du travail dans la session (une application, un fichier
+  enregistré) et la mesure du pool (avant et après, à l'arrêt), sans fuite.
 - **Les droits des comptes** (`claude/account-privileges`, sur la PR 180, M7, second critère ;
   [`compat/m6-logon.md`](compat/m6-logon.md#les-droits-des-comptes-m7-le-2026-11-23) ; demandé le 2026-11-23 : une
   session qui s'arrête). Le jeton d'`Administrator` n'avait aucun privilège, donc pas `SeShutdownPrivilege`
