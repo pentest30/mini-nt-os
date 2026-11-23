@@ -130,6 +130,12 @@ fn files_with(ws: &Workspace, windows_files: &[&str]) -> Option<Vec<(PathBuf, St
         // Loaded by name by kernel32 to check a DNS host name
         // (SetComputerNameExW: BaseVerifyDnsName, DnsValidateName_W).
         "dnsapi.dll",
+        // Loaded by name by advapi32 for the access lists it builds
+        // (SetEntriesInAclW, GetNamedSecurityInfoW: ntmarta's AccRewrite*):
+        // winlogon's logoff thread takes its security attributes from it, and
+        // without them stops the logoff ("Failed to create Logoff security
+        // descriptor").
+        "ntmarta.dll",
         // The Display panel (M6): `rundll32 shell32.dll,Control_RunDLL
         // desk.cpl`, which `control desk.cpl` starts; shell32 loads the
         // applet by name.
