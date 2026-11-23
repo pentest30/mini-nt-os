@@ -651,11 +651,18 @@ static BOOL CALLBACK print_controls_of(HWND window, LPARAM pid)
         int count = 0;
         title[0] = 0;
         GetWindowTextW(window, title, 160);
-        RECT place = {0};
+        RECT place = {0}, seen = {0};
         GetWindowRect(window, &place);
-        DbgPrint(TAG "route controls of \"%s\" (%ld,%ld)-(%ld,%ld), style %08lx%s:\n", narrow(title, line, sizeof(line)),
-                 place.left, place.top, place.right, place.bottom, (DWORD)GetWindowLongW(window, GWL_STYLE),
-                 IsIconic(window) ? ", minimized" : "");
+        /* Its visible area: the clip box of its window DC (its frame
+           included); NULLREGION (1) when nothing of it can be drawn. */
+        HDC dc = GetWindowDC(window);
+        int kind = dc ? GetClipBox(dc, &seen) : 0;
+        if (dc) ReleaseDC(window, dc);
+        DbgPrint(TAG "route controls of \"%s\" (%ld,%ld)-(%ld,%ld), style %08lx, ex %08lx%s, visible %d "
+                     "(%ld,%ld)-(%ld,%ld):\n",
+                 narrow(title, line, sizeof(line)), place.left, place.top, place.right, place.bottom,
+                 (DWORD)GetWindowLongW(window, GWL_STYLE), (DWORD)GetWindowLongW(window, GWL_EXSTYLE),
+                 IsIconic(window) ? ", minimized" : "", kind, seen.left, seen.top, seen.right, seen.bottom);
         EnumChildWindows(window, print_control, (LPARAM)&count);
     }
     return TRUE;
