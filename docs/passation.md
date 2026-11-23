@@ -1,5 +1,15 @@
 # Notes de passation
 
+- **RestoreDC figeait tout le système** (`claude/restore-dc-deadlock`, sur `main` ; demandé le 2026-11-23 :
+  Notepad++ « totalement freezé » dans VirtualBox). Toute la machine était arrêtée (l'horloge et le journal série
+  aussi), le processeur dans `nt_gdi_restore_dc` sur un `lock cmpxchg` / `pause` (VBoxManage `debugvm
+  getregisters`, `stack`, symbolisé par `llvm-symbolizer` sur le noyau de l'image). `Dc::restore_state`
+  (`win32k::gdi::dc`, depuis f623515, les revues de la PR 160) lisait le propriétaire du DC dans un `if let` sur
+  `self.state.lock()` : le verrou vit jusqu'à la fin du bloc, où un second `self.state.lock()` tournait pour
+  toujours à DISPATCH_LEVEL (et la mémoire du propriétaire s'y écrivait verrou tenu). Le propriétaire et la
+  région visible se lisent maintenant dans leur propre instruction. Scénario `save-restore-dc`
+  (`tests/native/savedc1.c`, AMD et Intel : SaveDC et RestoreDC sur un DC de fenêtre et un DC en mémoire), qui
+  se fige sans le correctif (vérifié). Aucun test n'appelait SaveDC ni RestoreDC.
 - **Les revues des bots des PR 158 et 159** (`claude/reviews-158-159`, sur `main` ; demandé le 2026-11-22 ;
   [`revues/mergestorm-vortex.md`](revues/mergestorm-vortex.md)). Les deux PR étaient fusionnées. Corrigé : SetParent
   ne lie plus une fenêtre ni sous un parent détruits pendant son SW_HIDE, et une chaîne de parents plus longue que la
