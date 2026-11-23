@@ -9,7 +9,8 @@
 //! cascade ([`cascade`]). MonitorFromWindow, MonitorFromRect et
 //! MonitorFromPoint le trouvent d'après un rectangle ([`from_rect`]),
 //! GetMonitorInfo le décrit ([`get`]), EnumDisplayMonitors l'énumère
-//! ([`enumerate`]).
+//! ([`enumerate`]), SystemParametersInfo(SPI_GETWORKAREA) donne la zone de
+//! travail du principal ([`primary`]).
 //!
 //! Pas encore : plusieurs moniteurs, la région du moniteur, une zone de travail
 //! réduite (la barre des tâches, SPI_SETWORKAREA). L'objet du moniteur n'est

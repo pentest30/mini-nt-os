@@ -123,7 +123,12 @@ fn give_non_client_metrics(pv: u32, size: u32, bytes: &[u8]) -> NtStatus {
 ///   points, la police par défaut d'une ListView ;
 /// - SPI_GETFOCUSBORDERWIDTH, SPI_GETFOCUSBORDERHEIGHT : l'épaisseur d'un
 ///   rectangle de focus (un UINT en `pvParam`, `uiParam` ignoré), que
-///   DrawFocusRect lit avant ses quatre PatBlt.
+///   DrawFocusRect lit avant ses quatre PatBlt ;
+/// - SPI_GETWORKAREA : la zone de travail du moniteur principal (`rcWork`,
+///   un RECT en `pvParam`, `uiParam` ignoré), comme ReactOS (SpiGet) ;
+///   FALSE sans moniteur. Les programmes y placent et centrent leurs
+///   fenêtres : sans elle, VCL (OpenOffice) prenait un RECT non initialisé
+///   et ouvrait ses fenêtres hors de l'écran.
 ///
 /// FALSE et `ERROR_INVALID_PARAMETER` pour une taille fausse. Une autre
 /// action est journalisée une fois et rend FALSE
@@ -146,6 +151,17 @@ pub(super) fn nt_user_system_parameters_info(arguments: &[u32]) -> NtStatus {
                 parameters.focus_border_height
             };
             give_parameter(pv, 0, &value.to_le_bytes(), false)
+        }
+        abi::user::SPI_GETWORKAREA => {
+            let Some(monitor) = win32k::monitor::primary() else {
+                return NtStatus(0);
+            };
+            let work = monitor.work;
+            let mut rect = [0u8; 16];
+            for (bytes, side) in rect.chunks_exact_mut(4).zip([work.left, work.top, work.right, work.bottom]) {
+                bytes.copy_from_slice(&side.to_le_bytes());
+            }
+            give_parameter(pv, 0, &rect, false)
         }
         _ => {
             UNSUPPORTED_SPI_ACTIONS.report(action);

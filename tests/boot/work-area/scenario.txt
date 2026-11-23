@@ -1,0 +1,27 @@
+# SystemParametersInfo(SPI_GETWORKAREA) (tests/native/workarea1.c, MinGW,
+# linked to ReactOS's user32): WORKAREA1.EXE takes the place of
+# winlogon.exe. Apache OpenOffice 4.1.17 started with no window: VCL centres
+# its splash screen and its first-start wizard in the work area, which Mino
+# did not give (FALSE, an uninitialised RECT, the windows at x = 0x4E4F43C0).
+# As ReactOS (sysparams.c, UserSystemParametersInfo: the primary monitor's
+# rcWork, SpiGet; sys::user::nt_user_system_parameters_info):
+# 1. TRUE and the whole screen (no taskbar takes room from it);
+# 2. the same rectangle as GetMonitorInfo's rcWork;
+# 3. uiParam ignored;
+# 4. a NULL pvParam: FALSE.
+features = test-smss
+requires = userland, native
+initial-command = WORKAREA1.EXE
+cpus     = default, intel
+timeout  = 120
+
+expect = [workarea] ready: a screen of
+expect = [workarea] step 1: 1, (0,0)-
+expect = , the screen 1
+expect = [workarea] step 2: GetMonitorInfo 1, the same rcWork 1
+expect = [workarea] step 3: uiParam 123: 1, the same 1
+expect = [workarea] step 4: a NULL pvParam: 0
+expect = [workarea] done
+
+forbid = *** STOP:
+forbid = NtUserSystemParametersInfo class 0x30 is not implemented
