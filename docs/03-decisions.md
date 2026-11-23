@@ -34,6 +34,7 @@ Pour changer une décision acceptée, on écrit une nouvelle ADR qui la remplace
 | 021 | win32k : ce que USER partage avec ses clients, à des adresses du serveur sur 32 bits | **Proposée** (spike S3) |
 | 022 | FAT32 : crate partagée `fatfs` ; formatage et partitions servis par le noyau | **Proposée** (chantier d'installation) |
 | 023 | Premier démarrage en mode installation : couche Mino des ruches (`mino.inf`) et fin d'installation par un programme Mino | **Proposée** (scénario `logon`) |
+| 024 | Sections de fichiers : les pages d'une section de données lues à la faute, partagées par le segment du fichier | **Proposée** (scénarios `section-cache` et `folder-apps`) |
 
 ---
 
@@ -421,3 +422,71 @@ démarrages.
 **À valider.** Le scénario `logon` (`disk = system`, deux démarrages) : au premier, `samsrv` crée `Administrator` et
 `minoinit.exe` va au bout ; au second, `winlogon` va au logon au lieu de l'installation, et `msgina` tente l'ouverture
 de session automatique d'`Administrator`. Jusqu'où elle va est suivi dans `docs/compat/m5-csrss.md`.
+
+---
+
+## ADR-024 — Sections de fichiers : les pages d'une section de données lues à la faute, partagées par le segment du fichier
+
+**Contexte.** Jusqu'ici, NtCreateSection sur un fichier lisait le fichier entier en mémoire (`io::File::read_all`),
+partagé entre les sections du même fichier inchangé seulement tant qu'une section le tenait (`io::section_cache`,
+références faibles). Mesuré le 2026-11-21 (`docs/passation.md`, entrée « Les sous-menus du menu Démarrer ») : pour
+l'icône de l'installeur d'OpenOffice (143 Mo, `C:\APPS`), `explorer` crée trois sections de données sur le fichier
+(LoadLibraryEx en fichier de données) et chacune le relit en entier sur le disque ATA : 99 s, 84 s et 86 s, alors
+qu'il n'en lit que quelques Kio de ressources. NT et ReactOS ne lisent une page d'une section de fichier qu'à la
+faute sur une vue (MmNotPresentFaultSectionView, MmMakeSegmentResident de `ntoskrnl/mm/section.c` de ReactOS
+0.4.16). Le choix engage Mm (le segment, la faute qui lit), Io (le cache des segments, la lecture de pagination),
+`ntoskrnl` et `hal` (une faute de page qui attend le disque, interruptions permises), et le modèle de cohérence des
+vues : il se défera difficilement.
+
+**Décision.**
+- Une section de **données** d'un fichier ouvert ne lit rien à sa création. Ses pages sont celles du **segment** du
+  fichier (`mm::section::FileSegment`, le `DataSectionObject` des SECTION_OBJECT_POINTERS de NT) : un arbre des pages
+  lues, la taille du fichier, et un lecteur (`mm::section::FileReader`, que `ntoskrnl::sys::section` fait d'Io sur
+  l'objet fichier, tenu par le segment). Toutes les sections de données du même fichier inchangé partagent le même
+  segment, qu'Io retrouve (`io::section_cache::DATA`, un `dyn Any` : Io ne connaît pas Mm).
+- La première faute sur une page d'une vue la lit, **verrou de la VAD relâché**, à l'IRQL de la faute (sous
+  DISPATCH_LEVEL ; une faute sur une adresse utilisateur à DISPATCH_LEVEL ou plus reste un STOP 0x0A), avec les pages
+  absentes de ses 64 Kio alignés, en une lecture ; puis la faute reprend du début, comme STATUS_MM_RESTART_OPERATION
+  de ReactOS (`AddressSpace::access_fault`, et la copie de MmCopyVirtualMemory). Le lecteur permet les interruptions
+  le temps de la lecture (la porte de la faute les masque) ; la faute entière est une région critique
+  (`ntoskrnl::sys::exceptions::page_fault_hook`) : un APC noyau normal n'est livré qu'une fois la faute finie. Une
+  lecture qui échoue, ou un fichier effacé depuis, rend `STATUS_IN_PAGE_ERROR` à la faute.
+- Une page lue reste au segment jusqu'à sa disparition, avec sa dernière section. Une écriture, un changement de
+  taille ou l'effacement du fichier retire le segment du cache (comme avant les octets) : les sections suivantes en
+  font un neuf ; l'ancien reste à ses sections, et ses pages pas encore lues se lisent du fichier tel qu'il est à
+  leur faute.
+- Les écritures dans une vue partagée vont aux pages du segment, que voient les autres vues et sections du fichier
+  (comme sur NT), mais pas au fichier : pas d'écrivain de pages modifiées (ADR-010 : pas de fichier d'échange, et pas
+  encore de retour au fichier).
+- Une section d'**image** lit à sa création ses en-têtes et les données de ses sections
+  (`mm::section::ImageLayout::extent`, `io::File::image_contents`), pas ce qui les suit (les données qu'un installeur
+  ajoute à son exécutable). Elle garde cette copie : une DLL chargée ne change pas si son fichier est réécrit, ce que
+  NT refuse par ailleurs (MmFlushImageSection), et que Mino ne refuse pas encore.
+
+**Conséquences.**
+- ✅ Créer une section sur un gros fichier ne coûte plus rien ; une icône lue dans un exécutable de 143 Mo ne lit
+  que ses pages. Les sections du même fichier partagent leurs pages, plus seulement leurs octets.
+- ✅ Les données ajoutées d'un installeur (NSIS, Inno) ne sont plus lues pour en faire une image.
+- ❌ Une faute de page peut attendre le disque : la pile noyau d'un appel système qui touche une vue d'un fichier
+  porte aussi la lecture du système de fichiers (24 Kio, `mm::kstack`), et la faute ne doit tenir aucun verrou
+  tournant ni aucun verrou d'Io (les copies de NtReadFile et NtWriteFile se font hors des verrous d'Io).
+- ❌ La cohérence n'est pas celle de NT : une page déjà lue garde son contenu après une écriture du fichier, une
+  page lue après la voit ; ce qui s'écrit dans une vue ne retourne pas au fichier.
+- ⚠️ À suivre : l'écrivain des pages modifiées et la cohérence avec NtWriteFile (le cache de fichiers de NT), les
+  pages d'image à la faute (avec le refus d'écrire une image chargée), la libération des pages d'un segment sous
+  pression mémoire (avec le fichier d'échange, ADR-010), et le SMP (deux fautes sur la même page lisent toutes deux,
+  la première gardée).
+
+**Alternatives écartées.**
+- *Garder la lecture complète et un cache qui retient les fichiers* : la première section paie toujours tout le
+  fichier (99 s pour 143 Mo), et la mémoire tient des fichiers entiers dont on lit quelques pages.
+- *Lire dans un thread système de pagination, la faute attendant son événement* : la pile du thread fautif resterait
+  courte, mais c'est un écart avec NT et ReactOS (MiReadPage dans le thread fautif), et chaque faute paierait deux
+  commutations.
+- *Paginer aussi les images maintenant* : leurs pages viendraient du fichier à la faute, mais une DLL chargée
+  changerait sous ses vues si son fichier était réécrit ; sans le refus de NT, la copie de l'image est plus sûre.
+
+**À valider.** Le scénario `section-cache` (un fichier de 16 Mio : la section et la faute d'une page en moins de
+200 ms, le partage entre sections, la copie sur écriture, l'écriture partagée, un fichier qui finit dans une page)
+et le scénario `folder-apps` (`explorer` ouvre `C:\APPS` et montre l'icône de l'installeur d'OpenOffice) ; les
+scénarios qui chargent des images (`smss`, `logon`, `notepad`, `app-*`) ne régressent pas.

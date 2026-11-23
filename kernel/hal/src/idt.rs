@@ -361,6 +361,11 @@ fn exception_page_fault_inner(frame: &InterruptStackFrame, error: PageFaultError
                 StackStart::Trap { rip, rbp },
             );
         }
+        // The memory manager may wait in its resolution (the page of a
+        // file's section is read from the disk, interrupts enabled): another
+        // thread's fault meanwhile is not a nested one. A fault of the
+        // resolution itself on a kernel address still stops below.
+        IN_PF_OUTER.store(false, Ordering::SeqCst);
         match page_fault_hook(cr2_raw, error) {
             Some(STATUS_SUCCESS) => {
                 // Resolved: the faulting instruction runs again.

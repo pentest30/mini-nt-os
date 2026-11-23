@@ -468,6 +468,34 @@ Notepad++ s'arrêtait alors sur « Exception On WM_CREATE » (« Unknown excepti
 `ex/sysinfo.c` de ReactOS (un nœud, les processeurs de SystemBasicInformation). Notepad++ ouvre « new 1 -
 Notepad++ » et se ferme avec 0. Son parcours (taper, remplacer, enregistrer, rouvrir) reste à faire.
 
+### La page de progression des NSIS, le 2026-11-21
+
+Le wizard visible (le banc en session, l'installateur sans `/S`) montre la page de progression abîmée :
+l'en-tête blanc sans son titre, des restes de l'image de la page d'accueil à gauche (la zone libérée non
+repeinte), la barre de progression dont le texte avance mais pas le remplissage. Reproduit dans le scénario
+`app-npp-interactive` (l'installeur de Notepad++ 7.9.2 poussé par la souris de QEMU : les clics au bout
+Volgende/I Agree/Install, les captures en screen.ppm converties en PNG).
+
+La mesure (la trace temporaire des services win32k de l'installateur : 52 526 appels) : les dessins passent
+par les services déjà faits (BitBlt 398, StretchDIBits 149, IntersectClipRect 717, GetRandomRgn 687) et les
+manquants du symptôme sont **NtGdiSaveDC, NtGdiRestoreDC, NtGdiExtCreatePen** (faits le 2026-11-21, plus
+haut), puis NtGdiGetTransform (10 appels), NtGdiSetLayout (7), NtUserSetClassLong, NtUserCallOneParam
+0x20/0x28, NtGdiSetDIBitsToDeviceInternal, NtUserSelectPalette, NtGdiGetDCforBitmap. **NtGdiSaveDC et
+NtGdiRestoreDC** : la pile d'états du DC (`gdi::dc::save_state`/`restore_state`, d'après DC_vRestoreDC de
+ReactOS comme spécification) — les niveaux relatifs négatifs, les poses d'après effacées, la région visible
+hors de l'état sauvé (« Get/SetDCState() don't change hVisRgn field », DC_vCopyState), le bitmap seulement
+pour un DC en mémoire. **NtGdiExtCreatePen** (`Pen::ext_create`) : PS_NULL et BS_NULL rendent le stylo nul,
+un cosmétique d'un pinceau non plein refusé, les longs de style d'utilisateur lus puis jetés (les pointillés
+se dessinent en approximations). **L'effacement parent** (`paint::expose`) : ce qu'un enfant découvre dans
+son parent s'efface avec le fond de sa classe (le « erasing what a child window uncovers in its parent » tirait
+à chaque wizard, et les restes de l'image d'accueil restaient sur le cadre).
+
+**La page de progression reste abîmée après tout cela** : les captures montrent l'en-tête vide et la barre au
+début, avec le texte qui avance (« Pak uit: cxmi… 57 % »). Le diagnostic continue : les exposés de
+l'installeur tracent des rectangles aux coordonnées du bureau (391, 229)-(888, 543) quand le wizard se voit à
+(0, 0)-(497, 378) — la divergence des espaces de coordonnées entre les régions de peinture et les rectangles
+des fenêtres est la piste suivante, avec les restes du bitmap hors du rectangle de la page.
+
 ### CALLPROCDATA : Inno Setup 5.4 installe, le 2026-11-21
 
 Les installeurs Inno Setup 5.4 (PeaZip 5.4.2, GIMP 5.4.3, tous deux ANSI) finissaient sur `STATUS_STACK_OVERFLOW`,
