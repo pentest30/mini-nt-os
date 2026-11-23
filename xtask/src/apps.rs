@@ -116,14 +116,20 @@ const KEEPASS_ROUTE_STEPS: &[&str] = &[
 /// (`ROUTE_STEPS` of `tests/native/appbench.c`), each under 160 characters.
 pub const ROUTE_STEPS: usize = 24;
 
-/// PeaZip's route: `ROUTE.ZIP` extracted to a folder of its name
-/// (`-ext2folder`); PeaZip hands the work to its 7-Zip (`res\7z\7z.exe`)
-/// and its launcher, and ends before them: the route waits for the file.
-/// Opening the archive in PeaZip's file manager is not yet a step: the
-/// manager stops on LCL's "Failed to get raw image description from
-/// bitmap", win32k refusing 24-bit bitmaps (docs/compat/applications.md).
-const PEAZIP_ROUTE_STEPS: &[&str] =
-    &[r"start -ext2folder C:\APPS\ROUTE.ZIP", r"file C:\APPS\ROUTE\ROUTE.TXT => extracted", "close"];
+/// PeaZip's route: `ROUTE.ZIP` opened in its file manager, which lists it
+/// in its title ("ROUTE.ZIP - 0 dir(s), 1 file(s), 66 B"); then extracted to
+/// a folder of its name (`-ext2folder`): PeaZip hands the work to its 7-Zip
+/// (`res\7z\7z.exe`) and its launcher, and ends before them, so the route
+/// waits for the file. The file manager does not close on WM_CLOSE yet:
+/// `close` ends it (docs/compat/applications.md).
+const PEAZIP_ROUTE_STEPS: &[&str] = &[
+    r"start C:\APPS\ROUTE.ZIP",
+    "window ROUTE.ZIP - 0 dir(s), 1 file(s), 66 B => opened",
+    "close",
+    r"start -ext2folder C:\APPS\ROUTE.ZIP",
+    r"file C:\APPS\ROUTE\ROUTE.TXT => extracted",
+    "close",
+];
 
 /// The text PeaZip's route archives.
 const PEAZIP_ROUTE_TEXT: &[u8] = b"PeaZip route: an archive opened, then extracted\r\nits second line\r\n";

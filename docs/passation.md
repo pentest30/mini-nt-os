@@ -10,6 +10,44 @@
   (`tests/native/olepic1.c`, en session après `minoinit`, avec les bibliothèques d'import d'`ole32` et
   d'`oleaut32`) : un BMP de 24 bits chargé et copié comme le fait `load_picture` ; sans l'enregistrement,
   OleLoadPicture rend 80040154 (vérifié).
+- **La fenêtre de PeaZip et sa fermeture** (`claude/peazip-window`, sur la PR 174, M7, le banc,
+  [`compat/applications.md`](compat/applications.md#la-fenêtre-de-peazip-et-sa-fermeture-le-2026-11-23) ; demandé le
+  2026-11-23). Rien à corriger dans Mino. Le gestionnaire se peint : la capture d'un scénario vient quand tous ses
+  marqueurs ont paru, après la fin du parcours. Il ne se ferme pas sur WM_CLOSE parce qu'il attend son second
+  `cmd.exe /c rmdir … /s /q`, lancé avec DETACHED_PROCESS sans handles standard : le répertoire déjà effacé, le `cmd`
+  de ReactOS écrit son erreur et attend pour toujours une section critique jamais initialisée (`conutils` :
+  ConStreamInitEx n'initialise pas le verrou d'un flux au handle nul, CON_STREAM_WRITE2 le prend quand même ;
+  0.4.16 et `master`). Mesuré par des traces temporaires (paramètres du processus, appels de `cmd` et de `csrss`) et
+  reproduit sans PeaZip (un `cmd` détaché : sans rien à écrire, fini ; avec une erreur, encore là au bout de 20 s ;
+  avec un handle d'erreur, fini avec 2). Le banc continue de terminer PeaZip 15 s après WM_CLOSE, maintenant
+  documenté ; `show` imprime aussi le style étendu et la partie visible de chaque fenêtre (GetClipBox de son DC de
+  fenêtre). Vérifié : `app-peazip` (AMD). **Suite** : le défaut à signaler à ReactOS ; les DIB sections de 16 bits.
+- **Les bitmaps de 24 bits** (`claude/surface-24bit`, sur les PR 172 et 173, M7, GDI,
+  [`compat/applications.md`](compat/applications.md#les-bitmaps-de-24-bits--peazip-ouvre-son-gestionnaire-le-2026-11-23) ;
+  demandé le 2026-11-23 après le diagnostic de PeaZip). `surface::Format::Bgr` (DIB sections et CreateBitmap de 24
+  bits, `decode_bgr`, `encode_bgr`), GetDIBits de 24 bits, les DIB sections de 1 bit (indexées). Scénario `bitmap-24`
+  (`tests/native/bmp24.c`). PeaZip ouvre son gestionnaire et une archive (son titre la liste : l'étape « opened » du
+  parcours) ; la course d'une étape `file` corrigée dans le banc. Vérifié : lint, tests hôte, `bitmap-24` (AMD,
+  Intel ; sans la modification, il échoue), `app-peazip` (l'archive ouverte à 21 s du parcours, extraite à 63 s ;
+  306 s en tout, AMD), `bitmap`, `icons`, `cursor`, `notepad-saveas`, `folder-view` (AMD). Revue des bots : GetDIBits
+  de 1 bit prend l'index de la couleur la plus proche dans la table rendue (`dibits::encode_lines`), comme en 4 et 8
+  bits : une DIB section de 1 bit à table inversée (blanc, puis noir) revenait inversée (test hôte
+  `a_one_bit_dib_takes_the_index_of_its_table`, qui échoue sans le correctif) ;
+  [`revues/mergestorm-vortex.md`](revues/mergestorm-vortex.md). Sur la pile qui a reçu la PR 160, PeaZip figeait tout
+  le système au premier RestoreDC de son DC (le verrou repris de la PR 160, corrigé par la PR 173, fusionnée ici).
+  **Pas encore** : le gestionnaire
+  de PeaZip n'apparaît pas sur l'écran et ne se ferme pas sur WM_CLOSE (mesurés ensuite : l'entrée au-dessus) ; les
+  DIB sections de 16 bits.
+- **RestoreDC figeait tout le système** (`claude/restore-dc-deadlock`, sur `main` ; demandé le 2026-11-23 :
+  Notepad++ « totalement freezé » dans VirtualBox). Toute la machine était arrêtée (l'horloge et le journal série
+  aussi), le processeur dans `nt_gdi_restore_dc` sur un `lock cmpxchg` / `pause` (VBoxManage `debugvm
+  getregisters`, `stack`, symbolisé par `llvm-symbolizer` sur le noyau de l'image). `Dc::restore_state`
+  (`win32k::gdi::dc`, depuis f623515, les revues de la PR 160) lisait le propriétaire du DC dans un `if let` sur
+  `self.state.lock()` : le verrou vit jusqu'à la fin du bloc, où un second `self.state.lock()` tournait pour
+  toujours à DISPATCH_LEVEL (et la mémoire du propriétaire s'y écrivait verrou tenu). Le propriétaire et la
+  région visible se lisent maintenant dans leur propre instruction. Scénario `save-restore-dc`
+  (`tests/native/savedc1.c`, AMD et Intel : SaveDC et RestoreDC sur un DC de fenêtre et un DC en mémoire), qui
+  se fige sans le correctif (vérifié). Aucun test n'appelait SaveDC ni RestoreDC.
 - **Les revues des bots des PR 158 et 159** (`claude/reviews-158-159`, sur `main` ; demandé le 2026-11-22 ;
   [`revues/mergestorm-vortex.md`](revues/mergestorm-vortex.md)). Les deux PR étaient fusionnées. Corrigé : SetParent
   ne lie plus une fenêtre ni sous un parent détruits pendant son SW_HIDE, et une chaîne de parents plus longue que la
