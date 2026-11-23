@@ -559,8 +559,9 @@ impl File {
     /// Le segment des sections de données du fichier (NtCreateSection, le
     /// `DataSectionObject` de NT) : celui que tient déjà une section du même
     /// fichier inchangé, sinon celui que `create` fait pour un fichier de
-    /// cette taille, gardé pour les suivantes (`crate::section_cache::DATA`).
-    /// Rien n'est lu du fichier.
+    /// cette taille, gardé pour les suivantes (`crate::section_cache::DATA`) ;
+    /// celui d'une autre section du même fichier, faite en même temps, s'il
+    /// est gardé le premier. Rien n'est lu du fichier.
     ///
     /// # IRQL
     /// PASSIVE_LEVEL for filesystem I/O; may allocate and perform device reads.
@@ -580,7 +581,9 @@ impl File {
         let segment = create(node.size)?;
         if let Some(key) = key {
             let shared: Arc<dyn core::any::Any + Send + Sync> = segment.clone();
-            cache.insert(key, &shared, made_at);
+            if let Ok(kept) = cache.insert(key, &shared, made_at).downcast::<T>() {
+                return Ok(kept);
+            }
         }
         Ok(segment)
     }
@@ -618,9 +621,10 @@ impl File {
             bytes.truncate(wanted);
         }
         let bytes: Arc<[u8]> = Arc::from(bytes);
-        if let Some(key) = key {
-            cache.insert(key, &bytes, read_at);
-        }
+        let bytes = match key {
+            Some(key) => cache.insert(key, &bytes, read_at),
+            None => bytes,
+        };
         Ok((bytes, node.size))
     }
 

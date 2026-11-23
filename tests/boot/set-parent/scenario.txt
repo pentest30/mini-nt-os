@@ -1,0 +1,21 @@
+# SetParent (tests/native/setpar1.c, MinGW, linked to ReactOS's kernel32 and
+# user32): SETPAR1.EXE takes the place of winlogon.exe. As co_IntSetParent
+# (win32k::winpos::set_parent):
+# 1. a popup put under P: the desktop given back, P its parent, P's two
+#    children;
+# 2. a popup that destroys itself on the WM_SHOWWINDOW (FALSE) SetParent
+#    starts with: SetParent fails (ERROR_INVALID_WINDOW_HANDLE) and P keeps
+#    its children. Its dead handle used to be linked first among P's
+#    children, and the list stopped there (the review of PR 158).
+features = test-smss
+requires = userland, native
+initial-command = SETPAR1.EXE
+cpus     = default, intel
+timeout  = 120
+
+expect = [setparent] ready: P with C, 1 child
+expect = [setparent] step 1: SetParent(V, P) gave the desktop 1; V's parent P 1; P's children 2, V first 1
+expect = [setparent] step 2: SetParent(W, P) of a window destroyed on its hide 00000000 (error 1400), W gone 1; P's children 2, V and C 1, P's first child V 1
+expect = [setparent] done
+
+forbid = *** STOP:
