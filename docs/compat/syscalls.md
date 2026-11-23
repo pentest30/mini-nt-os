@@ -9,7 +9,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | Table | Implémentés | Services |
 |---|---:|---:|
 | ntoskrnl | 135 | 296 |
-| win32k | 222 | 737 |
+| win32k | 223 | 737 |
 
 ## ntoskrnl
 
@@ -713,7 +713,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x118a` | `NtUserGetComboBoxInfo` | 2 | ✅ |
 | `0x118b` | `NtUserGetControlBrush` | 3 | ✅ |
 | `0x118c` | `NtUserGetControlColor` | 4 | ✅ |
-| `0x118d` | `NtUserGetCPD` | 3 |  |
+| `0x118d` | `NtUserGetCPD` | 3 | ✅ |
 | `0x118e` | `NtUserGetCursorFrameInfo` | 4 |  |
 | `0x118f` | `NtUserGetCursorInfo` | 1 |  |
 | `0x1190` | `NtUserGetDC` | 1 | ✅ |

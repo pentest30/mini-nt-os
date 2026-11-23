@@ -12,16 +12,24 @@ cpus = default
 timeout = 900
 # What works today, a floor: the loader extracts its setup.tmp
 # (SetEndOfFile: FileAllocationInformation), which finds the user an
-# administrator (CheckTokenMembership: NtAccessCheck) and creates its
-# temporary directory; Inno Setup 5.4 then ends on STATUS_BAD_STACK
-# (RtlUnwind), see docs/compat/applications.md.
+# administrator (CheckTokenMembership: NtAccessCheck), creates its
+# temporary directory and starts the installation: its Delphi edit box
+# over comctl32 6's Edit, a Unicode class asked in ANSI, gets a call
+# procedure (CALLPROCDATA, win32k::callproc; without it, the control wrote
+# UTF-16 into the Delphi heap, and setup.tmp ended on STATUS_STACK_OVERFLOW).
+# It copies its files, then cannot create one in a directory with a long
+# name of 18 characters (nographic-embedded: the entry has no long name,
+# "The system cannot find the path specified") and rolls back, see
+# docs/compat/applications.md.
 expect = [appbench] installer started
 expect = Setup version: Inno Setup version 5.4.2
 expect = User privileges: Administrative
 expect = Created temporary directory:
+expect = Starting the installation process.
 expect = [appbench] installer ended: exit code
 expect = [appbench] PeaZip 3.9.1: report done
 forbid = Unable to create a temporary file
 forbid = User privileges: None
 forbid = [appbench] installer still running after
+forbid = [appbench] installer ended: exit code c00000fd
 forbid = *** STOP:

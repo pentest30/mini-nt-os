@@ -13,18 +13,21 @@ timeout = 1500
 # What works today, a floor: the loader extracts its setup.tmp
 # (SetEndOfFile: FileAllocationInformation), which finds the user an
 # administrator (CheckTokenMembership: NtAccessCheck), creates its
-# temporary directory and runs its script; Inno Setup 5.4 then ends on
-# STATUS_BAD_STACK (RtlUnwind), see docs/compat/applications.md.
-# In the user's session, the failure of Inno 5.4 (its own code reads a
-# heap page that Mino does not map; STATUS_STACK_OVERFLOW without a
-# session) shows as Delphi's "Exception EAccessViolation" box, which
-# waits: the bench ends the installer after its delay (install_seconds).
+# temporary directory and installs GIMP: its Delphi edit boxes over
+# comctl32 6's Edit, a Unicode class asked in ANSI, get a call procedure
+# (CALLPROCDATA, win32k::callproc; without it, Delphi's EAccessViolation box,
+# the heap overwritten with UTF-16). Its log is longer than the bench's
+# buffer: the bench prints its last lines only, not the Inno version.
+# gimp-2.6.exe then reads 0xC in libgdk right after
+# NtUserEnumDisplayMonitors, not implemented, see
+# docs/compat/applications.md.
 expect = [appbench] installer started
-expect = Setup version: Inno Setup version 5.4.3
-expect = User privileges: Administrative
-expect = Created temporary directory:
-expect = [appbench] installer ended: exit code
+expect = Installation process succeeded.
+expect = [appbench] installer ended: exit code 0
+expect = [appbench] installed: C:\Program Files\GIMP-2.0\bin\gimp-2.6.exe
+expect = [appbench] program started
 expect = [appbench] GIMP 2.6.12: report done
 forbid = Unable to create a temporary file
 forbid = User privileges: None
+forbid = [appbench] installer still running after
 forbid = *** STOP:

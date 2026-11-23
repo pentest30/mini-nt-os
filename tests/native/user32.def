@@ -216,3 +216,13 @@ OpenClipboard@4
 RegisterClipboardFormatW@4
 SetClipboardData@8
 SetClipboardViewer@4
+CreateWindowExA@48
+DefWindowProcA@16
+GetClassInfoA@12
+GetClassInfoW@12
+GetWindowTextA@12
+GetWindowTextLengthA@4
+RegisterClassA@4
+SendMessageA@16
+GetWindowLongA@8
+RegisterClassW@4

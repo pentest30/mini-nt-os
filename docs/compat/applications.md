@@ -496,6 +496,50 @@ l'installeur tracent des rectangles aux coordonnées du bureau (391, 229)-(888, 
 (0, 0)-(497, 378) — la divergence des espaces de coordonnées entre les régions de peinture et les rectangles
 des fenêtres est la piste suivante, avec les restes du bitmap hors du rectangle de la page.
 
+### CALLPROCDATA : Inno Setup 5.4 installe, le 2026-11-21
+
+Les installeurs Inno Setup 5.4 (PeaZip 5.4.2, GIMP 5.4.3, tous deux ANSI) finissaient sur `STATUS_STACK_OVERFLOW`,
+et en session sur une boîte de Delphi « EAccessViolation ». Le bilan précédent y voyait une page du tas que Mino ne
+projetait pas. Mesuré cette fois :
+
+- une trace temporaire (jamais commitée) des services et des exceptions des processus de l'installeur (le nom
+  d'image d'EPROCESS est tronqué à 15 caractères : `peazip-plain-3.`, pour le chargeur comme pour `setup.tmp`) ;
+- le `setup.tmp` récupéré du disque d'un ancien run (son entrée effacée de `Local Settings\Temp`, ses clusters
+  contigus), désassemblé : `0x401dc7` est `InsertFree` du gestionnaire de mémoire de Delphi (la taille d'un bloc
+  libre écrite à sa fin), et l'adresse impaire `0xf46f61` n'est pas une page oubliée mais une taille de bloc
+  corrompue ; à la faute suivante, la liste libre vaut `0x67610074` et `0x4e0065`, du texte UTF-16 ;
+- juste avant, le contrôle mesurait les caractères `0x3a43 0x505c 0x6f72…` : « C:\Program Files\PeaZip » en ANSI,
+  lu comme de l'UTF-16.
+
+Le TEdit de Delphi prend la procédure d'Edit par GetClassInfoA et l'appelle par CallWindowProcA ; le manifeste de
+`setup.tmp` fait d'« Edit » celui de `comctl32` 6 (une classe Unicode sans FNID, `EDIT_Register`), et win32k
+rendait sa procédure telle quelle à l'appelant ANSI. Le contrôle lisait donc son texte ANSI en UTF-16, et son
+WM_GETTEXT écrivait deux octets par caractère dans le tampon ANSI que Delphi avait alloué pour la longueur. ReactOS
+rend là une procédure d'appel (CALLPROCDATA), que CallWindowProcA convertit : c'est fait, avec deux écarts de la
+même règle trouvés par le scénario de test (la classe d'un contrôle de `user32` vue par la procédure du client du
+jeu demandé ; un contrôle créé en ANSI est une fenêtre ANSI). Le détail est à l'étape 47 de
+[`m6-fenetres.md`](m6-fenetres.md), le test est le scénario `ansi-controls`.
+
+Le banc après le correctif, AMD, en session :
+
+| Application | Avant | Maintenant |
+|---|---|---|
+| PeaZip | `setup.tmp` finit sur `STATUS_STACK_OVERFLOW` en 11 s | l'installation commence et copie 78 fichiers dans `C:\Program Files\PeaZip`, puis ne peut créer `res\themes\nographic-embedded\fm-theme.bmp` (« The system cannot find the path specified ») et revient en arrière (code 5) : le répertoire, au nom long de 18 caractères, est sur le disque sans son nom long (seule l'entrée 8.3 `NOGRAP~1`), alors que `firecrystal.theme.7z`, de 20 caractères, a le sien |
+| GIMP | la boîte « EAccessViolation », l'installeur terminé par le banc après 900 s | **s'installe** : code 0 en 558 s, « Installation process succeeded », 116 Mio écrits ; `gimp-2.6.exe` démarre puis lit l'adresse `0xC` dans `libgdk-win32-2.0-0.dll` juste après NtUserEnumDisplayMonitors, sans handler (aucun moniteur) |
+| KeePass | son titre se lit « K » | son titre se lit « KeePass » ; il ne se ferme toujours pas sur WM_CLOSE |
+| AbiWord | (le 2026-11-20) `libAbiWord.dll` lit `0x3C` | ouvre « Untitled1 - AbiWord » et se ferme avec 0 — déjà sur la base de la branche (`9014bc5`), pas l'effet de CALLPROCDATA |
+| WinMerge, Dev-C++, Notepad++, SumatraPDF, 7-Zip | — | inchangés : WinMerge et Dev-C++ plantent au lancement de leur programme (0xC0000005, « Application Error »), Notepad++ ouvre « new 1 », SumatraPDF n'est pas trouvé où le banc le cherche, 7-Zip ouvre son gestionnaire |
+
+Les installeurs Inno déplacent chaque fichier par MoveFile, que `kernel32` fait par une copie puis un effacement
+(« Forcing copy, renaming not supported by FSD » : FileRenameInformation, la classe 0xa de NtSetInformationFile,
+n'a pas de handler) : 1 729 fois pour GIMP. Le plancher de PeaZip attend « Starting the installation process. » et
+interdit la fin sur `STATUS_STACK_OVERFLOW` ; celui de GIMP attend l'installation réussie et le programme lancé. Son
+journal (650 Ko) dépasse le tampon du banc, qui n'en imprime que les 64 derniers Kio : le plancher ne peut plus
+attendre la version d'Inno ni les privilèges, écrits au début (à corriger dans `appbench.c`).
+
+La suite pour ces applications : le nom long d'un répertoire créé (PeaZip), NtUserEnumDisplayMonitors (GIMP),
+FileRenameInformation (tous les Inno).
+
 ### La suite
 
 **Mise à jour du 2026-11-20 : ProcessDebugPort** (`fix/ps-process-debug-port`).

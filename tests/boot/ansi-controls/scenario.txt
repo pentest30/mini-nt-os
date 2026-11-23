@@ -1,0 +1,57 @@
+# The system controls seen from an ANSI program (tests/native/ansictl1.c,
+# MinGW, linked to ReactOS's kernel32 and user32): ANSICTL1.EXE takes the
+# place of winlogon.exe and takes WinSta0\Default. Inno Setup 5.4 (Delphi,
+# ANSI: PeaZip, GIMP) died on them: Delphi's TEdit is a class of its own
+# over Edit, whose procedure it takes from GetClassInfoA and calls by
+# CallWindowProcA; win32k gave the class's Unicode procedure, the control
+# read its ANSI text as UTF-16 and its WM_GETTEXT wrote two bytes per
+# character into the ANSI buffer of the Delphi heap (its free list then held
+# text: STATUS_STACK_OVERFLOW, or Delphi's EAccessViolation box). As
+# ReactOS's IntGetClassWndProc, a control's class gives the client
+# procedure of the asked character set (win32k::class::Class::procedure).
+# 1. GetClassInfoA and GetClassInfoW of Button, ComboBox, Edit, ListBox and
+#    Static: the procedure that user32 gives itself (GetClassLong of
+#    GCL_WNDPROC), of each character set;
+# 2. a class over Edit, as Delphi makes it: its ANSI text reads back whole,
+#    and a short buffer gets nothing past its end;
+# 3. a plain Edit created in ANSI keeps its ANSI text (IntCreateWindow: an
+#    ANSI window, win32k::window::creation_procedure);
+# 4. what Inno Setup 5.4 asks for: its manifest makes "Edit" comctl32 6's,
+#    Unicode and without a FNID; GetClassInfoA of such a class gives a call
+#    procedure (CALLPROCDATA, win32k::callproc), the same each time, and
+#    CallWindowProcA of it converts: the Unicode procedure gets UTF-16, its
+#    WM_GETTEXT fills a short ANSI buffer and nothing past it; a window of
+#    that class created in ANSI stays a Unicode window;
+# 5. GetWindowLongA of the Unicode window (NtUserGetCPD), subclassed by
+#    SetWindowLongA and given back: SetWindowLongA of the call procedure
+#    returns the ANSI subclass itself (IntSetWindowProc takes the old
+#    procedure in the caller's set);
+# 6. GetClassInfoW of an ANSI class, and CallWindowProcW of it;
+# 7. a call procedure is its process's and its desktop's
+#    (win32k::callproc::get): a thread on another desktop gets its own, and
+#    a second process (ANSICTL1.EXE child) gets its own from GetClassLongA of
+#    this program's window, which used to give it this program's (refused by
+#    user32's ValidateCallProc).
+features = test-smss
+requires = userland, native
+initial-command = ANSICTL1.EXE
+cpus     = default, intel
+timeout  = 120
+
+expect = [ansictl] ready: the parent 1
+expect = [ansictl] step 1: GetClassInfoA gives the ANSI procedure of 5 controls of 5, GetClassInfoW the Unicode one of 5, the two differ for 5
+expect = [ansictl] step 2: a class over Edit: length 23, GetWindowTextA(8) 7 "C:\Prog", the bytes past it untouched 1
+expect = [ansictl] step 2: WM_GETTEXT 23, the whole text 1
+expect = [ansictl] step 3: an Edit created in ANSI: GetWindowTextA 23, the whole text 1
+expect = [ansictl] step 4: GetClassInfoA of a Unicode class: a call procedure 1 (not the procedure 1), the same again 1
+expect = [ansictl] step 4: CallWindowProcA: the Unicode procedure gets the text 1; WM_GETTEXT(8) 7 "ansi te", the bytes past it untouched 1
+expect = [ansictl] step 4: a window of it created in ANSI stays Unicode: its procedure gets the text 1
+expect = [ansictl] step 5: GetWindowLongA a call procedure 1, SetWindowLongA gave it back 1, the Unicode procedure gets the text through the subclass 1; given back, GetWindowLongW the procedure 1
+expect = [ansictl] step 5: SetWindowLongA that gave it back returned the ANSI subclass 1
+expect = [ansictl] step 7: a thread on another desktop: its own call procedure converts 1
+expect = [ansictl] child: GetClassLongA of the parent's window: a call procedure 1, not the parent's 1, it converts 1
+expect = [ansictl] step 7: another process: its own call procedure 1; after its end, this one's converts 1, the same again 1
+expect = [ansictl] step 6: GetClassInfoW of an ANSI class: a call procedure 1; CallWindowProcW: the ANSI procedure gets the text 1
+expect = [ansictl] done
+
+forbid = *** STOP:

@@ -376,6 +376,7 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtUserGetClassName, Handler::Status(class::nt_user_get_class_name)),
     (services::NtUserGetComboBoxInfo, Handler::Status(message::nt_user_get_combo_box_info)),
     (services::NtUserGetControlBrush, Handler::Status(window::nt_user_get_control_brush)),
+    (services::NtUserGetCPD, Handler::Status(window::nt_user_get_cpd)),
     (services::NtUserGetControlColor, Handler::Status(window::nt_user_get_control_color)),
     (services::NtUserGetDC, Handler::Status(window::nt_user_get_dc)),
     (services::NtUserGetDCEx, Handler::Status(window::nt_user_get_dc_ex)),

@@ -373,6 +373,11 @@ pub fn process_exit(process: &Arc<Object<EProcess>>) {
             TYPE_SETWINDOWPOS => {
                 crate::deferpos::destroy(handle);
             }
+            // Ses procédures d'appel (UserGetCPD) : leurs classes partent
+            // avec lui.
+            abi::user::TYPE_CALLPROC => {
+                crate::callproc::destroy(handle);
+            }
             // Des données confiées au presse-papiers (NtUserConvertMemHandle)
             // qu'aucun presse-papiers n'a prises.
             abi::user::TYPE_CLIPDATA => {
