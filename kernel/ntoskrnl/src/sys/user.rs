@@ -128,7 +128,12 @@ fn give_non_client_metrics(pv: u32, size: u32, bytes: &[u8]) -> NtStatus {
 ///   un RECT en `pvParam`, `uiParam` ignoré), comme ReactOS (SpiGet) ;
 ///   FALSE sans moniteur. Les programmes y placent et centrent leurs
 ///   fenêtres : sans elle, VCL (OpenOffice) prenait un RECT non initialisé
-///   et ouvrait ses fenêtres hors de l'écran.
+///   et ouvrait ses fenêtres hors de l'écran ;
+/// - SPI_SETWORKAREA : le RECT en `pvParam` devient la zone de travail du
+///   moniteur (`win32k::monitor::set_work_area`) ; FALSE pour un RECT
+///   illisible, vide, ou qui sort du moniteur. La barre des tâches
+///   d'`explorer` y garde sa place. Pas encore : WM_SETTINGCHANGE aux
+///   fenêtres de premier niveau (SPIF_SENDCHANGE), que ReactOS envoie.
 ///
 /// FALSE et `ERROR_INVALID_PARAMETER` pour une taille fausse. Une autre
 /// action est journalisée une fois et rend FALSE
@@ -162,6 +167,17 @@ pub(super) fn nt_user_system_parameters_info(arguments: &[u32]) -> NtStatus {
                 bytes.copy_from_slice(&side.to_le_bytes());
             }
             give_parameter(pv, 0, &rect, false)
+        }
+        abi::user::SPI_SETWORKAREA => {
+            let mut rect = [0u8; 16];
+            if ke::usermem::copy_from_user(&mut rect, u64::from(pv)).is_err() {
+                return NtStatus(0);
+            }
+            let side = |index: usize| {
+                i32::from_le_bytes([rect[index * 4], rect[index * 4 + 1], rect[index * 4 + 2], rect[index * 4 + 3]])
+            };
+            let work = win32k::gdi::dib::Rect::new(side(0), side(1), side(2), side(3));
+            NtStatus(u32::from(win32k::monitor::set_work_area(work)))
         }
         _ => {
             UNSUPPORTED_SPI_ACTIONS.report(action);

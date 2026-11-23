@@ -539,6 +539,9 @@ pub const SPI_GETICONTITLELOGFONT: u32 = 0x001F;
 /// SPI_GETNONCLIENTMETRICS: fills a NONCLIENTMETRICSW (`uiParam` its size
 /// or 0, `pvParam` it, its `cbSize` set).
 pub const SPI_GETNONCLIENTMETRICS: u32 = 0x0029;
+/// SPI_SETWORKAREA: the work area of the monitor that holds a RECT
+/// (`pvParam`), which explorer's taskbar sets to keep its room.
+pub const SPI_SETWORKAREA: u32 = 0x002F;
 /// SPI_GETWORKAREA: the primary monitor's work area (`pvParam` a RECT,
 /// `uiParam` ignored), where programs place and centre their windows.
 pub const SPI_GETWORKAREA: u32 = 0x0030;

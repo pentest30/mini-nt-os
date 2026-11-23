@@ -10,12 +10,16 @@
 //! MonitorFromPoint le trouvent d'après un rectangle ([`from_rect`]),
 //! GetMonitorInfo le décrit ([`get`]), EnumDisplayMonitors l'énumère
 //! ([`enumerate`]), SystemParametersInfo(SPI_GETWORKAREA) donne la zone de
-//! travail du principal ([`primary`]).
+//! travail du principal ([`primary`]) et SPI_SETWORKAREA la change
+//! ([`set_work_area`]) : la barre des tâches d'`explorer` y garde sa place,
+//! et le bureau du shell, qui prend la zone de travail, ne la recouvre pas
+//! (couvrant tout l'écran, il serait pour `explorer` une application en
+//! plein écran, et la barre passerait au fond de l'ordre Z). Un changement
+//! de taille de l'écran rend tout l'écran à la zone de travail.
 //!
-//! Pas encore : plusieurs moniteurs, la région du moniteur, une zone de travail
-//! réduite (la barre des tâches, SPI_SETWORKAREA). L'objet du moniteur n'est
-//! pas dans la section partagée : son entrée de la table des handles n'a
-//! pas d'adresse (`user32` ne le lit pas, il passe par win32k).
+//! Pas encore : plusieurs moniteurs, la région du moniteur. L'objet du
+//! moniteur n'est pas dans la section partagée : son entrée de la table des
+//! handles n'a pas d'adresse (`user32` ne le lit pas, il passe par win32k).
 
 use alloc::vec::Vec;
 
@@ -67,6 +71,33 @@ pub fn attach(width: i32, height: i32) -> Result<(), NtStatus> {
 /// <= DISPATCH_LEVEL.
 pub fn primary() -> Option<Monitor> {
     PRIMARY.lock().as_ref().map(|primary| primary.monitor)
+}
+
+/// SPI_SETWORKAREA (UserSystemParametersInfo) : la zone de travail du
+/// moniteur le plus proche de `work` devient `work` ; `false`, sans rien
+/// changer, pour un rectangle vide ou qui sort du moniteur
+/// ([`checked_work_area`]).
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn set_work_area(work: Rect) -> bool {
+    let mut primary = PRIMARY.lock();
+    let Some(primary) = primary.as_mut() else {
+        return false;
+    };
+    match checked_work_area(primary.monitor.rect, work) {
+        Some(work) => {
+            primary.monitor.work = work;
+            true
+        }
+        None => false,
+    }
+}
+
+/// La zone de travail `work` d'un moniteur de rectangle `monitor`, comme
+/// ReactOS la vérifie : non vide, et entière dans le moniteur.
+pub fn checked_work_area(monitor: Rect, work: Rect) -> Option<Rect> {
+    (!work.is_empty() && monitor.intersect(&work) == work).then_some(work)
 }
 
 /// UserGetMonitorObject : le moniteur de handle `handle`.
@@ -194,6 +225,18 @@ mod tests {
             Some(Rect::new(110, 70, 130, 90)),
             "from its corner"
         );
+    }
+
+    #[test]
+    fn a_work_area_is_a_non_empty_rectangle_inside_the_monitor() {
+        let screen = Rect::new(0, 0, 1280, 800);
+        let above_the_taskbar = Rect::new(0, 0, 1280, 770);
+        assert_eq!(checked_work_area(screen, above_the_taskbar), Some(above_the_taskbar));
+        assert_eq!(checked_work_area(screen, screen), Some(screen), "the whole screen");
+        assert_eq!(checked_work_area(screen, Rect::new(0, 0, 1280, 801)), None, "beyond the bottom");
+        assert_eq!(checked_work_area(screen, Rect::new(-1, 0, 1280, 770)), None, "beyond the left");
+        assert_eq!(checked_work_area(screen, Rect::new(100, 100, 100, 200)), None, "no width");
+        assert_eq!(checked_work_area(screen, Rect::new(100, 300, 200, 200)), None, "upside down");
     }
 
     #[test]
