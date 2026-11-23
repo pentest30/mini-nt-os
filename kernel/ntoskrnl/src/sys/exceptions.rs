@@ -31,7 +31,9 @@ use abi::ntstatus::{
     STATUS_INVALID_PARAMETER, STATUS_PRIVILEGED_INSTRUCTION, STATUS_SUCCESS,
 };
 use hal::trap::{set_trap_hook, KTrapFrame};
+use ke::apc::{ke_enter_critical_region, ke_leave_critical_region};
 use ke::context::{apply_user_context, UserSelectors};
+use ke::sched::KePlatform;
 use ke::usermem::{copy_from_user, probe_for_read, UserPtr};
 use x86_64::structures::idt::PageFaultErrorCode;
 
@@ -126,13 +128,29 @@ fn is_privileged_instruction(eip: u32) -> bool {
     }
 }
 
-/// #PF : Mm résout la faute (page à zéro, copie sur écriture, garde de la
-/// pile), ou rend l'exception.
+/// La faute de page de Mm (`mm::fault::page_fault_hook`), pour la trappe
+/// des fautes du mode utilisateur et pour `hal::idt` (le noyau qui touche la
+/// mémoire utilisateur), dans une région critique : la page d'une section
+/// de fichier se lit à sa faute (ADR-024) et peut attendre le disque ; un APC
+/// noyau normal (la fin du thread) n'est livré qu'une fois la faute finie,
+/// quand rien de Mm (la section lue, ses pages) n'est plus sur la pile.
+///
+/// # IRQL
+/// < DISPATCH_LEVEL (hal le vérifie pour une faute du noyau). Peut bloquer.
+pub(crate) fn page_fault_hook(address: u64, error: PageFaultErrorCode) -> Option<NtStatus> {
+    ke_enter_critical_region::<KePlatform>();
+    let status = mm::fault::page_fault_hook(address, error);
+    ke_leave_critical_region::<KePlatform>();
+    status
+}
+
+/// #PF : Mm résout la faute (page à zéro, page d'un fichier lue, copie sur
+/// écriture, garde de la pile), ou rend l'exception.
 fn page_fault(frame: &mut KTrapFrame) {
     // CR2 before interrupts are enabled: another fault would replace it.
     let address = x86_64::registers::control::Cr2::read_raw();
     let error = PageFaultErrorCode::from_bits_truncate(frame.error_code);
-    let status = mm::fault::page_fault_hook(address, error).unwrap_or(STATUS_ACCESS_VIOLATION);
+    let status = page_fault_hook(address, error).unwrap_or(STATUS_ACCESS_VIOLATION);
     if status == STATUS_SUCCESS {
         return;
     }

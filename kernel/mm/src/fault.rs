@@ -5,7 +5,10 @@
 //!
 //! - page commitée jamais touchée : une page à zéro, projetée avec la
 //!   protection de la VAD (demande à zéro) ; dans une vue de section, la page
-//!   de la section, partagée (`mm::section`) ;
+//!   de la section, partagée (`mm::section`) ; la page d'une section de
+//!   données d'un fichier pas encore lue se lit d'abord du fichier, verrou de
+//!   la VAD relâché, puis la faute reprend (`AddressSpace::access_fault`,
+//!   ADR-024) ;
 //! - écriture sur une page de section en copie sur écriture : une copie
 //!   privée, qui prend la protection inscriptible correspondante ;
 //! - page de garde : la garde est levée et l'accès échoue avec
@@ -22,7 +25,9 @@
 //! `hal::idt` appelle [`page_fault_hook`] sous DISPATCH_LEVEL, interruptions
 //! masquées ; une faute dans la moitié basse à DISPATCH_LEVEL ou plus arrête
 //! le système avant (IRQL_NOT_LESS_OR_EQUAL), car la VAD se prend sous un
-//! verrou tournant.
+//! verrou tournant et la lecture d'une page de fichier attend le disque.
+//! `ntoskrnl` entoure la faute d'une région critique
+//! (`sys::exceptions::page_fault_hook`).
 //!
 //! Les droits d'une page suivent la protection de la VAD ; dans un espace sans
 //! DEP (ADR-020), toute page lisible s'exécute aussi
