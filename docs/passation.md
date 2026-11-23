@@ -1,5 +1,15 @@
 # Notes de passation
 
+- **Le parcours de PeaZip** (`claude/peazip-route`, sur la PR 171, M7,
+  [`compat/applications.md`](compat/applications.md#le-parcours-de-peazip-le-2026-11-23) ; demandé le 2026-11-23).
+  L'extraction : `peazip.exe -ext2folder C:\APPS\ROUTE.ZIP` (`zip::stored` écrit l'archive), l'étape `file CHEMIN`
+  attend `C:\APPS\ROUTE\ROUTE.TXT` (PeaZip finit avant son 7-Zip), ses deux lignes imprimées. `show` imprime aussi les
+  contrôles ; un fichier attendu qui manque fait lister `C:\APPS`. Tests hôte `peazip_has_an_archive_to_extract`,
+  `a_stored_archive_reads_back`. Vérifié : lint, tests hôte, `app-peazip` (AMD, 177 s, l'extraction en 14 s ; une
+  archive dont un octet est changé le fait échouer). **Pas encore** : l'ouverture dans le gestionnaire de PeaZip, qui
+  s'arrête sur la boîte de la LCL « Failed to get raw image description from bitmap » (NtGdiCreateBitmap de 24 bits,
+  NtGdiCreateDIBSection de 24 bits refusés : `gdi::surface`) ; la « fenêtre du programme » du plancher était cette
+  boîte. **Suite** : les surfaces de 24 bits, près du travail GDI d'une autre session (à convenir).
 - **Le parcours de KeePass** (`claude/keepass-route`, sur la PR 170, M7,
   [`compat/applications.md`](compat/applications.md#le-parcours-de-keepass-le-2026-11-22) ; demandé le 2026-11-22).
   Au clavier de QEMU, par étapes : une base (le mot de passe deux fois), une entrée, `ROUTE.KDB` enregistré, fermé ;
