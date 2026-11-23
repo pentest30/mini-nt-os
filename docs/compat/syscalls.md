@@ -9,7 +9,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | Table | Implémentés | Services |
 |---|---:|---:|
 | ntoskrnl | 135 | 296 |
-| win32k | 223 | 737 |
+| win32k | 224 | 737 |
 
 ## ntoskrnl
 
@@ -687,7 +687,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1170` | `NtUserEndMenu` | 0 | ✅ |
 | `0x1171` | `NtUserEndPaint` | 2 | ✅ |
 | `0x1172` | `NtUserEnumDisplayDevices` | 4 | ✅ |
-| `0x1173` | `NtUserEnumDisplayMonitors` | 5 |  |
+| `0x1173` | `NtUserEnumDisplayMonitors` | 5 | ✅ |
 | `0x1174` | `NtUserEnumDisplaySettings` | 4 | ✅ |
 | `0x1175` | `NtUserEvent` | 1 |  |
 | `0x1176` | `NtUserExcludeUpdateRgn` | 2 |  |

@@ -82,3 +82,6 @@ LockFileEx@24
 UnlockFile@20
 FormatMessageW@28
 LocalAlloc@8
+GetCurrentThread@0
+GetThreadPriority@4
+SetThreadPriority@8

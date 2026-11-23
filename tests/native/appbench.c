@@ -17,6 +17,11 @@ static char text[4096];
 static WCHAR install[1024], visible[1024], log_path[MAX_PATH], program[MAX_PATH];
 static char name[128];
 static DWORD timeout_seconds = 300;
+/* How long the program runs after its first window before WM_CLOSE. */
+static DWORD settle_seconds = 5;
+/* The route of the M7 list (route=), and how long it may take. */
+static WCHAR route[2048];
+static DWORD route_seconds = 600;
 
 static unsigned int length(const char *s) { unsigned int n = 0; while (s[n]) ++n; return n; }
 static unsigned int wlength(const WCHAR *s) { unsigned int n = 0; while (s[n]) ++n; return n; }
@@ -75,6 +80,15 @@ static void read_commands(void)
     narrow(value, name, sizeof(name));
     if (!value_of("log", log_path, MAX_PATH)) log_path[0] = 0;
     if (!value_of("visible", visible, 1024)) visible[0] = 0;
+    if (!value_of("route", route, 2048)) route[0] = 0;
+    if (value_of("route-seconds", value, 128)) {
+        route_seconds = 0;
+        for (WCHAR *d = value; *d >= L'0' && *d <= L'9'; ++d) route_seconds = route_seconds * 10 + (*d - L'0');
+    }
+    if (value_of("settle", value, 128)) {
+        settle_seconds = 0;
+        for (WCHAR *d = value; *d >= L'0' && *d <= L'9'; ++d) settle_seconds = settle_seconds * 10 + (*d - L'0');
+    }
     if (value_of("timeout", value, 128)) {
         timeout_seconds = 0;
         for (WCHAR *d = value; *d >= L'0' && *d <= L'9'; ++d) timeout_seconds = timeout_seconds * 10 + (*d - L'0');
@@ -358,6 +372,19 @@ static BOOL CALLBACK find_titled(HWND window, LPARAM argument)
     }
     return TRUE;
 }
+/* A visible titled window of the program other than `first`. */
+struct find_other { DWORD pid; HWND first; HWND window; };
+static BOOL CALLBACK find_other_titled(HWND window, LPARAM argument)
+{
+    struct find_other *find = (struct find_other *)argument;
+    DWORD pid = 0;
+    GetWindowThreadProcessId(window, &pid);
+    if (pid == find->pid && window != find->first && IsWindowVisible(window) && GetWindowTextLengthW(window) > 0) {
+        find->window = window;
+        return FALSE;
+    }
+    return TRUE;
+}
 static BOOL CALLBACK close_window(HWND window, LPARAM pid)
 {
     DWORD owner = 0;
@@ -399,8 +426,31 @@ static void run_program(void)
         GetClassNameW(find.window, class_name, 64);
         DbgPrint(TAG "program window after %lu s: class %s, \"%s\"\n", (GetTickCount() - started) / 1000,
                  narrow(class_name, b, sizeof(b)), narrow(title, line, sizeof(line)));
-        Sleep(5000);
-        print_windows(TRUE);
+        /* A slow start (GIMP's splash, while it queries its plug-ins): up to
+           its time (settle=), until it shows a window other than its first
+           (then 10 s more), or ends by itself; its windows every minute. */
+        if (settle_seconds > 5) {
+            DWORD waited = 0;
+            struct find_other other = {process.dwProcessId, find.window, 0};
+            while (!other.window && waited < settle_seconds) {
+                if (WaitForSingleObject(process.hProcess, 5000) == WAIT_OBJECT_0) break;
+                waited += 5;
+                EnumWindows(find_other_titled, (LPARAM)&other);
+                if (!other.window && waited % 60 == 0) {
+                    DbgPrint(TAG "program running after %lu s:\n", (GetTickCount() - started) / 1000);
+                    print_windows(TRUE);
+                }
+            }
+            if (other.window) {
+                WCHAR title[160];
+                GetWindowTextW(other.window, title, 160);
+                DbgPrint(TAG "program shows another window after %lu s: \"%s\"\n", (GetTickCount() - started) / 1000,
+                         narrow(title, line, sizeof(line)));
+                if (WaitForSingleObject(process.hProcess, 10000) != WAIT_OBJECT_0) print_windows(TRUE);
+            }
+        } else if (WaitForSingleObject(process.hProcess, settle_seconds * 1000) != WAIT_OBJECT_0) {
+            print_windows(TRUE);
+        }
     }
     DWORD code = 0;
     if (WaitForSingleObject(process.hProcess, 0) == WAIT_OBJECT_0) {
@@ -423,6 +473,75 @@ static void run_program(void)
     }
     CloseHandle(process.hThread);
     CloseHandle(process.hProcess);
+}
+
+/* The route (the "Parcours" column of docs/compat/applications.md): its
+   command line, its output (stdout and stderr) in C:\APPS\ROUTE.LOG, its
+   exit code, then its output line by line and what C:\APPS\ROUTE.PNG is. */
+static char route_text[16384];
+static void run_route(void)
+{
+    char line[300];
+    SECURITY_ATTRIBUTES inherit = {sizeof(inherit), 0, TRUE};
+    HANDLE log = CreateFileW(L"C:\\APPS\\ROUTE.LOG", GENERIC_WRITE, FILE_SHARE_READ, &inherit, CREATE_ALWAYS, 0, 0);
+    if (log == INVALID_HANDLE_VALUE) {
+        DbgPrint(TAG "route: no log (error %lu)\n", GetLastError());
+        return;
+    }
+    STARTUPINFOW startup = {0}; PROCESS_INFORMATION process = {0};
+    startup.cb = sizeof(startup); startup.lpDesktop = L"WinSta0\\Default";
+    startup.dwFlags = STARTF_USESTDHANDLES;
+    startup.hStdOutput = log; startup.hStdError = log;
+    DbgPrint(TAG "route: %s\n", narrow(route, line, sizeof(line)));
+    DWORD started = GetTickCount(), code = 0;
+    if (!CreateProcessW(0, route, 0, 0, TRUE, 0, 0, L"C:\\APPS", &startup, &process)) {
+        DbgPrint(TAG "route did not start (error %lu)\n", GetLastError());
+        CloseHandle(log);
+        return;
+    }
+    CloseHandle(log);
+    if (WaitForSingleObject(process.hProcess, route_seconds * 1000) == WAIT_OBJECT_0) {
+        GetExitCodeProcess(process.hProcess, &code);
+        DbgPrint(TAG "route ended: exit code %lx after %lu s\n", code, (GetTickCount() - started) / 1000);
+    } else {
+        DbgPrint(TAG "route still running after %lu s: the windows, then terminated\n", route_seconds);
+        print_windows(TRUE);
+        TerminateProcess(process.hProcess, 0xDEAD);
+        WaitForSingleObject(process.hProcess, 5000);
+    }
+    CloseHandle(process.hThread);
+    CloseHandle(process.hProcess);
+    HANDLE file = CreateFileW(L"C:\\APPS\\ROUTE.LOG", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, 0,
+                              OPEN_EXISTING, 0, 0);
+    DWORD count = 0;
+    if (file != INVALID_HANDLE_VALUE) {
+        ReadFile(file, route_text, sizeof(route_text) - 1, &count, 0);
+        CloseHandle(file);
+    }
+    route_text[count] = 0;
+    DbgPrint(TAG "route output, %lu bytes:\n", count);
+    for (char *p = route_text; *p;) {
+        unsigned int n = 0;
+        while (p[n] && p[n] != '\n' && n < sizeof(line) - 1) { line[n] = p[n] == '\r' ? ' ' : p[n]; ++n; }
+        line[n] = 0;
+        if (n) DbgPrint(TAG "  route: %s\n", line);
+        p += n;
+        while (*p && *p != '\n') ++p;
+        if (*p) ++p;
+    }
+    HANDLE png = CreateFileW(L"C:\\APPS\\ROUTE.PNG", GENERIC_READ, FILE_SHARE_READ, 0, OPEN_EXISTING, 0, 0);
+    if (png == INVALID_HANDLE_VALUE) {
+        DbgPrint(TAG "route: no ROUTE.PNG (error %lu)\n", GetLastError());
+        return;
+    }
+    unsigned char signature[8] = {0};
+    DWORD read = 0, size = GetFileSize(png, 0);
+    ReadFile(png, signature, sizeof(signature), &read, 0);
+    CloseHandle(png);
+    static const unsigned char expected[8] = {0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n'};
+    BOOL is_png = read == 8;
+    for (unsigned int i = 0; i < 8; ++i) is_png &= signature[i] == expected[i];
+    DbgPrint(TAG "route: ROUTE.PNG, %lu bytes, a PNG %d\n", size, is_png);
 }
 
 DWORD WINAPI GuiStartup(void)
@@ -467,6 +586,7 @@ DWORD WINAPI GuiStartup(void)
     } else {
         DbgPrint(TAG "installed: %s\n", narrow(program, line, sizeof(line)));
         run_program();
+        if (route[0]) run_route();
     }
     DbgPrint(TAG "%s: report done\n", name);
     ExitProcess(0);

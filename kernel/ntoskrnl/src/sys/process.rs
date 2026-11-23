@@ -20,8 +20,8 @@ use abi::process::{
     InitialTeb32, ProcessBasicInformation32, NT_CURRENT_PROCESS, PROCESS_ACCESS_TOKEN, PROCESS_BASE_PRIORITY,
     PROCESS_BASIC_INFORMATION, PROCESS_BREAK_ON_TERMINATION, PROCESS_COOKIE, PROCESS_CREATE_FLAGS_INHERIT_HANDLES,
     PROCESS_CREATE_FLAGS_LEGAL_MASK, PROCESS_DEFAULT_HARD_ERROR_MODE, PROCESS_EXCEPTION_PORT,
-    PROCESS_LUID_DEVICE_MAPS_ENABLED, PROCESS_SESSION_INFORMATION, THREAD_BREAK_ON_TERMINATION,
-    THREAD_IMPERSONATION_TOKEN,
+    PROCESS_LUID_DEVICE_MAPS_ENABLED, PROCESS_SESSION_INFORMATION, THREAD_BASE_PRIORITY, THREAD_BASE_PRIORITY_MAX,
+    THREAD_BASE_PRIORITY_MIN, THREAD_BASE_PRIORITY_SATURATION, THREAD_BREAK_ON_TERMINATION, THREAD_IMPERSONATION_TOKEN,
 };
 use abi::security::{SE_DEBUG_PRIVILEGE, SE_INC_BASE_PRIORITY_PRIVILEGE, SE_TCB_PRIVILEGE};
 use abi::teb32::ClientId32;
@@ -486,14 +486,13 @@ pub(super) fn nt_query_information_thread(arguments: &[u32]) -> NtStatus {
     } else if class == THREAD_BASIC_INFORMATION {
         let process_base = thread.process().base_priority();
         let priority = thread.priority().unwrap_or(process_base);
-        let base = thread.base_priority().unwrap_or(process_base);
         basic = ThreadBasicInformation32 {
             exit_status: thread.exit_status().0,
             teb_base_address: thread.teb(),
             client_id: ClientId32 { unique_process: thread.pid(), unique_thread: thread.tid() },
             affinity_mask: 1,
             priority: i32::from(priority),
-            base_priority: i32::from(base) - i32::from(process_base),
+            base_priority: thread.base_increment(),
         };
         basic.as_bytes()
     } else {
@@ -646,11 +645,26 @@ pub(super) fn nt_set_information_thread(arguments: &[u32]) -> NtStatus {
             // du démarrage demande sans y attendre rien.
             return Ok(STATUS_SUCCESS);
         }
-        if class != THREAD_BREAK_ON_TERMINATION && class != THREAD_IMPERSONATION_TOKEN {
+        if class != THREAD_BREAK_ON_TERMINATION && class != THREAD_IMPERSONATION_TOKEN && class != THREAD_BASE_PRIORITY
+        {
             return Err(UNSUPPORTED_THREAD_SET_CLASSES.report(class));
         }
         if length != 4 {
             return Err(STATUS_INFO_LENGTH_MISMATCH);
+        }
+        if class == THREAD_BASE_PRIORITY {
+            // ps/query.c: from -2 to 2, or saturated (±16); any increment in
+            // a real-time process.
+            let increment = UserPtr::<u32>::new(buffer).read()? as i32;
+            let thread = super::reference_thread(handle, THREAD_SET_INFORMATION)?;
+            let real_time = thread.process().base_priority() >= ke::sched::LOW_REALTIME_PRIORITY;
+            let in_range = (THREAD_BASE_PRIORITY_MIN..=THREAD_BASE_PRIORITY_MAX).contains(&increment)
+                || increment.abs() == THREAD_BASE_PRIORITY_SATURATION;
+            if !in_range && !real_time {
+                return Err(STATUS_INVALID_PARAMETER);
+            }
+            thread.set_base_increment(increment);
+            return Ok(STATUS_SUCCESS);
         }
         if class == THREAD_IMPERSONATION_TOKEN {
             let token = UserPtr::<u32>::new(buffer).read()?;

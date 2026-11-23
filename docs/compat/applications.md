@@ -29,7 +29,7 @@ pour que chaque application teste autre chose. Elles sont rangées de la plus si
 | 6 | AbiWord 2.4.1 (2005) | GPL | NSIS | traitement de texte, polices, RTF | taper, mettre en gras, enregistrer en `.rtf`, rouvrir |
 | 7 | PeaZip 3.9.1 (2011) | LGPL | Inno Setup | Lazarus et Free Pascal (LCL) | ouvrir une archive, l'extraire |
 | 8 | Dev-C++ 4.9.9.2 (2005) | GPL | NSIS | Delphi (VCL), processus `gcc` lancés | ouvrir un projet, le compiler, lancer le programme |
-| 9 | GIMP 2.6.12 (2011) | GPL | Inno Setup | GTK2, nombreuses DLL, fontconfig | ouvrir une image, appliquer un filtre, exporter en PNG |
+| 9 | GIMP 2.6.12 (2011) | GPL | Inno Setup | GTK2, nombreuses DLL, fontconfig | ouvrir une image, appliquer un filtre, exporter en PNG (fait en Script-Fu, le 2026-11-22) |
 | 10 | Apache OpenOffice 4.1.17 (2026) | Apache 2.0 | NSIS, qui déballe son installeur MSI | très grosse application, runtimes de Visual C++ (WinSxS, à mesurer) | Writer : taper, enregistrer en `.odt`, rouvrir |
 
 ### Les installeurs épinglés
@@ -563,6 +563,75 @@ l'emplacement 7, la disposition du disque de PeaZip).
 Vu en chemin, au lancement de `peazip.exe` : NtUserSetClassLong et NtUserChildWindowFromPointEx sans handler, une DIB
 section de 24 bits refusée (« not yet ») ; la fenêtre s'ouvre quand même. Son parcours (ouvrir une archive,
 l'extraire) reste à faire.
+
+### EnumDisplayMonitors : le GIMP s'ouvre, le 2026-11-22
+
+`gimp-2.6.exe` lisait l'adresse `0xC` dans `libgdk-win32-2.0-0.dll` juste après NtUserEnumDisplayMonitors, sans
+handler : il rendait 0, EnumDisplayMonitors de `user32` (qui demande le compte, puis les listes) ne rappelait rien, et
+gdk restait sans moniteur. Fait comme `monitor.c` de ReactOS (`sys::monitor::nt_user_enum_display_monitors`,
+`win32k::monitor::search_area`, `intersecting`, `enumerate`) : le nombre de moniteurs que coupe la zone — le
+rectangle donné à l'écran, ou depuis la borne de la région visible du DC, ou cette borne ; ni l'un ni l'autre :
+tout l'écran virtuel —, leurs handles et la partie coupée de chacun. Scénario `enum-monitors`
+(`tests/native/enummon1.c`, AMD et Intel) ; deux mutations le font échouer (sans handler ; les rectangles d'un DC
+non ramenés à son coin).
+
+Une première relance sans la PR 162 a fini sur `STATUS_DLL_NOT_FOUND` : `libgimpbase-2.0-0.dll` avait son nom long
+coupé (« libgimpbase-2 » : la seconde partie dans un trou du répertoire `bin`, le défaut de la PR 162), la
+disposition des trous changeant d'un run à l'autre. Sur la PR 162, le GIMP s'installe (code 0) et `gimp-2.6.exe`
+ouvre sa fenêtre « GIMP Startup » (`gdkWindowToplevel`) ; il ne se ferme pas en 15 s sur WM_CLOSE, le banc le
+termine. Plancher relevé (la fenêtre attendue, toute fin du programme par lui-même interdite).
+
+Vu ensuite dans son démarrage : NtUserGetThreadDesktop, NtUserGetObjectInformation, NtUserFindWindowEx,
+NtUserGetDoubleClickTime, NtUserMapVirtualKeyEx, NtGdiModifyWorldTransform, NtGdiSaveDC et NtGdiRestoreDC (pris par
+une autre session) sans handler, une DIB section de 1 bit refusée.
+
+### SetThreadPriority : le GIMP interroge ses greffons, le 2026-11-22
+
+Laissé plus longtemps derrière sa fenêtre « GIMP Startup » (le banc la fermait 16 s après), le GIMP montrait une
+boîte « Error » de GLib : « g_thread_set_priority_win32_impl: error Incorrect function. during SetThreadPriority ».
+SetThreadPriority de `kernel32` est NtSetInformationThread(ThreadBasePriority, classe 3), sans handler :
+`STATUS_NOT_IMPLEMENTED`, que `kernel32` traduit en ERROR_INVALID_FUNCTION, et GLib s'arrête. Fait comme ReactOS
+(`ps/query.c`, KeSetBasePriorityThread, KeQueryBasePriorityThread ; `sys::process::nt_set_information_thread`,
+`ps::ethread::base_priority_of`, `EThread::set_base_increment`, `base_increment`) : un incrément de -2 à 2, ou ±16
+(la saturation que `kernel32` passe pour THREAD_PRIORITY_TIME_CRITICAL et THREAD_PRIORITY_IDLE), tout incrément
+dans un processus temps réel, sinon `STATUS_INVALID_PARAMETER` ; la priorité de base est celle du processus plus
+l'incrément, gardée dans la classe du processus (de 1 à 15, ou de 16 à 31 en temps réel) ; le thread garde sa
+saturation, que ThreadBasicInformation (GetThreadPriority) rend comme ±16. Scénario `thread-priority`
+(`tests/native/prio1.c`, AMD et Intel) ; deux mutations le font échouer (la classe refusée ; la saturation oubliée) ;
+test hôte `a_thread_base_priority_stays_in_its_process_class`.
+
+Sans l'erreur, le GIMP interroge ses greffons à son premier démarrage : un processus chacun (`wind.exe`,
+`whirl-pinch.exe`… `color-exchange.exe`, dans l'ordre inverse de l'alphabet), 152 en 300 s. Le banc laisse
+maintenant à un programme le temps de démarrer (`program_seconds` de `xtask/src/apps.rs`, `settle=` de `PROBE.TXT` ;
+5 s par défaut, 600 s pour le GIMP), et imprime ses fenêtres chaque minute. Le GIMP ouvre alors sa boîte à outils (« Toolbox »), la
+fenêtre « Layers, Channels, Paths, Undo - Brushes, Patterns, Gradients » et celle de l'image (« GNU Image
+Manipulation Program »), entre 440 et 560 s après son lancement, et se ferme avec 0 sur WM_CLOSE ; plancher relevé
+(la boîte à outils, la fermeture). KeePass, au délai par défaut, ne change pas.
+
+Restent à son démarrage, sans handler : NtUserGetThreadDesktop, NtUserGetObjectInformation, NtUserFindWindowEx,
+NtUserGetDoubleClickTime, NtUserMapVirtualKeyEx, NtGdiModifyWorldTransform, NtGdiGetRegionData,
+NtGdiExtCreateRegion ; une DIB section de 1 bit refusée. Son parcours (ouvrir une image, un filtre, l'export PNG)
+reste à faire.
+
+### Le parcours du GIMP, le 2026-11-22
+
+Le parcours de la liste (« ouvrir une image, appliquer un filtre, exporter en PNG ») tourne en Script-Fu, sans
+interface : `gimp-console-2.6.exe -i -d -f -b "(load \"C:/APPS/ROUTE.SCM\")" -b "(gimp-quit 0)"`. Le script ouvre
+`C:\APPS\ROUTE.BMP` (32 × 32, la moitié gauche noire, la droite blanche, écrit par `xtask` :
+`apps::half_black_bmp`), le floute (`plug-in-gauss`, rayon 10), l'exporte en `ROUTE.PNG` (`file-png-save`), rouvre le
+PNG et lit le pixel de la frontière : gris (142). Chaque étape passe par un greffon, donc un processus (`file-bmp`,
+`blur-gauss`, `file-png`, `script-fu`), et ses messages vont à la sortie de `gimp-console`. Le banc a pour cela une
+commande de parcours par application (`route` de `xtask/src/apps.rs`, `route=` et `route-seconds=` de `PROBE.TXT`,
+ses fichiers dans `C:\APPS`) : il la lance après le programme, sa sortie et ses erreurs dans
+`C:\APPS\ROUTE.LOG`, puis imprime son code de fin, sa sortie et ce qu'est `ROUTE.PNG`. Résultat : « batch command
+executed successfully », code 0 en 144 s, `ROUTE.PNG` un PNG de 149 octets.
+
+L'attente du programme est devenue déterministe : au-delà de 5 s, le banc attend que le programme montre une autre
+fenêtre que sa première (puis 10 s), au plus `program_seconds` (900 s pour le GIMP) ; un premier run, sur un hôte
+chargé, avait vu la boîte à outils arriver juste après les 600 s fixes d'avant.
+
+Plancher du GIMP : son installation, sa boîte à outils, sa fermeture par WM_CLOSE, puis chaque étape du parcours, le
+pixel gris et le PNG ; interdits : un parcours qui ne démarre pas ou dépasse son délai.
 
 ### La suite
 

@@ -1,0 +1,27 @@
+# EnumDisplayMonitors (tests/native/enummon1.c, MinGW, linked to ReactOS's
+# kernel32 and user32): ENUMMON1.EXE takes the place of winlogon.exe and
+# takes WinSta0\Default. GIMP 2.6 (GTK2's gdk) read 0xC right after
+# NtUserEnumDisplayMonitors, which had no handler: user32 counted no
+# monitor and called back nothing. As ReactOS's monitor.c
+# (sys::monitor::nt_user_enum_display_monitors, win32k::monitor::enumerate):
+# 1. without a DC or a rectangle: the primary monitor, the whole screen;
+# 2. a rectangle on the screen: the rectangle;
+# 3. one off the screen: no call back, TRUE;
+# 4. a window's DC: the DC given back, its part from its corner;
+# 5. a call back that answers FALSE stops it: FALSE.
+features = test-smss
+requires = userland, native
+initial-command = ENUMMON1.EXE
+cpus     = default, intel
+timeout  = 120
+
+expect = [enummon] ready: the popup 1, the primary monitor 1, SM_CMONITORS 1
+expect = [enummon] step 1: 1, 1 call back(s): the primary monitor 1, the whole screen 1, no DC 1, the data 7
+expect = [enummon] step 2: 1, 1 call back(s), the rectangle 1
+expect = [enummon] step 3: off the screen: 1, 0 call back(s)
+expect = [enummon] step 4: a DC: 1, 1 call back(s), the DC 1, its part from its corner 1
+expect = [enummon] step 5: a call back that answers FALSE: 0, 1 call back(s)
+expect = [enummon] done
+
+forbid = *** STOP:
+forbid = NtUserEnumDisplayMonitors (0x1173) is not implemented

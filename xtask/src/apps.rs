@@ -34,8 +34,80 @@ pub struct App {
     pub free_mib: u32,
     /// How long the installation may take, in seconds.
     pub install_seconds: u32,
+    /// How long the probe lets the program run after its first window before
+    /// it closes it, in seconds, at most: past 5, until it shows another
+    /// window (then 10 s more). GIMP queries its 150 plug-ins at its first
+    /// start, each a process, behind its "GIMP Startup" window.
+    pub program_seconds: u32,
     /// Guest memory, in MiB.
     pub memory_mb: u32,
+    /// Its route of the M7 list (the "Parcours" column of
+    /// `docs/compat/applications.md`), which the probe runs after the
+    /// program, if it has one.
+    pub route: Option<Route>,
+}
+
+/// A route: a command line the probe runs (its output captured in
+/// `C:\APPS\ROUTE.LOG`), how long it may take, and the files it needs in
+/// `C:\APPS` (name, bytes).
+#[derive(Clone, Copy)]
+pub struct Route {
+    pub command: &'static str,
+    pub seconds: u32,
+    pub files: fn() -> Vec<(&'static str, Vec<u8>)>,
+}
+
+/// GIMP's route, by Script-Fu in batch mode (`gimp-console`, no interface):
+/// open `ROUTE.BMP`, blur it (plug-in-gauss), export `ROUTE.PNG`, open the
+/// PNG again and say whether the pixel at the edge between black and white
+/// is gray.
+const GIMP_ROUTE_SCRIPT: &str = r#"(let* ((image (car (gimp-file-load RUN-NONINTERACTIVE "C:/APPS/ROUTE.BMP" "ROUTE.BMP")))
+       (drawable (car (gimp-image-get-active-drawable image))))
+  (gimp-message "route: opened ROUTE.BMP")
+  (plug-in-gauss RUN-NONINTERACTIVE image drawable 10 10 0)
+  (gimp-message "route: blurred")
+  (file-png-save RUN-NONINTERACTIVE image drawable "C:/APPS/ROUTE.PNG" "ROUTE.PNG" 0 9 0 0 0 0 0)
+  (gimp-message "route: exported ROUTE.PNG")
+  (let* ((again (car (file-png-load RUN-NONINTERACTIVE "C:/APPS/ROUTE.PNG" "ROUTE.PNG")))
+         (layer (car (gimp-image-get-active-drawable again)))
+         (value (vector-ref (cadr (gimp-drawable-get-pixel layer 16 8)) 0)))
+    (gimp-message
+      (string-append "route: the pixel at the edge "
+                     (if (and (> value 32) (< value 224)) "is gray" "is not gray")
+                     " (" (number->string value) ")"))))
+"#;
+
+/// A 24-bit BMP of `size` × `size` pixels, its left half black and its
+/// right half white.
+pub fn half_black_bmp(size: u32) -> Vec<u8> {
+    let row = (size * 3).next_multiple_of(4);
+    let pixels = row * size;
+    let mut bmp = Vec::with_capacity(54 + pixels as usize);
+    bmp.extend_from_slice(b"BM");
+    bmp.extend_from_slice(&(54 + pixels).to_le_bytes());
+    bmp.extend_from_slice(&[0; 4]);
+    bmp.extend_from_slice(&54u32.to_le_bytes());
+    bmp.extend_from_slice(&40u32.to_le_bytes());
+    bmp.extend_from_slice(&size.to_le_bytes());
+    bmp.extend_from_slice(&size.to_le_bytes());
+    bmp.extend_from_slice(&1u16.to_le_bytes());
+    bmp.extend_from_slice(&24u16.to_le_bytes());
+    bmp.extend_from_slice(&[0; 4]);
+    bmp.extend_from_slice(&pixels.to_le_bytes());
+    bmp.extend_from_slice(&[0; 16]);
+    for _ in 0..size {
+        let start = bmp.len();
+        for x in 0..size {
+            let value = if x < size / 2 { 0 } else { 255 };
+            bmp.extend_from_slice(&[value; 3]);
+        }
+        bmp.resize(start + row as usize, 0);
+    }
+    bmp
+}
+
+fn gimp_route_files() -> Vec<(&'static str, Vec<u8>)> {
+    vec![("ROUTE.BMP", half_black_bmp(32)), ("ROUTE.SCM", GIMP_ROUTE_SCRIPT.as_bytes().to_vec())]
 }
 
 /// The installer's silent mode.
@@ -70,7 +142,9 @@ pub const APPS: [App; 10] = [
         program: r"C:\Program Files\7-Zip\7zFM.exe",
         free_mib: 64,
         install_seconds: 300,
+        program_seconds: 5,
         memory_mb: 256,
+        route: None,
     },
     App {
         id: "notepadpp",
@@ -83,7 +157,9 @@ pub const APPS: [App; 10] = [
         program: r"C:\Program Files\Notepad++\notepad++.exe",
         free_mib: 64,
         install_seconds: 300,
+        program_seconds: 5,
         memory_mb: 256,
+        route: None,
     },
     App {
         id: "keepass",
@@ -96,7 +172,9 @@ pub const APPS: [App; 10] = [
         program: r"C:\Program Files\KeePass Password Safe\KeePass.exe",
         free_mib: 64,
         install_seconds: 300,
+        program_seconds: 5,
         memory_mb: 256,
+        route: None,
     },
     App {
         id: "winmerge",
@@ -109,7 +187,9 @@ pub const APPS: [App; 10] = [
         program: r"C:\Program Files\WinMerge\WinMergeU.exe",
         free_mib: 64,
         install_seconds: 300,
+        program_seconds: 5,
         memory_mb: 256,
+        route: None,
     },
     App {
         id: "sumatrapdf",
@@ -122,7 +202,9 @@ pub const APPS: [App; 10] = [
         program: r"C:\Program Files\SumatraPDF\SumatraPDF.exe",
         free_mib: 64,
         install_seconds: 300,
+        program_seconds: 5,
         memory_mb: 256,
+        route: None,
     },
     App {
         id: "abiword",
@@ -135,7 +217,9 @@ pub const APPS: [App; 10] = [
         program: r"C:\Program Files\AbiSuite2\AbiWord\bin\AbiWord.exe",
         free_mib: 96,
         install_seconds: 300,
+        program_seconds: 5,
         memory_mb: 256,
+        route: None,
     },
     App {
         id: "peazip",
@@ -148,7 +232,9 @@ pub const APPS: [App; 10] = [
         program: r"C:\Program Files\PeaZip\peazip.exe",
         free_mib: 96,
         install_seconds: 300,
+        program_seconds: 5,
         memory_mb: 256,
+        route: None,
     },
     App {
         id: "devcpp",
@@ -161,7 +247,9 @@ pub const APPS: [App; 10] = [
         program: r"C:\Dev-Cpp\devcpp.exe",
         free_mib: 192,
         install_seconds: 600,
+        program_seconds: 5,
         memory_mb: 256,
+        route: None,
     },
     App {
         id: "gimp",
@@ -174,7 +262,13 @@ pub const APPS: [App; 10] = [
         program: r"C:\Program Files\GIMP-2.0\bin\gimp-2.6.exe",
         free_mib: 320,
         install_seconds: 900,
+        program_seconds: 900,
         memory_mb: 512,
+        route: Some(Route {
+            command: r#""C:\Program Files\GIMP-2.0\bin\gimp-console-2.6.exe" -i -d -f -b "(load \"C:/APPS/ROUTE.SCM\")" -b "(gimp-quit 0)""#,
+            seconds: 600,
+            files: gimp_route_files,
+        }),
     },
     App {
         id: "openoffice",
@@ -187,7 +281,9 @@ pub const APPS: [App; 10] = [
         program: r"C:\Program Files\OpenOffice 4\program\soffice.exe",
         free_mib: 1024,
         install_seconds: 1500,
+        program_seconds: 5,
         memory_mb: 768,
+        route: None,
     },
 ];
 
@@ -330,13 +426,38 @@ pub fn probe_commands_for(app: &App, interactive: bool) -> String {
     if app.kind == Kind::Nsis {
         text.push_str(&format!("visible=\"{installer}\"\r\n"));
     }
-    text.push_str(&format!("timeout={}\r\nprogram={}\r\n", app.install_seconds, app.program));
+    text.push_str(&format!(
+        "timeout={}\r\nprogram={}\r\nsettle={}\r\n",
+        app.install_seconds, app.program, app.program_seconds
+    ));
+    if let Some(route) = app.route {
+        text.push_str(&format!("route={}\r\nroute-seconds={}\r\n", route.command, route.seconds));
+    }
     text
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gimp_has_a_route_with_its_image_and_script() {
+        let bmp = half_black_bmp(32);
+        assert_eq!(&bmp[..2], b"BM");
+        assert_eq!(bmp.len(), 54 + 32 * 96, "rows of 96 bytes");
+        assert_eq!(u32::from_le_bytes(bmp[18..22].try_into().unwrap()), 32, "width");
+        assert_eq!(u16::from_le_bytes(bmp[28..30].try_into().unwrap()), 24, "bits per pixel");
+        assert_eq!(&bmp[54 + 15 * 3..54 + 16 * 3], &[0, 0, 0], "the last black pixel of a row");
+        assert_eq!(&bmp[54 + 16 * 3..54 + 17 * 3], &[255, 255, 255], "the first white one");
+        let gimp = APPS.iter().find(|app| app.id == "gimp").unwrap();
+        let route = gimp.route.expect("GIMP's route");
+        let files = (route.files)();
+        assert_eq!(files.iter().map(|(name, _)| *name).collect::<Vec<_>>(), ["ROUTE.BMP", "ROUTE.SCM"]);
+        let text = probe_commands_for(gimp, false);
+        assert!(text.contains("route=\"C:\\Program Files\\GIMP-2.0\\bin\\gimp-console-2.6.exe\" -i -d -f -b "));
+        assert!(text.contains("route-seconds=600\r\n"));
+        assert!(APPS.iter().filter(|app| app.id != "gimp").all(|app| app.route.is_none()));
+    }
 
     #[test]
     fn each_application_is_pinned_once() {
@@ -383,7 +504,8 @@ mod tests {
         assert!(!msi.contains("visible="));
         let inno = probe_commands_for(find("keepass").unwrap(), false);
         assert!(inno.contains(r#"/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /LOG="C:\APPS\INSTALL.LOG""#));
-        assert!(inno.contains("timeout=300\r\nprogram=C:\\Program Files\\KeePass Password Safe\\KeePass.exe\r\n"));
+        assert!(inno
+            .contains("timeout=300\r\nprogram=C:\\Program Files\\KeePass Password Safe\\KeePass.exe\r\nsettle=5\r\n"));
         assert!(probe_commands_for(find("sumatrapdf").unwrap(), false).contains(r#"-install.exe" /s"#));
     }
 

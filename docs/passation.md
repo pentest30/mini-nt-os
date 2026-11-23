@@ -1,5 +1,59 @@
 # Notes de passation
 
+- **Le parcours du GIMP** (`claude/gimp-route`, sur la PR 164, M7,
+  [`compat/applications.md`](compat/applications.md#le-parcours-du-gimp-le-2026-11-22) ; demandé le 2026-11-22).
+  Le banc a une commande de parcours par application (`route` de `xtask/src/apps.rs` : commande, délai, fichiers mis
+  dans `C:\APPS` ; `route=`, `route-seconds=` de `PROBE.TXT` ; `run_route` d'`appbench.c` : sortie et erreurs dans
+  `C:\APPS\ROUTE.LOG`, imprimées avec le code de fin et ce qu'est `ROUTE.PNG`). Le GIMP, en Script-Fu par
+  `gimp-console` : ouvre `ROUTE.BMP` (noir et blanc, `apps::half_black_bmp`), le floute, exporte `ROUTE.PNG`, le
+  rouvre : le pixel de la frontière est gris (142) ; code 0 en 144 s ; le parcours de la liste est fait. L'attente
+  du programme ne dépend plus de l'heure : jusqu'à une autre fenêtre que la première (puis 10 s), au plus
+  `program_seconds` (900 s pour le GIMP ; scénario de 2 400 s au plus). Test hôte
+  `gimp_has_a_route_with_its_image_and_script`. Vérifié : lint, 1 256 tests hôte, `app-gimp` (1 466 s : la fenêtre de l'image
+  après 514 s, le parcours en 94 s), `app-keepass` (le délai de 5 s, inchangé). **Suite** : les parcours de 7-Zip, Notepad++,
+  KeePass, AbiWord, PeaZip par la même voie quand ils ont un mode en ligne de commande, sinon par `keys` et la souris
+  de QEMU.
+- **Les revues des bots des PR 161 à 164** (demandé le 2026-11-22 ;
+  [`revues/mergestorm-vortex.md`](revues/mergestorm-vortex.md), une section par PR, chacune sur la branche de sa
+  PR, remontées par merge : 161 → 162 → 163 → 164). Onze remarques. Corrigé : le cache des procédures d'appel
+  compare le processus et le bureau, SetWindowLong rend l'ancienne procédure dans le jeu de l'appelant (`48460d8`,
+  PR 161 ; étapes 5 et 7 de `ansictl1.c`) ; la phrase de l'alias 8.3 dans `compat/applications.md` (PR 162) ;
+  ProcessBasePriority décale chaque thread comme KeSetPriorityAndQuantumProcess, saturés compris (`e484a94`, PR 164 ;
+  étape 4 de `prio1.c`). Sans suite, comme ReactOS : l'origine du DC d'EnumDisplayMonitors (la borne de `prgnVis`) ;
+  une classe enregistrée avec une procédure d'appel de l'autre jeu (ses fenêtres prennent le jeu de la classe ; ce
+  que fait XP reste à confirmer). Vérifié : lint, tests hôte, `ansi-controls` (AMD, Intel), `scroll-control`,
+  `notepad`, `thread-priority` (AMD, Intel) ; chaque correctif par mutation. **Reste à évaluer** : les remarques des
+  bots des PR 158 et 159 (fusionnées), et celles de Vortex sur la PR 160 à `f623515` et `dd65dcd` (sa section ne couvre que
+  `9997c91` ; la branche est à une autre session).
+- **SetThreadPriority : le GIMP démarre** (`claude/thread-base-priority`, sur la PR 163, M7,
+  [`compat/applications.md`](compat/applications.md#setthreadpriority-le-gimp-interroge-ses-greffons-le-2026-11-22) ;
+  demandé le 2026-11-22). Laissé plus de 16 s, le GIMP montrait la boîte fatale de GLib « error Incorrect function.
+  during SetThreadPriority » : NtSetInformationThread(ThreadBasePriority, classe 3) manquait. Fait comme ReactOS
+  (`ps/query.c`, KeSetBasePriorityThread, KeQueryBasePriorityThread) : `sys::process::nt_set_information_thread`,
+  `ps::ethread::base_priority_of` (la classe du processus gardée), `EThread::set_base_increment`, `base_increment`
+  (la saturation ±16 de TIME_CRITICAL et IDLE rendue par ThreadBasicInformation). Scénario `thread-priority`
+  (`tests/native/prio1.c`, AMD et Intel) ; deux mutations le font échouer ; test hôte
+  `a_thread_base_priority_stays_in_its_process_class`. Le banc laisse à un programme le temps de démarrer
+  (`program_seconds` de `xtask/src/apps.rs`, `settle=` de `PROBE.TXT`, 600 s pour le GIMP qui interroge ses
+  150 greffons, un processus chacun, à son premier démarrage) : le GIMP ouvre sa boîte à outils et la fenêtre de
+  l'image vers 500 s, puis se ferme avec 0 ; plancher relevé (scénario de 1 800 s au plus). Vérifié : lint,
+  1 255 tests hôte, `thread-priority` (AMD, Intel), `app-gimp`, `app-keepass`. **Dettes** : ThreadPriority
+  (classe 2, la priorité absolue) n'est pas faite. ProcessBasePriority garde maintenant l'incrément de chaque
+  thread et sa saturation (`e484a94`, revue de la PR 164). **Suite** : les services
+  qui manquent au démarrage du GIMP, puis son parcours.
+- **EnumDisplayMonitors : le GIMP s'ouvre** (`claude/enum-display-monitors`, sur la PR 162, M7,
+  [`compat/applications.md`](compat/applications.md#enumdisplaymonitors-le-gimp-souvre-le-2026-11-22) ; demandé le
+  2026-11-22). `gimp-2.6.exe` lisait `0xC` dans `libgdk` après NtUserEnumDisplayMonitors, sans handler (0 : aucun
+  moniteur). Fait comme `monitor.c` de ReactOS (`sys::monitor::nt_user_enum_display_monitors`,
+  `win32k::monitor::search_area`, `intersecting`, `enumerate` ; la borne de la région visible d'un DC lue dans son
+  état, sans rien y changer). Scénario `enum-monitors` (`tests/native/enummon1.c`, AMD et Intel) ; deux mutations le
+  font échouer ; test hôte `monitors_are_enumerated_where_the_area_crosses_them`. Sans la PR 162, le GIMP finissait
+  sur `STATUS_DLL_NOT_FOUND` (`libgimpbase-2.0-0.dll` au nom long coupé par un trou) : la branche part donc d'elle. Sur
+  elle, le GIMP s'installe et ouvre « GIMP Startup » ; il ne se ferme pas sur WM_CLOSE en 15 s ; plancher relevé.
+  Vérifié : lint, 1 253 tests hôte, `enum-monitors` (AMD, Intel), `app-gimp`. **Suite** : ce qui manque à son
+  démarrage (NtUserGetThreadDesktop, NtUserGetObjectInformation, NtUserFindWindowEx, NtUserGetDoubleClickTime,
+  NtUserMapVirtualKeyEx, NtGdiModifyWorldTransform, la DIB section de 1 bit ; SaveDC et RestoreDC sont à une autre
+  session), puis son parcours (ouvrir une image, un filtre, l'export PNG).
 - **Un nom long dans un trou d'un répertoire FAT : PeaZip** (`claude/fat-long-dir-name`, sur la PR 161, M7,
   [`compat/applications.md`](compat/applications.md#un-nom-long-dans-un-trou-le-2026-11-21) ; demandé le
   2026-11-21, la suite de la PR 161). PeaZip ne pouvait créer `res\themes\nographic-embedded\fm-theme.bmp` (« The

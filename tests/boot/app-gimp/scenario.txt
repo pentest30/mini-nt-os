@@ -9,7 +9,7 @@ session = APPBENCH.EXE
 boots = 2
 app = gimp
 cpus = default
-timeout = 1500
+timeout = 2400
 # What works today, a floor: the loader extracts its setup.tmp
 # (SetEndOfFile: FileAllocationInformation), which finds the user an
 # administrator (CheckTokenMembership: NtAccessCheck), creates its
@@ -18,16 +18,37 @@ timeout = 1500
 # (CALLPROCDATA, win32k::callproc; without it, Delphi's EAccessViolation box,
 # the heap overwritten with UTF-16). Its log is longer than the bench's
 # buffer: the bench prints its last lines only, not the Inno version.
-# gimp-2.6.exe then reads 0xC in libgdk right after
-# NtUserEnumDisplayMonitors, not implemented, see
-# docs/compat/applications.md.
+# gimp-2.6.exe then opens its "GIMP Startup" window: EnumDisplayMonitors
+# gives gdk the monitor (sys::monitor::nt_user_enum_display_monitors), its
+# DLLs with long names are found (io::fat::FatVolume::add_entries), and
+# SetThreadPriority works (NtSetInformationThread(ThreadBasePriority); before,
+# GLib's fatal "Incorrect function" box). It queries its 150 plug-ins, one
+# process each, then shows its Toolbox and image window 450 to 600 s later:
+# the bench waits for another window than its first, up to 900 s
+# (program_seconds in xtask/src/apps.rs), then it closes on WM_CLOSE. Its
+# route then runs in batch mode (gimp-console, Script-Fu: ROUTE.BMP opened,
+# blurred, exported as ROUTE.PNG, opened again: the pixel at the edge between
+# black and white is gray), see docs/compat/applications.md.
 expect = [appbench] installer started
 expect = Installation process succeeded.
 expect = [appbench] installer ended: exit code 0
 expect = [appbench] installed: C:\Program Files\GIMP-2.0\bin\gimp-2.6.exe
 expect = [appbench] program started
+expect = [appbench] program window after
+expect = class gdkWindowToplevel, "Toolbox"
+expect = [appbench] program closed: exit code 0
+expect = route: opened ROUTE.BMP
+expect = route: blurred
+expect = route: exported ROUTE.PNG
+expect = route: the pixel at the edge is gray
+expect = [appbench] route ended: exit code 0
+expect = [appbench] route: ROUTE.PNG,
+expect = a PNG 1
 expect = [appbench] GIMP 2.6.12: report done
 forbid = Unable to create a temporary file
 forbid = User privileges: None
 forbid = [appbench] installer still running after
+forbid = [appbench] program ended by itself
+forbid = [appbench] route still running after
+forbid = [appbench] route did not start
 forbid = *** STOP:

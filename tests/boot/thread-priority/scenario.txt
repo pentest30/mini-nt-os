@@ -1,0 +1,30 @@
+# SetThreadPriority and GetThreadPriority (tests/native/prio1.c, MinGW,
+# linked to ReactOS's kernel32): PRIO1.EXE takes the place of winlogon.exe.
+# GIMP 2.6 stopped on GLib's fatal "g_thread_set_priority: error Incorrect
+# function during SetThreadPriority": kernel32 makes it
+# NtSetInformationThread(ThreadBasePriority), which had no handler. As
+# ReactOS (ps/query.c, KeSetBasePriorityThread, KeQueryBasePriorityThread;
+# sys::process::nt_set_information_thread, ps::ethread::base_priority_of):
+# 1. each priority of a normal process, the saturated ones too;
+# 2. one out of range refused, ERROR_INVALID_PARAMETER, the previous kept;
+# 3. another thread's, by its handle;
+# 4. the process's base priority lowered under its thread (ProcessBasePriority,
+#    KeSetPriorityAndQuantumProcess; ps::eprocess::EProcess::set_base_priority,
+#    ps::ethread::rebased_priority): THREAD_PRIORITY_HIGHEST stays two above
+#    it, THREAD_PRIORITY_TIME_CRITICAL (saturated) stays at 15. Mino put
+#    every thread at the process's priority.
+features = test-smss
+requires = userland, native
+initial-command = PRIO1.EXE
+cpus     = default, intel
+timeout  = 120
+
+expect = [prio] ready: the thread's priority 0
+expect = [prio] step 1: 7 of 7 priorities set and read back
+expect = [prio] step 2: 3 refused 1, error 87, still 1
+expect = [prio] step 3: another thread at 0, set to -2 1, read back -2
+expect = [prio] step 4: the process at 6 (0): THREAD_PRIORITY_HIGHEST kept 1, at 8 or more 1; at 4 (0): THREAD_PRIORITY_TIME_CRITICAL kept 1, at 15
+expect = [prio] done
+
+forbid = *** STOP:
+forbid = NtSetInformationThread class 0x3 is not implemented
