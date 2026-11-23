@@ -391,3 +391,15 @@ thread) ; Ctrl+Alt+Suppr redevient une touche. Une mutation (aucun raccourci pr�
 `win32k::hotkey` (la SAS, une combinaison par raccourci, les modificateurs seuls au relâchement, les raccourcis d'une
 fenêtre et d'un thread retirés, les modificateurs de l'état du clavier, Ctrl+Échap du shell). Scénario `logon` :
 « WL: Unable to register Ctrl+Alt+Del hotkey » interdit.
+
+Les sections de fichiers paginées à la demande (ADR-024, proposée ; le 2026-11-21). `explorer` ouvrant `C:\APPS`
+crée, pour l'icône de l'installeur d'OpenOffice (143 Mo), trois sections de données du fichier (LoadLibraryEx en
+fichier de données), et NtCreateSection lisait chaque fois le fichier entier : 99 s, 84 s, 86 s. Une section de
+données ne lit plus rien à sa création ; la faute d'une page de sa vue lit les 64 Kio alignés qui la contiennent, et
+les sections du même fichier inchangé partagent ces pages (`mm::section::FileSegment`, `io::section_cache::DATA`).
+Mesuré (trace temporaire de NtCreateSection) : les trois sections en 0, 10 et 0 ms, 80 pages lues (320 Kio) pour
+l'icône ; `shell32.dll` en fichier de données, ~112 pages par extraction au lieu de 10,9 Mo. Une section d'image
+lit ses en-têtes et les données de ses sections, pas ce qui les suit (`ImageLayout::extent`). Scénario
+`folder-apps` : l'icône de l'installeur dans la liste de `C:\APPS` dans les 60 s de `screen-wait`. Écart avec NT :
+une page déjà lue ne voit pas une écriture faite ensuite au fichier, et les pages modifiées d'une vue partagée ne
+retournent pas au fichier.
