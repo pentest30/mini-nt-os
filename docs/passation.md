@@ -1,5 +1,16 @@
 # Notes de passation
 
+- **Les DIB sections de 16 bits** (`claude/surface-16bit`, sur la PR 176, M7, GDI,
+  [`compat/applications.md`](compat/applications.md#les-dib-sections-de-16-bits-le-2026-11-23) ; demandé le
+  2026-11-23). `surface::Format::Rgb16` (5-5-5 en BI_RGB, les masques de BI_BITFIELDS sinon : `masks_fit_16`,
+  `decode_rgb16`, `encode_rgb16`, `pack_rgb16`) ; les formats convertis par un même chemin (`Format::decode`,
+  `Format::encode`, aussi pour les bitmaps du noyau) ; le DIBSECTION de GetObject (BI_BITFIELDS hors de 5-5-5, ses
+  masques) ; GetDIBits de 16 bits (5-5-5, ou en BI_BITFIELDS les masques de la DIB section de 16 bits, 5-6-5
+  sinon). Aucune application du banc ne les demandait encore. Scénario `bitmap-16` (`tests/native/bmp16.c`, AMD et
+  Intel ; sans la modification, il échoue à l'étape 1). Vérifié : lint, 1 294 tests hôte, `bitmap-16`, et sans
+  régression `bitmap-24`, `bitmap`, `icons`, `cursor`, `notepad-saveas` (AMD et Intel), `folder-view` et
+  `app-peazip` (AMD).
+  **Pas encore** : CreateBitmap de 16 bits ; en 32 bits, d'autres masques que ceux de BI_RGB.
 - **La fenêtre de PeaZip et sa fermeture** (`claude/peazip-window`, sur la PR 174, M7, le banc,
   [`compat/applications.md`](compat/applications.md#la-fenêtre-de-peazip-et-sa-fermeture-le-2026-11-23) ; demandé le
   2026-11-23). Rien à corriger dans Mino. Le gestionnaire se peint : la capture d'un scénario vient quand tous ses
