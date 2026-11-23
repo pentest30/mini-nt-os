@@ -1227,6 +1227,22 @@ mod tests {
     use super::*;
     use abi::user::{WS_MAXIMIZEBOX, WS_THICKFRAME};
 
+    /// co_IntSetParent refuses a new parent that is the window or one of
+    /// its descendants; a chain of parents longer than the limit is refused
+    /// too, rather than taken for an unrelated window (a cycle).
+    #[test]
+    fn a_parent_chain_past_the_limit_counts_as_a_descendant() {
+        // Handle h's parent is h + 1, up to 100, or up to 5000.
+        let short = |handle: u32| (handle < 100).then_some(handle + 1);
+        let long = |handle: u32| (handle < 5000).then_some(handle + 1);
+        assert!(chain_reaches(10, 12, short), "a grandparent");
+        assert!(chain_reaches(10, 10, short), "itself");
+        assert!(!chain_reaches(10, 4, short), "below it: not on the chain");
+        assert!(!chain_reaches(4990, 6000, long), "the chain ends first");
+        assert!(chain_reaches(10, 4000, long), "too far up to see: refused");
+        assert!(chain_reaches(10, 4, long), "a chain past the limit: refused, whatever the target");
+    }
+
     fn metric(index: usize) -> i32 {
         crate::metrics::system_metrics(1280, 800, &crate::metrics::Parameters::DEFAULT)[index]
     }
@@ -1575,16 +1591,29 @@ pub struct SetParentError(pub Option<u32>);
 /// `window` est `ancestor` ou l'un de ses descendants (le test de
 /// co_IntSetParent : IntIsChildWindow, puis le parent qui serait elle-même).
 fn is_self_or_descendant(window: &Window, ancestor: &Window) -> bool {
-    let mut current = Some(window.handle);
-    // Une chaîne plus longue qu'aucune vraie est une boucle.
-    for _ in 0..1024 {
+    chain_reaches(window.handle, ancestor.handle, |handle| {
+        window::get(handle).map(|w| w.state().parent).filter(|&parent| parent != 0)
+    })
+}
+
+/// La plus longue chaîne de parents que [`chain_reaches`] remonte.
+const MAX_PARENT_CHAIN: usize = 1024;
+
+/// En remontant de `start` par `parent_of`, on trouve `target`. Une chaîne
+/// plus longue que [`MAX_PARENT_CHAIN`], plus qu'aucune vraie, compte pour
+/// oui : la prendre pour non laissait SetParent faire un cycle sous un
+/// descendant aussi profond, que les parcours récursifs des enfants
+/// (`window::children`) suivaient sans fin (ReactOS remonte sans limite).
+fn chain_reaches(start: u32, target: u32, parent_of: impl Fn(u32) -> Option<u32>) -> bool {
+    let mut current = Some(start);
+    for _ in 0..MAX_PARENT_CHAIN {
         let Some(handle) = current else { return false };
-        if handle == ancestor.handle {
+        if handle == target {
             return true;
         }
-        current = window::get(handle).map(|w| w.state().parent).filter(|&parent| parent != 0);
+        current = parent_of(handle);
     }
-    false
+    true
 }
 
 /// co_IntSetParent : `window` devient l'enfant de `new_parent` (un bureau,
@@ -1609,7 +1638,11 @@ fn is_self_or_descendant(window: &Window, ancestor: &Window) -> bool {
 /// La fenêtre des messages (`ERROR_ACCESS_DENIED`), un nouveau parent qui
 /// est elle-même ou l'un de ses descendants (`ERROR_INVALID_PARAMETER`), une
 /// fenêtre d'un autre processus (sans erreur, comme ReactOS, après l'avoir
-/// cachée).
+/// cachée). La fenêtre ou le nouveau parent détruits pendant qu'elle se
+/// cache (son WM_SHOWWINDOW) : `ERROR_INVALID_WINDOW_HANDLE`, sans rien
+/// lier ; ReactOS, qui tient ses fenêtres par des références, liait la
+/// fenêtre détruite au nouveau parent, et Mino mettait son handle mort en
+/// tête des enfants du parent, où leur liste s'arrêtait.
 ///
 /// # IRQL
 /// PASSIVE_LEVEL, dans un service système, sans rien tenir. Rappelle le mode
@@ -1626,6 +1659,9 @@ pub fn set_parent(
         return Err(SetParentError(Some(abi::winerror::ERROR_INVALID_PARAMETER)));
     }
     let was_visible = show_window(window, SW_HIDE);
+    if !window.is_alive() || !new_parent.is_alive() {
+        return Err(SetParentError(Some(abi::winerror::ERROR_INVALID_WINDOW_HANDLE)));
+    }
     if crate::gui::process_id_of(window.pti) != Some(current_process) {
         return Err(SetParentError(None));
     }

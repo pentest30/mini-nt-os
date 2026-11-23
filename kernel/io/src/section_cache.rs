@@ -91,19 +91,30 @@ impl<T: ?Sized> Cache<T> {
 
     /// `content`, fait pour le fichier `key` depuis la génération `read_at`
     /// de son volume, sert aux sections suivantes, sauf si un fichier du
-    /// volume a changé depuis.
+    /// volume a changé depuis. Rend ce qui sert à la section qui l'a fait :
+    /// ce qu'une autre section du même fichier y a mis entre-temps, sous le
+    /// même verrou que la recherche (deux NtCreateSection du même fichier,
+    /// qui ne l'avaient trouvé ni l'une ni l'autre, prennent le même segment ;
+    /// chacune gardait le sien, et des vues partagées de l'une et de l'autre
+    /// n'avaient pas les mêmes pages), sinon `content`.
     ///
     /// # IRQL
     /// <= DISPATCH_LEVEL.
-    pub fn insert(&self, key: Key, content: &Arc<T>, read_at: u64) {
+    pub fn insert(&self, key: Key, content: &Arc<T>, read_at: u64) -> Arc<T> {
         let mut inner = self.inner.lock();
         if inner.generations.get(&key.volume).copied().unwrap_or(0) != read_at {
-            return;
+            return content.clone();
+        }
+        if let Some(kept) =
+            inner.entries.iter().find(|entry| entry.key == key).and_then(|entry| entry.content.upgrade())
+        {
+            return kept;
         }
         inner.entries.retain(|entry| {
             entry.content.strong_count() > 0 && (entry.key.volume, entry.key.identity) != (key.volume, key.identity)
         });
         inner.entries.push(Entry { key, content: Arc::downgrade(content) });
+        content.clone()
     }
 
     /// Le fichier `identity` du volume `volume` (tous ses fichiers sans
@@ -192,6 +203,24 @@ mod tests {
         cache.invalidate(0x6000, None);
         cache.insert(key(0x5000, 1, 4), &bytes, read_at);
         assert!(cache.lookup(&key(0x5000, 1, 4)).is_some());
+    }
+
+    /// Two sections of one file made at once, neither finding the other's:
+    /// the second takes what the first put (an atomic get-or-insert).
+    #[test]
+    fn the_second_of_two_sections_made_at_once_takes_the_first_ones_content() {
+        let cache = Cache::<[u8]>::new();
+        let read_at = cache.generation(0x8000);
+        let first: Arc<[u8]> = Arc::from(&b"first"[..]);
+        let second: Arc<[u8]> = Arc::from(&b"second"[..]);
+        assert!(Arc::ptr_eq(&cache.insert(key(0x8000, 4, 5), &first, read_at), &first));
+        assert!(Arc::ptr_eq(&cache.insert(key(0x8000, 4, 5), &second, read_at), &first), "the first one's");
+        assert!(Arc::ptr_eq(&cache.lookup(&key(0x8000, 4, 5)).unwrap(), &first));
+        let resized: Arc<[u8]> = Arc::from(&b"resized"[..]);
+        assert!(Arc::ptr_eq(&cache.insert(key(0x8000, 4, 7), &resized, read_at), &resized), "another size: its own");
+        cache.invalidate(0x8000, Some(4));
+        let stale = cache.generation(0x8000) - 1;
+        assert!(Arc::ptr_eq(&cache.insert(key(0x8000, 4, 7), &second, stale), &second), "not kept, its own");
     }
 
     #[test]

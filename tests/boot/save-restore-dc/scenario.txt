@@ -1,0 +1,21 @@
+# SaveDC and RestoreDC (tests/native/savedc1.c, MinGW, linked to ReactOS's
+# kernel32, user32 and gdi32): SAVEDC1.EXE takes the place of winlogon.exe.
+# As DC_vRestoreDC (win32k::gdi::dc::Dc::save_state, restore_state), on a
+# window DC (its attributes in the process) and on a memory DC: two saves
+# around a move and a background colour, RestoreDC(-1) and RestoreDC(1) bring
+# back each state, a level past the stack fails. The first RestoreDC of a DC
+# with attributes used to take the lock of the DC's state twice and spin at
+# DISPATCH_LEVEL for ever: the whole system froze (Notepad++ in VirtualBox,
+# 2026-11-23).
+features = test-smss
+requires = userland, native
+initial-command = SAVEDC1.EXE
+cpus     = default, intel
+timeout  = 120
+
+expect = [savedc] ready: a window DC 1
+expect = [savedc] window DC: SaveDC 1 then 2; RestoreDC(-1) 1, the first state 1; RestoreDC(1) 1, the state before 1; RestoreDC(5) 0
+expect = [savedc] memory DC: SaveDC 1 then 2; RestoreDC(-1) 1, the first state 1; RestoreDC(1) 1, the state before 1; RestoreDC(5) 0
+expect = [savedc] done
+
+forbid = *** STOP:

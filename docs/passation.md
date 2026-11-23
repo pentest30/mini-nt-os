@@ -1,14 +1,35 @@
 # Notes de passation
 
-- **Les bitmaps de 24 bits** (`claude/surface-24bit`, sur la PR 172, M7, GDI,
+- **Les bitmaps de 24 bits** (`claude/surface-24bit`, sur les PR 172 et 173, M7, GDI,
   [`compat/applications.md`](compat/applications.md#les-bitmaps-de-24-bits--peazip-ouvre-son-gestionnaire-le-2026-11-23) ;
   demandé le 2026-11-23 après le diagnostic de PeaZip). `surface::Format::Bgr` (DIB sections et CreateBitmap de 24
   bits, `decode_bgr`, `encode_bgr`), GetDIBits de 24 bits, les DIB sections de 1 bit (indexées). Scénario `bitmap-24`
   (`tests/native/bmp24.c`). PeaZip ouvre son gestionnaire et une archive (son titre la liste : l'étape « opened » du
   parcours) ; la course d'une étape `file` corrigée dans le banc. Vérifié : lint, tests hôte, `bitmap-24` (AMD,
   Intel ; sans la modification, il échoue), `app-peazip` (l'archive ouverte en 26 s, extraite en 67 s), `bitmap`,
-  `icons`, `cursor`, `notepad-saveas`, `folder-view` (AMD). **Pas encore** : le gestionnaire
+  `icons`, `cursor`, `notepad-saveas`, `folder-view` (AMD). Sur la pile qui a reçu la PR 160, PeaZip figeait tout
+  le système au premier RestoreDC de son DC (le verrou repris de la PR 160, corrigé par la PR 173, fusionnée ici).
+  **Pas encore** : le gestionnaire
   de PeaZip n'apparaît pas sur l'écran et ne se ferme pas sur WM_CLOSE ; les DIB sections de 16 bits.
+- **RestoreDC figeait tout le système** (`claude/restore-dc-deadlock`, sur `main` ; demandé le 2026-11-23 :
+  Notepad++ « totalement freezé » dans VirtualBox). Toute la machine était arrêtée (l'horloge et le journal série
+  aussi), le processeur dans `nt_gdi_restore_dc` sur un `lock cmpxchg` / `pause` (VBoxManage `debugvm
+  getregisters`, `stack`, symbolisé par `llvm-symbolizer` sur le noyau de l'image). `Dc::restore_state`
+  (`win32k::gdi::dc`, depuis f623515, les revues de la PR 160) lisait le propriétaire du DC dans un `if let` sur
+  `self.state.lock()` : le verrou vit jusqu'à la fin du bloc, où un second `self.state.lock()` tournait pour
+  toujours à DISPATCH_LEVEL (et la mémoire du propriétaire s'y écrivait verrou tenu). Le propriétaire et la
+  région visible se lisent maintenant dans leur propre instruction. Scénario `save-restore-dc`
+  (`tests/native/savedc1.c`, AMD et Intel : SaveDC et RestoreDC sur un DC de fenêtre et un DC en mémoire), qui
+  se fige sans le correctif (vérifié). Aucun test n'appelait SaveDC ni RestoreDC.
+- **Les revues des bots des PR 158 et 159** (`claude/reviews-158-159`, sur `main` ; demandé le 2026-11-22 ;
+  [`revues/mergestorm-vortex.md`](revues/mergestorm-vortex.md)). Les deux PR étaient fusionnées. Corrigé : SetParent
+  ne lie plus une fenêtre ni sous un parent détruits pendant son SW_HIDE, et une chaîne de parents plus longue que la
+  limite est refusée (`e0b1b85`, `win32k::winpos::set_parent`, `chain_reaches` ; scénario `set-parent`,
+  `tests/native/setpar1.c`) ; une faute qui reprend après avoir lu la page d'un fichier réussit si une autre faute
+  l'a projetée entre-temps (`23db3d6`, `mm::fault::pte_allows`, MmIsPagePresent) ; deux sections de données du même
+  fichier faites en même temps prennent le même segment (`36611e1`, `io::section_cache::Cache::insert`). Sans suite,
+  comme ReactOS : SetParent sous la fenêtre d'un autre bureau ; une lecture courte du fichier complétée de zéros.
+  **Pas testé** : la course de deux fautes sur une page (il faudrait une lecture qui bloque au bon moment).
 - **Le parcours de PeaZip** (`claude/peazip-route`, sur la PR 171, M7,
   [`compat/applications.md`](compat/applications.md#le-parcours-de-peazip-le-2026-11-23) ; demandé le 2026-11-23).
   L'extraction : `peazip.exe -ext2folder C:\APPS\ROUTE.ZIP` (`zip::stored` écrit l'archive), l'étape `file CHEMIN`

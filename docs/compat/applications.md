@@ -807,6 +807,10 @@ faisait dire « ended by itself »). Le parcours : l'archive ouverte en 26 s, ex
 (AMD). Au premier lancement, le gestionnaire ne paraît pas toujours dans les 5 s du banc (sa première fenêtre au bout
 de 3 à 12 s) : le plancher ne l'attend que par le parcours.
 
+Une fois la PR 160 (SaveDC, RestoreDC) reçue, PeaZip figeait tout le système à son premier RestoreDC : le verrou de
+l'état du DC repris dans `Dc::restore_state` (le même gel que Notepad++ dans VirtualBox), corrigé par la PR 173,
+fusionnée sous cette branche (scénario `save-restore-dc`).
+
 Pas encore : la fenêtre du gestionnaire, visible et placée (64,64)-(942,604), WS_OVERLAPPEDWINDOW, n'apparaît pas sur
 la capture de l'écran ; et elle ne se ferme pas sur WM_CLOSE (le banc la termine au bout de 15 s). Les deux sont à
 mesurer ensemble (les messages qu'elle tire de sa file, ses WM_PAINT).

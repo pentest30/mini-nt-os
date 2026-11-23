@@ -315,11 +315,20 @@ impl Dc {
             current.position = saved.state.position;
         });
         // Les attributs du propriétaire reviennent entiers, sauf la région
-        // visible, qui reste celle d'aujourd'hui.
-        if let (Some(bytes), Some((_, attr))) = (&saved.attrs, self.state.lock().owner) {
+        // visible, qui reste celle d'aujourd'hui. Le propriétaire et la région
+        // se lisent sous le verrou de l'état, dans leur propre instruction :
+        // un `if let` sur `self.state.lock()` garde le verrou dans son bloc, où
+        // le second `lock()` tournait pour toujours à DISPATCH_LEVEL (tout le
+        // système figé au premier RestoreDC d'un DC à attributs : Notepad++),
+        // et la mémoire du propriétaire s'y écrivait verrou tenu.
+        let (owner, vis_rect_region) = {
+            let state = self.state.lock();
+            (state.owner, state.vis_rect_region())
+        };
+        if let (Some(bytes), Some((_, attr))) = (&saved.attrs, owner) {
             let written = copy_to_user(u64::from(attr), bytes).and_then(|()| {
                 let at = u64::from(attr) + offset_of!(DcAttr32, vis_rect_region) as u64;
-                copy_to_user(at, self.state.lock().vis_rect_region().as_bytes())
+                copy_to_user(at, vis_rect_region.as_bytes())
             });
             if written.is_err() {
                 return false;

@@ -568,16 +568,23 @@ impl AddressSpace {
     /// La page d'une section de fichier pas encore lue se lit verrou de la
     /// VAD relâché (`Section::read_in`), puis la faute reprend du début
     /// (MmNotPresentFaultSectionView de ReactOS et son
-    /// STATUS_MM_RESTART_OPERATION) : la vue a pu changer pendant la lecture.
+    /// STATUS_MM_RESTART_OPERATION) : la vue a pu changer pendant la lecture,
+    /// et une autre faute a pu projeter la page, qui permet alors l'accès
+    /// (`fault::pte_allows`) : c'est fait.
     ///
     /// # IRQL
     /// < DISPATCH_LEVEL. Peut bloquer (la lecture d'un fichier).
     pub fn access_fault(&self, addr: u64, access: Access) -> NtStatus {
         let page = addr & !(PAGE - 1);
+        let mut read = false;
         loop {
             let (section, index) = {
                 let mut vad = self.vad.lock();
                 let mut tables = self.tables();
+                // Mapped by another fault during the read.
+                if read && fault::pte_allows(pte_state(&mut tables, page), access) {
+                    return STATUS_SUCCESS;
+                }
                 match self.resolve_fault(&mut vad, &mut tables, page, access) {
                     Outcome::Done(status) => return status,
                     Outcome::ReadIn(section, index) => (section, index),
@@ -588,6 +595,7 @@ impl AddressSpace {
             if let Err(status) = section.read_in(index) {
                 return status;
             }
+            read = true;
         }
     }
 
