@@ -1,5 +1,14 @@
 # Notes de passation
 
+- **Les images des boîtes de msiexec** (`claude/msi-picture`, sur `main` ; demandé le 2026-11-23 : la page
+  d'accueil du MSI de 7-Zip, dans VirtualBox, restait vide ; « Failed to load bitmap "WixUI_Bmp_Dialog" »).
+  `msi.dll` charge ses images par OleLoadPicture, et l'`oleaut32` de ReactOS 0.4.16 décode tout, un BMP aussi,
+  par WIC (`OLEPictureImpl_LoadWICDecoder`, CLSID_WICImagingFactory et CLSID_WICBmpDecoder) : `windowscodecs.dll`
+  doit être enregistré. syssetup.inf l'enregistre (OleControlDlls), `minoinit` non : REGDB_E_CLASSNOTREG.
+  `minoinit` l'enregistre maintenant, à sa place dans l'ordre de syssetup.inf. Scénario `ole-picture`
+  (`tests/native/olepic1.c`, en session après `minoinit`, avec les bibliothèques d'import d'`ole32` et
+  d'`oleaut32`) : un BMP de 24 bits chargé et copié comme le fait `load_picture` ; sans l'enregistrement,
+  OleLoadPicture rend 80040154 (vérifié).
 - **Les revues des bots des PR 158 et 159** (`claude/reviews-158-159`, sur `main` ; demandé le 2026-11-22 ;
   [`revues/mergestorm-vortex.md`](revues/mergestorm-vortex.md)). Les deux PR étaient fusionnées. Corrigé : SetParent
   ne lie plus une fenêtre ni sous un parent détruits pendant son SW_HIDE, et une chaîne de parents plus longue que la

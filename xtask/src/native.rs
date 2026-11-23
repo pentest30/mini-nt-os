@@ -67,6 +67,7 @@ const PROGRAMS: &[(&[&str], &str, Toolchain)] = &[
     (&["debugport1.c"], "DBGPORT1.EXE", Toolchain::MinGwWin32),
     (&["lock1.c"], "LOCK1.EXE", Toolchain::MinGwWin32),
     (&["setpar1.c"], "SETPAR1.EXE", Toolchain::MinGwWin32),
+    (&["olepic1.c"], "OLEPIC1.EXE", Toolchain::MinGwWin32),
     (&["caret1.c"], "CARET1.EXE", Toolchain::MinGwWin32),
     (&["hook1.c"], "HOOK1.EXE", Toolchain::MinGwWin32),
     (&["section1.c"], "SECTION1.EXE", Toolchain::MinGwWin32),
@@ -123,7 +124,7 @@ const SYSTEM_PROGRAMS: &[&str] = &["MINOINIT.EXE"];
 
 /// The DLLs of the import libraries (`tests/native/NAME.def`): ntdll for
 /// every program, kernel32, user32 and gdi32 for the Win32 ones.
-const LIBRARIES: &[&str] = &["ntdll", "kernel32", "user32", "gdi32"];
+const LIBRARIES: &[&str] = &["ntdll", "kernel32", "user32", "gdi32", "ole32", "oleaut32"];
 
 /// MinGW: no C runtime, no stack protector, no unwind tables.
 const GCC_FLAGS: &[&str] = &[

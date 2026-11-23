@@ -275,13 +275,16 @@ static void make_the_profiles(WCHAR *profile, DWORD size)
  * folders shell32's; Authenticode (WinVerifyTrust, CryptQueryObject) needs
  * the cryptographic providers (rsaenh), the trust providers and the SIPs
  * (wintrust, softpub, mscat32, msisip), which the pinned SOFTWARE hive does
- * not have. A DLL that does not load or fails is reported; it does
+ * not have; oleaut32's OleLoadPicture decodes every picture, BMP included,
+ * through WIC (windowscodecs: CLSID_WICImagingFactory, the decoders), as
+ * msi.dll loads the bitmaps of its dialogs. A DLL that does not load or fails is reported; it does
  * not stop the setup (as syssetup). */
 static void register_the_dlls(void)
 {
     static const WCHAR *const dlls[] = {
         L"browseui.dll", L"cryptnet.dll", L"mscat32.dll", L"msisip.dll", L"oleaut32.dll", L"rpcrt4.dll", L"rsabase.dll",
-        L"rsaenh.dll", L"shdocvw.dll", L"shell32.dll", L"softpub.dll", L"urlmon.dll", L"wininet.dll", L"wintrust.dll",
+        L"rsaenh.dll", L"shdocvw.dll", L"shell32.dll", L"softpub.dll", L"urlmon.dll", L"windowscodecs.dll",
+        L"wininet.dll", L"wintrust.dll",
     };
     HMODULE ole32 = LoadLibraryW(L"ole32.dll");
     CoInitializeFn co_initialize = ole32 ? (CoInitializeFn)GetProcAddress(ole32, "CoInitialize") : 0;
