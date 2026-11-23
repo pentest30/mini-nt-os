@@ -315,6 +315,34 @@ remontrée ; NULL vaut le bureau, `HWND_MESSAGE` sa fenêtre des messages. Pas e
 threads d'une fille et de son parent. Scénario `start-programs` (Démarrer → Programs : l'icône de dossier et le
 texte d'« Administrative Tools » et de « Startup » lus à l'écran ; il échoue sans le handler).
 
+## Les droits des comptes (M7, le 2026-11-23)
+
+Le second critère du M7 demande une session qui s'arrête : ExitWindowsEx demande `SeShutdownPrivilege` actif dans le
+jeton de l'appelant. Celui d'`Administrator` n'avait aucun privilège : RtlAdjustPrivilege(SeShutdownPrivilege)
+rendait `STATUS_PRIVILEGE_NOT_HELD` (« Failed to assign all privileges » de `rtl/priv.c`).
+
+`lsasrv` donne à un jeton de logon les privilèges des comptes LSA de ses groupes (LsapSetPrivileges : LsarOpenAccount
+pour chaque SID, puis LsarEnumeratePrivilegesAccount). Ces comptes, c'est l'installation de ReactOS qui les crée
+(InstallSecurity de `syssetup`, InstallPrivileges) : chaque ligne de `[Privilege Rights]` de `defltwk.inf` est donnée
+à ses SID et à ses noms par LsaAddAccountRights. Mino installe par `minoinit`, qui ne le faisait pas ; la base de la
+LSA (la ruche SECURITY) n'avait donc aucun compte.
+
+`minoinit` le fait maintenant, juste après avoir attendu les comptes de la SAM :
+- `defltwk.inf` est sur le disque de démarrage, dans `WINDOWS\INF` (`xtask/src/userland.rs`, `INFS`) ;
+- `minoinit` lit sa section `[Privilege Rights]` lui-même (pas de `setupapi.dll` sur le disque). Un champ `*S-…`
+  est un SID (ConvertStringSidToSidW) ; un nom, donné ou pris de `[Strings]` (`%SceInfGuest%`), devient un SID par
+  LsaLookupNames2 ;
+- chaque droit est donné par LsaAddAccountRights. Un droit refusé est journalisé sans arrêter l'installation, comme
+  `syssetup`.
+
+Les 51 droits du fichier sont donnés. Le jeton d'`Administrator` a ensuite les 20 privilèges des Administrateurs,
+dont `SeChangeNotifyPrivilege`, `SeCreateGlobalPrivilege` et `SeImpersonatePrivilege` actifs par défaut (ce que
+LsapSetPrivileges en fait). `SeShutdownPrivilege` est présent, inactif, et s'active.
+
+Scénario `session-privileges` (`tests/native/priv1.c` comme shell d'`Administrator`, AMD et Intel) : les privilèges
+du jeton par leur nom et leurs attributs, puis RtlAdjustPrivilege(SeShutdownPrivilege). Sans l'étape de `minoinit`
+(une mutation), le jeton n'a aucun privilège et le scénario échoue.
+
 ## La suite
 
 Le premier critère du M6 est atteint ; restent le changement de résolution (troisième critère : `bochs-dispi`,
