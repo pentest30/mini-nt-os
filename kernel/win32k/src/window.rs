@@ -60,21 +60,21 @@ use abi::peb32::Peb32;
 use abi::process_parameters::RtlUserProcessParameters32;
 use abi::teb32::Teb32;
 use abi::user::{
-    CallbackWnd32, ClientInfo32, Cls32, CreateStructW32, DeskInfoHead32, LargeUnicodeString32, MinMaxInfo32, Msg32,
-    Rect32, StyleStruct32, WindowProcArguments32, Wnd32, CPD_A2U, CPD_CLASS, CPD_U2A, CPD_WINDOW, CSF_ANSIPROC,
-    CSF_SERVERSIDEPROC, CSF_SYSTEMCLASS, CS_DBLCLKS, CW_USEDEFAULT, DLGWINDOWEXTRA, FNID_BUTTON, FNID_DESKTOP,
-    FNID_DESTROY, FNID_DIALOG, FNID_EDIT, FNID_FIRST, FNID_GHOST, FNID_IME, FNID_MENU, FNID_MESSAGEWND, FNID_SWITCH,
-    GWLP_HINSTANCE, GWLP_HWNDPARENT, GWLP_ID, GWLP_USERDATA, GWLP_WNDPROC, GWL_EXSTYLE, GWL_STYLE, HRGN_WINDOW,
-    HWND_BOTTOM, HWND_MESSAGE, HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST, SIZE_MAXIMIZED, SIZE_MINIMIZED, SIZE_RESTORED,
-    STARTF_USEPOSITION, STARTF_USESIZE, SW_SHOW, SW_SHOWMINIMIZED, TYPE_WINDOW, WC_DESKTOP, WINVER_WIN2K, WINVER_WIN31,
-    WINVER_WINNT4, WM_CREATE, WM_ERASEBKGND, WM_GETMINMAXINFO, WM_MOVE, WM_NCCALCSIZE, WM_NCCREATE, WM_NCPAINT,
-    WM_PAINT, WM_PARENTNOTIFY, WM_SIZE, WM_STYLECHANGED, WM_STYLECHANGING, WM_SYSTIMER, WM_TIMER, WNDS2_WIN31COMPAT,
-    WNDS2_WIN40COMPAT, WNDS2_WIN50COMPAT, WNDS2_WMCREATEMSGPROCESSED, WNDS2_WMPAINTSENT, WNDS_ANSICREATOR,
-    WNDS_ANSIWINDOWPROC, WNDS_DIALOGWINDOW, WNDS_ERASEBACKGROUND, WNDS_HASMENU, WNDS_MAXIMIZESTOMONITOR,
-    WNDS_PAINTNOTPROCESSED, WNDS_SENDERASEBACKGROUND, WNDS_SENDSIZEMOVEMSGS, WNDS_SERVERSIDEWINDOWPROC, WND_UNICODE,
-    WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_DLGFRAME, WS_EX_DLGMODALFRAME, WS_EX_NOPARENTNOTIFY,
-    WS_EX_SETANSICREATOR, WS_EX_STATICEDGE, WS_EX_TOPMOST, WS_EX_WINDOWEDGE, WS_MAXIMIZE, WS_MINIMIZE, WS_POPUP,
-    WS_THICKFRAME, WS_VISIBLE,
+    CallbackWnd32, CbtCreateWndExtra32, ClientInfo32, Cls32, CreateStructW32, DeskInfoHead32, LargeUnicodeString32,
+    MinMaxInfo32, Msg32, Rect32, StyleStruct32, WindowProcArguments32, Wnd32, CPD_A2U, CPD_CLASS, CPD_U2A, CPD_WINDOW,
+    CSF_ANSIPROC, CSF_SERVERSIDEPROC, CSF_SYSTEMCLASS, CS_DBLCLKS, CW_USEDEFAULT, DLGWINDOWEXTRA, FNID_BUTTON,
+    FNID_DESKTOP, FNID_DESTROY, FNID_DIALOG, FNID_EDIT, FNID_FIRST, FNID_GHOST, FNID_IME, FNID_MENU, FNID_MESSAGEWND,
+    FNID_SWITCH, GWLP_HINSTANCE, GWLP_HWNDPARENT, GWLP_ID, GWLP_USERDATA, GWLP_WNDPROC, GWL_EXSTYLE, GWL_STYLE,
+    HRGN_WINDOW, HWND_BOTTOM, HWND_MESSAGE, HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST, SIZE_MAXIMIZED, SIZE_MINIMIZED,
+    SIZE_RESTORED, STARTF_USEPOSITION, STARTF_USESIZE, SW_SHOW, SW_SHOWMINIMIZED, TYPE_WINDOW, WC_DESKTOP,
+    WINVER_WIN2K, WINVER_WIN31, WINVER_WINNT4, WM_CREATE, WM_ERASEBKGND, WM_GETMINMAXINFO, WM_MOVE, WM_NCCALCSIZE,
+    WM_NCCREATE, WM_NCPAINT, WM_PAINT, WM_PARENTNOTIFY, WM_SIZE, WM_STYLECHANGED, WM_STYLECHANGING, WM_SYSTIMER,
+    WM_TIMER, WNDS2_WIN31COMPAT, WNDS2_WIN40COMPAT, WNDS2_WIN50COMPAT, WNDS2_WMCREATEMSGPROCESSED, WNDS2_WMPAINTSENT,
+    WNDS_ANSICREATOR, WNDS_ANSIWINDOWPROC, WNDS_DIALOGWINDOW, WNDS_ERASEBACKGROUND, WNDS_HASMENU,
+    WNDS_MAXIMIZESTOMONITOR, WNDS_PAINTNOTPROCESSED, WNDS_SENDERASEBACKGROUND, WNDS_SENDSIZEMOVEMSGS,
+    WNDS_SERVERSIDEWINDOWPROC, WND_UNICODE, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_DLGFRAME,
+    WS_EX_DLGMODALFRAME, WS_EX_NOPARENTNOTIFY, WS_EX_SETANSICREATOR, WS_EX_STATICEDGE, WS_EX_TOPMOST, WS_EX_WINDOWEDGE,
+    WS_MAXIMIZE, WS_MINIMIZE, WS_POPUP, WS_THICKFRAME, WS_VISIBLE,
 };
 use abi::winerror::{
     ERROR_CANNOT_FIND_WND_CLASS, ERROR_INVALID_MENU_HANDLE, ERROR_INVALID_WINDOW_HANDLE, ERROR_NOT_ENOUGH_MEMORY,
@@ -1630,6 +1630,12 @@ pub struct CreateParams {
     pub param: u32,
     /// La version de Windows qu'attend le module (`dwFlags`).
     pub expected_version: u32,
+    /// Les noms que voit un crochet WH_CBT (HCBT_CREATEWND) dans le
+    /// CREATESTRUCTW : le texte de l'appelant (le `Buffer` de son
+    /// `LARGE_STRING`, 0 sans), sa classe (un atome, ou le `Buffer` du nom
+    /// qu'il a donné) ; des adresses de son processus, lues telles quelles.
+    pub name_address: u32,
+    pub class_address: u32,
 }
 
 /// Ce que les paramètres du processus (STARTUPINFO) disent de la place, de
@@ -2160,6 +2166,38 @@ pub fn create_window(mut params: CreateParams) -> Result<Arc<Window>, Option<u32
         {
             update(&window, |state| state.menu = loaded);
         }
+    }
+
+    // WH_CBT, HCBT_CREATEWND: before any message, a hook sees the window,
+    // with its real style; it may move or size it, or refuse it (MFC ties
+    // its CWnd to the window there and subclasses it). The window it should
+    // follow is not used yet: the window goes on top, or at the bottom for
+    // a child, as without a hook.
+    if let Ok(thread) = crate::convert_current_thread() {
+        let mut create = CbtCreateWndExtra32 {
+            create_struct: CreateStructW32 {
+                create_params: params.param,
+                instance: params.instance,
+                menu: params.menu,
+                parent: params.parent,
+                cy: params.cy,
+                cx: params.cx,
+                y: params.y,
+                x: params.x,
+                style,
+                name: params.name_address,
+                class: params.class_address,
+                ex_style,
+            },
+            insert_after: HWND_TOP,
+        };
+        let refused = crate::hook::create_window(&thread, window.handle, &mut create);
+        drop(thread);
+        if refused != 0 || !window.is_alive() {
+            return Err(failed_creation(&window, None));
+        }
+        let placed = create.create_struct;
+        (params.x, params.y, params.cx, params.cy) = (placed.x, placed.y, placed.cx, placed.cy);
     }
 
     // The window's rectangle, its size within what WM_GETMINMAXINFO allows

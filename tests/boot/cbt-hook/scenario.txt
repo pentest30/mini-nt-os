@@ -1,0 +1,29 @@
+# WH_CBT at window creation (tests/native/cbt1.c, MinGW, linked to
+# ReactOS's kernel32 and user32): CBT1.EXE takes the place of winlogon.exe
+# and takes WinSta0\Default. As ReactOS (co_UserCreateWindowEx,
+# co_IntCallHookProc), HCBT_CREATEWND comes before any message: the hook
+# gets the window and its CBT_CREATEWND (the real style, the place and size
+# given, the caller's name and class pointers), subclasses the window (its
+# first message is then WM_GETMINMAXINFO) and changes its width; a non-zero
+# result refuses the window; two hooks, the last set first, CallNextHookEx
+# passing the CBT_CREATEWND on; a dialog is seen as #32770 before
+# WM_INITDIALOG; unhooked, nothing is called. MFC ties its CWnd to each
+# window there: without it, KeePass 1.x never ran its OnInitDialog. See
+# docs/compat/applications.md.
+features = test-smss
+requires = userland, native
+initial-command = CBT1.EXE
+cpus     = default, intel
+timeout  = 120
+
+expect = [cbt] on WinSta0\Default
+expect = [cbt] WH_CBT set: 1
+expect = [cbt] step 1: called 1, the window 1, style 04cf0000, at 10,20 300x200, name 1, class 1; subclassed: first message 24, WM_NCCREATE 1, WM_CREATE 1; width 321 (error 0)
+expect = [cbt] step 2: refused: called 1, CreateWindowEx 0, the window gone 1
+expect = [cbt] step 3: two hooks: called BA, the next saw cy 111, the window 321x111
+expect = [cbt] step 4: a dialog: called 1, the window 1, class 8002, subclassed before WM_INITDIALOG 1
+expect = [cbt] step 5: unhooked 1: called 0
+expect = [cbt] done
+
+forbid = *** STOP:
+forbid = hooks of that type are not called yet

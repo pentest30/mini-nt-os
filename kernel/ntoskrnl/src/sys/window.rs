@@ -100,9 +100,19 @@ pub(super) fn nt_user_create_window_ex(arguments: &[u32]) -> NtStatus {
         Ok(captured) => captured,
         Err(status) => return fail(dos_error(status)),
     };
+    // The pointers a WH_CBT hook sees as the names: the caller's own.
+    let buffer_of = |address: u32| {
+        if address == 0 {
+            return 0;
+        }
+        UserPtr::<LargeUnicodeString32>::new(address).read().map_or(0, |string| string.buffer)
+    };
+    let class_address = if is_atom(arguments[1]) { arguments[1] } else { buffer_of(arguments[1]) };
     let params = CreateParams {
         ex_style,
         class: Some(class),
+        name_address: buffer_of(arguments[3]),
+        class_address,
         name,
         style,
         x,
