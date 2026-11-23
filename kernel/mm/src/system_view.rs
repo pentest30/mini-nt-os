@@ -157,7 +157,9 @@ pub fn map(section: &Arc<Section>, offset: u64, size: u64) -> Result<SystemView,
     // and the active CR3 holds the kernel half, shared by every space.
     let mut tables = unsafe { MmPageTables::new(crate::HHDM_OFFSET.load(Ordering::Acquire)) };
     for index in 0..pages {
-        let page = match section.page(offset / PAGE + index) {
+        // A section of the paging file (checked above): its pages never
+        // wait to be read in.
+        let page = match section.page(offset / PAGE + index).and_then(|page| page.ok_or(STATUS_INVALID_PARAMETER)) {
             Ok(page) => page,
             Err(status) => {
                 for mapped in 0..index {
