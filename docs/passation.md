@@ -29,8 +29,12 @@
   bits, `decode_bgr`, `encode_bgr`), GetDIBits de 24 bits, les DIB sections de 1 bit (indexées). Scénario `bitmap-24`
   (`tests/native/bmp24.c`). PeaZip ouvre son gestionnaire et une archive (son titre la liste : l'étape « opened » du
   parcours) ; la course d'une étape `file` corrigée dans le banc. Vérifié : lint, tests hôte, `bitmap-24` (AMD,
-  Intel ; sans la modification, il échoue), `app-peazip` (l'archive ouverte en 26 s, extraite en 67 s), `bitmap`,
-  `icons`, `cursor`, `notepad-saveas`, `folder-view` (AMD). Sur la pile qui a reçu la PR 160, PeaZip figeait tout
+  Intel ; sans la modification, il échoue), `app-peazip` (l'archive ouverte à 21 s du parcours, extraite à 63 s ;
+  306 s en tout, AMD), `bitmap`, `icons`, `cursor`, `notepad-saveas`, `folder-view` (AMD). Revue des bots : GetDIBits
+  de 1 bit prend l'index de la couleur la plus proche dans la table rendue (`dibits::encode_lines`), comme en 4 et 8
+  bits : une DIB section de 1 bit à table inversée (blanc, puis noir) revenait inversée (test hôte
+  `a_one_bit_dib_takes_the_index_of_its_table`, qui échoue sans le correctif) ;
+  [`revues/mergestorm-vortex.md`](revues/mergestorm-vortex.md). Sur la pile qui a reçu la PR 160, PeaZip figeait tout
   le système au premier RestoreDC de son DC (le verrou repris de la PR 160, corrigé par la PR 173, fusionnée ici).
   **Pas encore** : le gestionnaire
   de PeaZip n'apparaît pas sur l'écran et ne se ferme pas sur WM_CLOSE (mesurés ensuite : l'entrée au-dessus) ; les

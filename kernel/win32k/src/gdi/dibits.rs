@@ -496,9 +496,11 @@ pub fn scan_window(bitmap_height: u32, dib_height: u32, start: u32, lines: u32) 
 /// d'un bitmap de `width` × `height` pixels de 32 bits (`pixels`, la ligne du
 /// haut d'abord), en DIB de `dib_width` pixels de `bit_count` bits (1, 4, 8,
 /// 16, 24 ou 32 : [`encodes`]), la ligne du bas d'abord sauf `top_down`. Hors
-/// du bitmap, des zéros. En 1 bit, le blanc le plus proche (`to_monochrome`)
-/// donne 1 ; en 4 et 8 bits, l'index de la couleur la plus proche dans
-/// `palette` ; en 16 bits, les composantes sous `masks` (rouge, vert, bleu).
+/// du bitmap, des zéros. En 1, 4 et 8 bits, l'index de la couleur la plus
+/// proche dans `palette`, la table que GetDIBits rend (celle d'une DIB
+/// section indexée, sinon celle par défaut) : EXLATEOBJ_iXlateRGBtoPal de
+/// ReactOS, dont la palette d'une DIB n'est pas monochrome ; en 16 bits, les
+/// composantes sous `masks` (rouge, vert, bleu).
 pub fn encode_lines(
     pixels: &[u32],
     (width, height): (u32, u32),
@@ -521,7 +523,7 @@ pub fn encode_lines(
         for (x, &raw) in source.iter().enumerate().take(dib_width as usize) {
             match bit_count {
                 1 => {
-                    if to_monochrome(layout.color(raw)) == ColorRef::rgb(255, 255, 255) {
+                    if super::surface::nearest_index(palette, layout.color(raw)) == 1 {
                         out[x / 8] |= 0x80 >> (x % 8);
                     }
                 }
@@ -824,7 +826,7 @@ mod tests {
         assert_eq!(&bottom_up[8..], &[0xFF, 0xFF, 0xFF, 0, 0, 0, 0xFF, 0x80], "BGRA, the alpha kept");
         let top_down = encode_lines(&pixels, (2, 2), 0, 2, (2, 32, &[], [0; 3]), true);
         assert_eq!(&top_down[..8], &bottom_up[8..], "the top line first");
-        let mono = encode_lines(&pixels, (2, 2), 0, 2, (2, 1, &[], [0; 3]), false);
+        let mono = encode_lines(&pixels, (2, 2), 0, 2, (2, 1, &default_palette(1), [0; 3]), false);
         assert_eq!(mono, [0b0000_0000, 0, 0, 0, 0b1000_0000, 0, 0, 0], "white is 1; lines of 4 bytes");
         let wider = encode_lines(&pixels, (2, 2), 0, 1, (3, 32, &[], [0; 3]), true);
         assert_eq!(wider.len(), 12);
@@ -862,6 +864,18 @@ mod tests {
         assert_eq!(rgb, [0xFF, 0x7F, 0x00, 0x7C, 0x08, 0x21, 0, 0], "5-5-5: 0x7FFF, 0x7C00, 0x2108");
         let fields = encode_lines(&pixels, (3, 1), 0, 1, (3, 16, &[], RGB565_MASKS), false);
         assert_eq!(fields, [0xFF, 0xFF, 0x00, 0xF8, 0x08, 0x42, 0, 0], "5-6-5: 0xFFFF, 0xF800, 0x4208");
+    }
+
+    #[test]
+    fn a_one_bit_dib_takes_the_index_of_its_table() {
+        // A 1-bit DIB section whose table is white then black: GetDIBits
+        // gives its table back, the bits are indexes in it.
+        let (white, black) = (0x00FF_FFFF, 0);
+        let inverted = [ColorRef::rgb(255, 255, 255), ColorRef::rgb(0, 0, 0)];
+        let bits = encode_lines(&[white, black], (2, 1), 0, 1, (2, 1, &inverted, [0; 3]), true);
+        assert_eq!(bits, [0b0100_0000, 0, 0, 0], "white is index 0, black index 1");
+        let bits = encode_lines(&[white, black], (2, 1), 0, 1, (2, 1, &default_palette(1), [0; 3]), true);
+        assert_eq!(bits, [0b1000_0000, 0, 0, 0], "black then white: white is 1");
     }
 
     #[test]
