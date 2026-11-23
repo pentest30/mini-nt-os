@@ -56,6 +56,19 @@ pub const PROCESS_BREAK_ON_TERMINATION: u32 = 29;
 /// impersonation token for the thread to impersonate, or NULL to revert to
 /// itself.
 pub const THREAD_IMPERSONATION_TOKEN: u32 = 5;
+/// ThreadBasePriority (NtSetInformationThread): a LONG, the thread's base
+/// priority relative to its process's, from THREAD_BASE_PRIORITY_MIN (-2) to
+/// THREAD_BASE_PRIORITY_MAX (2), or the saturation of SetThreadPriority's
+/// THREAD_PRIORITY_TIME_CRITICAL and THREAD_PRIORITY_IDLE
+/// ([`THREAD_BASE_PRIORITY_SATURATION`]).
+pub const THREAD_BASE_PRIORITY: u32 = 3;
+/// THREAD_BASE_PRIORITY_MAX, THREAD_BASE_PRIORITY_MIN.
+pub const THREAD_BASE_PRIORITY_MAX: i32 = 2;
+pub const THREAD_BASE_PRIORITY_MIN: i32 = -2;
+/// `(HIGH_PRIORITY + 1) / 2`: the increment of a saturated base priority
+/// (THREAD_BASE_PRIORITY_LOWRT + 1, the opposite for THREAD_BASE_PRIORITY_IDLE
+/// - 1), the highest or the lowest of the process's class.
+pub const THREAD_BASE_PRIORITY_SATURATION: i32 = 16;
 /// ThreadBreakOnTermination (NtSetInformationThread): a ULONG, non-zero for
 /// a critical thread.
 pub const THREAD_BREAK_ON_TERMINATION: u32 = 18;

@@ -100,9 +100,19 @@ pub(super) fn nt_user_create_window_ex(arguments: &[u32]) -> NtStatus {
         Ok(captured) => captured,
         Err(status) => return fail(dos_error(status)),
     };
+    // The pointers a WH_CBT hook sees as the names: the caller's own.
+    let buffer_of = |address: u32| {
+        if address == 0 {
+            return 0;
+        }
+        UserPtr::<LargeUnicodeString32>::new(address).read().map_or(0, |string| string.buffer)
+    };
+    let class_address = if is_atom(arguments[1]) { arguments[1] } else { buffer_of(arguments[1]) };
     let params = CreateParams {
         ex_style,
         class: Some(class),
+        name_address: buffer_of(arguments[3]),
+        class_address,
         name,
         style,
         x,
@@ -391,6 +401,17 @@ pub(super) fn nt_user_set_window_long(arguments: &[u32]) -> NtStatus {
         Ok(old) => NtStatus(old),
         Err(error) => fail(error),
     }
+}
+
+/// NtUserGetCPD(hWnd, Flags, ProcIn) : la procédure d'appel de la classe de
+/// `hWnd` pour `ProcIn` (`win32k::window::call_procedure`, UserGetCPD), que
+/// `user32` demande quand GetWindowLong(GWLP_WNDPROC) ou
+/// GetClassLong(GCLP_WNDPROC) voit une procédure de l'autre jeu de caractères
+/// (IntGetWndProc, IntGetClsWndProc) ; 0 sans elle, et `user32` rend alors la
+/// procédure même, comme ReactOS.
+pub(super) fn nt_user_get_cpd(arguments: &[u32]) -> NtStatus {
+    let [handle, flags, procedure] = arguments[..3] else { unreachable!("3 arguments") };
+    NtStatus(win32k::window::call_procedure(handle, flags, procedure).unwrap_or(0))
 }
 
 /// NtUserBeginPaint(hWnd, lpPaint) : `hWnd` se peint (IntBeginPaint) ; le

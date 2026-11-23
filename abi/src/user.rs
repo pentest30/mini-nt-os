@@ -299,6 +299,48 @@ pub const TYPE_WINDOW: u8 = 1;
 /// TYPE_MENU: a handle entry of a menu (`HANDLE_TYPE`).
 pub const TYPE_MENU: u8 = 2;
 
+/// TYPE_CALLPROC: a handle entry of a call procedure (`HANDLE_TYPE`), a
+/// [`CallProcData32`] in the desktop's heap.
+pub const TYPE_CALLPROC: u8 = 7;
+
+/// GETCPD, `CALLPROCDATA.wType`: what a call procedure converts and what it
+/// was asked for. `CPD_A2U` (UserGetCPDA2U): an ANSI caller of a Unicode
+/// procedure; `CPD_U2A` (UserGetCPDU2A): a Unicode caller of an ANSI one.
+pub const CPD_A2U: u32 = 0x01;
+pub const CPD_U2A: u32 = 0x02;
+/// UserGetCPDClass: the procedure of a class (GetClassInfo).
+pub const CPD_CLASS: u32 = 0x10;
+/// UserGetCPDWindow: the procedure of a window (GetWindowLong).
+pub const CPD_WINDOW: u32 = 0x20;
+/// UserGetCPDDialog: the procedure of a dialog.
+pub const CPD_DIALOG: u32 = 0x40;
+/// UserGetCPDWndtoCls: the procedure of a window's class (GetClassLong).
+pub const CPD_WND_TO_CLS: u32 = 0x80;
+
+/// CALLPROCDATA, 32-bit, ReactOS's (`ntuser.h`), in the heap of its desktop:
+/// a procedure asked in the other character set. The client gets its
+/// handle with the high word `0xFFFF` (GetCallProcHandle), which
+/// CallWindowProcA and CallWindowProcW recognize (IsCallProcHandle) and read
+/// here (ValidateCallProc).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CallProcData32 {
+    pub head: crate::menu::ProcDeskHead32,
+    /// The next one of its class (`spcpdNext`).
+    pub spcpd_next: u32,
+    /// The procedure it calls (`pfnClientPrevious`).
+    pub pfn_client_previous: u32,
+    /// `CPD_*` (`GETCPD`).
+    pub w_type: u32,
+}
+
+const _: () = {
+    assert!(size_of::<CallProcData32>() == 32);
+    assert!(offset_of!(CallProcData32, spcpd_next) == 20);
+    assert!(offset_of!(CallProcData32, pfn_client_previous) == 24);
+    assert!(offset_of!(CallProcData32, w_type) == 28);
+};
+
 /// FNID_*: the window function identifiers of the system classes; those
 /// up to `FNID_SWITCH` have a server procedure.
 pub const FNID_SCROLLBAR: u32 = 0x029A;
@@ -317,6 +359,9 @@ pub const FNID_EDIT: u32 = 0x02A5;
 /// DLGWINDOWEXTRA: the extra bytes of a dialog's window (the dialog
 /// class's), the least SetDialogPointer accepts.
 pub const DLGWINDOWEXTRA: u32 = 30;
+/// FNID_IME: the IME window, the last control that an ANSI creator makes an
+/// ANSI window (IntCreateWindow).
+pub const FNID_IME: u32 = 0x02A9;
 pub const FNID_GHOST: u32 = 0x02AA;
 /// FNID_SENDMESSAGE, FNID_SENDMESSAGEWTOOPTION, FNID_SENDNOTIFYMESSAGE: the
 /// kinds of NtUserMessageCall behind SendMessage, SendMessageTimeout (its
@@ -1654,6 +1699,42 @@ pub mod wh {
     pub const MAX: i32 = MOUSE_LL;
 }
 
+/// HCBT_*: the codes of a WH_CBT hook.
+pub mod hcbt {
+    pub const MOVESIZE: i32 = 0;
+    pub const MINMAX: i32 = 1;
+    pub const QS: i32 = 2;
+    pub const CREATEWND: i32 = 3;
+    pub const DESTROYWND: i32 = 4;
+    pub const ACTIVATE: i32 = 5;
+    pub const CLICKSKIPPED: i32 = 6;
+    pub const KEYSKIPPED: i32 = 7;
+    pub const SYSCOMMAND: i32 = 8;
+    pub const SETFOCUS: i32 = 9;
+}
+
+/// CBT_CREATEWNDW, 32-bit: what a WH_CBT hook gets in `lParam` for
+/// HCBT_CREATEWND, and passes to CallNextHookEx.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CbtCreateWnd32 {
+    /// `lpcs`: the CREATESTRUCTW.
+    pub create_struct: u32,
+    pub insert_after: u32,
+}
+
+/// HOOKPROC_CBT_CREATEWND_EXTRA_ARGUMENTS, 32-bit: after the
+/// HookProcArguments32 of HCBT_CREATEWND (its `l_param` is the offset of
+/// this record). `user32` makes a CBT_CREATEWNDW of it for the procedure,
+/// then writes back `x`, `y`, `cx`, `cy` and `insert_after`; the names of
+/// the CREATESTRUCTW are pointers that the procedure reads as they are.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CbtCreateWndExtra32 {
+    pub create_struct: CreateStructW32,
+    pub insert_after: u32,
+}
+
 /// HC_ACTION: the code of a hook call about a message or an event.
 pub const HC_ACTION: i32 = 0;
 
@@ -1833,6 +1914,10 @@ const _: () = {
     assert!(offset_of!(HookProcArguments32, result) == 0x20);
     assert!(offset_of!(HookProcArguments32, module_name) == 0x28);
     assert!(size_of::<HookProcArguments32>() == 0x428);
+    assert!(size_of::<CbtCreateWnd32>() == 8);
+    assert!(offset_of!(CbtCreateWnd32, insert_after) == 4);
+    assert!(offset_of!(CbtCreateWndExtra32, insert_after) == 0x30);
+    assert!(size_of::<CbtCreateWndExtra32>() == 0x34);
     assert!(offset_of!(ClientThreadInfo32, time_last_read) == 0x0C);
     assert!(size_of::<ClientThreadInfo32>() == 0x14);
     assert!(size_of::<UserHandleEntry32>() == 12);
@@ -2492,6 +2577,7 @@ macro_rules! as_bytes {
 }
 
 as_bytes!(
+    CallProcData32,
     NonClientMetricsW32,
     Msg32,
     UserHandleEntry32,
@@ -2525,6 +2611,8 @@ as_bytes!(
     ScrollBarInfo32,
     Hook32,
     HookProcArguments32,
+    CbtCreateWnd32,
+    CbtCreateWndExtra32,
     GetClipbData32,
     SetClipbData32
 );

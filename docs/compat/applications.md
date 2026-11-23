@@ -21,15 +21,15 @@ pour que chaque application teste autre chose. Elles sont rangées de la plus si
 
 | # | Application | Licence | Installeur | Ce qu'elle teste | Parcours |
 |---|---|---|---|---|---|
-| 1 | 7-Zip 9.20 (2010) | LGPL | MSI | `msiexec` de ReactOS, Win32, `msvcrt` | installer, archiver un fichier, l'extraire, comparer |
-| 2 | Notepad++ 7.9.2 (2020) | GPL | NSIS | Scintilla, onglets, Rechercher et Remplacer | taper, remplacer, enregistrer, rouvrir |
-| 3 | KeePass 1.18 (2010) | GPL | Inno Setup | MFC, cryptographie, dialogues | créer une base et une entrée, enregistrer, rouvrir avec le mot de passe |
+| 1 | 7-Zip 9.20 (2010) | LGPL | MSI | `msiexec` de ReactOS, Win32, `msvcrt` | installer, archiver un fichier, l'extraire, comparer (fait par `7z.exe`, le 2026-11-22) |
+| 2 | Notepad++ 7.9.2 (2020) | GPL | NSIS | Scintilla, onglets, Rechercher et Remplacer | taper, remplacer, enregistrer, rouvrir (fait au clavier, le 2026-11-22) |
+| 3 | KeePass 1.18 (2010) | GPL | Inno Setup | MFC, cryptographie, dialogues | créer une base et une entrée, enregistrer, rouvrir avec le mot de passe (fait au clavier, le 2026-11-22) |
 | 4 | WinMerge 2.12.4 (2009) | GPL | Inno Setup | MFC, vues côte à côte | comparer deux fichiers, fusionner une différence, enregistrer |
 | 5 | SumatraPDF 2.5.2 (2014) | GPL | le sien | rendu de pages, défilement | ouvrir un PDF fourni, page suivante, zoom |
 | 6 | AbiWord 2.4.1 (2005) | GPL | NSIS | traitement de texte, polices, RTF | taper, mettre en gras, enregistrer en `.rtf`, rouvrir |
-| 7 | PeaZip 3.9.1 (2011) | LGPL | Inno Setup | Lazarus et Free Pascal (LCL) | ouvrir une archive, l'extraire |
+| 7 | PeaZip 3.9.1 (2011) | LGPL | Inno Setup | Lazarus et Free Pascal (LCL) | ouvrir une archive, l'extraire (l'extraction par `-ext2folder`, le 2026-11-23 ; l'ouverture attend les bitmaps de 24 bits) |
 | 8 | Dev-C++ 4.9.9.2 (2005) | GPL | NSIS | Delphi (VCL), processus `gcc` lancés | ouvrir un projet, le compiler, lancer le programme |
-| 9 | GIMP 2.6.12 (2011) | GPL | Inno Setup | GTK2, nombreuses DLL, fontconfig | ouvrir une image, appliquer un filtre, exporter en PNG |
+| 9 | GIMP 2.6.12 (2011) | GPL | Inno Setup | GTK2, nombreuses DLL, fontconfig | ouvrir une image, appliquer un filtre, exporter en PNG (fait en Script-Fu, le 2026-11-22) |
 | 10 | Apache OpenOffice 4.1.17 (2026) | Apache 2.0 | NSIS, qui déballe son installeur MSI | très grosse application, runtimes de Visual C++ (WinSxS, à mesurer) | Writer : taper, enregistrer en `.odt`, rouvrir |
 
 ### Les installeurs épinglés
@@ -437,8 +437,8 @@ commitée) :
   courant de `msiexec`, `C:\WINDOWS\System32\7-Zip`. `ProgramFilesDir` et `CommonFilesDir` sont dans `mino.inf`.
 
 Sur la branche, AMD : `msiexec` rend 0 en 11 s, `C:\Program Files\7-Zip` tient ses programmes, `7z.dll` et ses langues, `7zFM.exe`
-ouvre « 7-Zip File Manager » et se ferme avec 0. Le parcours (archiver un fichier, l'extraire, comparer) reste à
-faire. OpenOffice, dont l'installeur NSIS lance un MSI, n'a pas été remesuré (1 500 s de banc).
+ouvre « 7-Zip File Manager » et se ferme avec 0. Le parcours (archiver un fichier, l'extraire, comparer) est fait
+depuis : voir [plus bas](#le-parcours-de-7-zip-le-2026-11-22). OpenOffice, dont l'installeur NSIS lance un MSI, n'a pas été remesuré (1 500 s de banc).
 ### Authenticode : le banc dans une session, le 2026-11-21
 
 Notepad++ 7.9.2 vérifie la signature de ses propres DLL (`SciLexer.dll`) : WinVerifyTrust, puis le certificat du
@@ -495,6 +495,297 @@ début, avec le texte qui avance (« Pak uit: cxmi… 57 % »). Le diagnostic co
 l'installeur tracent des rectangles aux coordonnées du bureau (391, 229)-(888, 543) quand le wizard se voit à
 (0, 0)-(497, 378) — la divergence des espaces de coordonnées entre les régions de peinture et les rectangles
 des fenêtres est la piste suivante, avec les restes du bitmap hors du rectangle de la page.
+
+### CALLPROCDATA : Inno Setup 5.4 installe, le 2026-11-21
+
+Les installeurs Inno Setup 5.4 (PeaZip 5.4.2, GIMP 5.4.3, tous deux ANSI) finissaient sur `STATUS_STACK_OVERFLOW`,
+et en session sur une boîte de Delphi « EAccessViolation ». Le bilan précédent y voyait une page du tas que Mino ne
+projetait pas. Mesuré cette fois :
+
+- une trace temporaire (jamais commitée) des services et des exceptions des processus de l'installeur (le nom
+  d'image d'EPROCESS est tronqué à 15 caractères : `peazip-plain-3.`, pour le chargeur comme pour `setup.tmp`) ;
+- le `setup.tmp` récupéré du disque d'un ancien run (son entrée effacée de `Local Settings\Temp`, ses clusters
+  contigus), désassemblé : `0x401dc7` est `InsertFree` du gestionnaire de mémoire de Delphi (la taille d'un bloc
+  libre écrite à sa fin), et l'adresse impaire `0xf46f61` n'est pas une page oubliée mais une taille de bloc
+  corrompue ; à la faute suivante, la liste libre vaut `0x67610074` et `0x4e0065`, du texte UTF-16 ;
+- juste avant, le contrôle mesurait les caractères `0x3a43 0x505c 0x6f72…` : « C:\Program Files\PeaZip » en ANSI,
+  lu comme de l'UTF-16.
+
+Le TEdit de Delphi prend la procédure d'Edit par GetClassInfoA et l'appelle par CallWindowProcA ; le manifeste de
+`setup.tmp` fait d'« Edit » celui de `comctl32` 6 (une classe Unicode sans FNID, `EDIT_Register`), et win32k
+rendait sa procédure telle quelle à l'appelant ANSI. Le contrôle lisait donc son texte ANSI en UTF-16, et son
+WM_GETTEXT écrivait deux octets par caractère dans le tampon ANSI que Delphi avait alloué pour la longueur. ReactOS
+rend là une procédure d'appel (CALLPROCDATA), que CallWindowProcA convertit : c'est fait, avec deux écarts de la
+même règle trouvés par le scénario de test (la classe d'un contrôle de `user32` vue par la procédure du client du
+jeu demandé ; un contrôle créé en ANSI est une fenêtre ANSI). Le détail est à l'étape 47 de
+[`m6-fenetres.md`](m6-fenetres.md), le test est le scénario `ansi-controls`.
+
+Le banc après le correctif, AMD, en session :
+
+| Application | Avant | Maintenant |
+|---|---|---|
+| PeaZip | `setup.tmp` finit sur `STATUS_STACK_OVERFLOW` en 11 s | l'installation commence et copie 78 fichiers dans `C:\Program Files\PeaZip`, puis ne peut créer `res\themes\nographic-embedded\fm-theme.bmp` (« The system cannot find the path specified ») et revient en arrière (code 5) : le répertoire, au nom long de 18 caractères, est sur le disque sans son nom long (seule l'entrée 8.3 `NOGRAP~1`), alors que `firecrystal.theme.7z`, de 20 caractères, a le sien |
+| GIMP | la boîte « EAccessViolation », l'installeur terminé par le banc après 900 s | **s'installe** : code 0 en 558 s, « Installation process succeeded », 116 Mio écrits ; `gimp-2.6.exe` démarre puis lit l'adresse `0xC` dans `libgdk-win32-2.0-0.dll` juste après NtUserEnumDisplayMonitors, sans handler (aucun moniteur) |
+| KeePass | son titre se lit « K » | son titre se lit « KeePass » ; il ne se ferme toujours pas sur WM_CLOSE |
+| AbiWord | (le 2026-11-20) `libAbiWord.dll` lit `0x3C` | ouvre « Untitled1 - AbiWord » et se ferme avec 0 — déjà sur la base de la branche (`9014bc5`), pas l'effet de CALLPROCDATA |
+| WinMerge, Dev-C++, Notepad++, SumatraPDF, 7-Zip | — | inchangés : WinMerge et Dev-C++ plantent au lancement de leur programme (0xC0000005, « Application Error »), Notepad++ ouvre « new 1 », SumatraPDF n'est pas trouvé où le banc le cherche, 7-Zip ouvre son gestionnaire |
+
+Les installeurs Inno déplacent chaque fichier par MoveFile, que `kernel32` fait par une copie puis un effacement
+(« Forcing copy, renaming not supported by FSD » : FileRenameInformation, la classe 0xa de NtSetInformationFile,
+n'a pas de handler) : 1 729 fois pour GIMP. Le plancher de PeaZip attend « Starting the installation process. » et
+interdit la fin sur `STATUS_STACK_OVERFLOW` ; celui de GIMP attend l'installation réussie et le programme lancé. Son
+journal (650 Ko) dépasse le tampon du banc, qui n'en imprime que les 64 derniers Kio : le plancher ne peut plus
+attendre la version d'Inno ni les privilèges, écrits au début (à corriger dans `appbench.c`).
+
+La suite pour ces applications : le nom long d'un répertoire créé (PeaZip), NtUserEnumDisplayMonitors (GIMP),
+FileRenameInformation (tous les Inno).
+
+### Un nom long dans un trou, le 2026-11-21
+
+PeaZip copiait ses fichiers puis ne pouvait créer `res\themes\nographic-embedded\fm-theme.bmp` (« The system cannot
+find the path specified »). Les emplacements du répertoire `themes` sur le disque du run (lus emplacement par
+emplacement, les effacés compris) : les deux entrées de nom long de `nographic-embedded` dans les emplacements 2
+et 3, son entrée 8.3 `NOGRAP~1` dans le 10, entre elles les entrées de deux fichiers. Les emplacements 2 et 3 étaient
+un trou : Inno déplace chaque fichier installé par MoveFile, que `kernel32` fait par une copie puis un effacement
+(FileRenameInformation manque), et l'effacé laisse ses emplacements libres. `io::fat` mettait chaque entrée d'un nom
+dans le premier emplacement libre, une à une : le nom long, séparé de son entrée 8.3, n'était plus reconnu, et le
+répertoire ne se trouvait plus par son nom long, celui que PeaZip demande ; son alias `NOGRAP~1` se trouvait encore
+(`FatVolume::find_entry` compare l'entrée 8.3 seule).
+
+Comme `vfatFindDirSpace` de `vfatfs` (FATAddEntry), les entrées d'un nom prennent maintenant une suite
+d'emplacements libres consécutifs (`FatVolume::add_entries`, d'un cluster au suivant au besoin) ; un trou trop
+court est sauté, un trou qui suffit est repris, et sans suite assez longue le répertoire grandit avant que rien ne
+soit écrit. PeaZip s'installe (code 0 en 91 s, « Installation process succeeded »), `peazip.exe` ouvre sa fenêtre
+« PeaZip » et se ferme avec 0 sur WM_CLOSE ; plancher relevé. Test hôte
+`a_long_name_takes_a_run_of_free_slots_past_a_short_hole`, qui échoue sans le correctif (l'entrée 8.3 à
+l'emplacement 7, la disposition du disque de PeaZip).
+
+Vu en chemin, au lancement de `peazip.exe` : NtUserSetClassLong et NtUserChildWindowFromPointEx sans handler, une DIB
+section de 24 bits refusée (« not yet ») ; la fenêtre s'ouvre quand même. Son parcours (ouvrir une archive,
+l'extraire) reste à faire.
+
+### EnumDisplayMonitors : le GIMP s'ouvre, le 2026-11-22
+
+`gimp-2.6.exe` lisait l'adresse `0xC` dans `libgdk-win32-2.0-0.dll` juste après NtUserEnumDisplayMonitors, sans
+handler : il rendait 0, EnumDisplayMonitors de `user32` (qui demande le compte, puis les listes) ne rappelait rien, et
+gdk restait sans moniteur. Fait comme `monitor.c` de ReactOS (`sys::monitor::nt_user_enum_display_monitors`,
+`win32k::monitor::search_area`, `intersecting`, `enumerate`) : le nombre de moniteurs que coupe la zone — le
+rectangle donné à l'écran, ou depuis la borne de la région visible du DC, ou cette borne ; ni l'un ni l'autre :
+tout l'écran virtuel —, leurs handles et la partie coupée de chacun. Scénario `enum-monitors`
+(`tests/native/enummon1.c`, AMD et Intel) ; deux mutations le font échouer (sans handler ; les rectangles d'un DC
+non ramenés à son coin).
+
+Une première relance sans la PR 162 a fini sur `STATUS_DLL_NOT_FOUND` : `libgimpbase-2.0-0.dll` avait son nom long
+coupé (« libgimpbase-2 » : la seconde partie dans un trou du répertoire `bin`, le défaut de la PR 162), la
+disposition des trous changeant d'un run à l'autre. Sur la PR 162, le GIMP s'installe (code 0) et `gimp-2.6.exe`
+ouvre sa fenêtre « GIMP Startup » (`gdkWindowToplevel`) ; il ne se ferme pas en 15 s sur WM_CLOSE, le banc le
+termine. Plancher relevé (la fenêtre attendue, toute fin du programme par lui-même interdite).
+
+Vu ensuite dans son démarrage : NtUserGetThreadDesktop, NtUserGetObjectInformation, NtUserFindWindowEx,
+NtUserGetDoubleClickTime, NtUserMapVirtualKeyEx, NtGdiModifyWorldTransform, NtGdiSaveDC et NtGdiRestoreDC (pris par
+une autre session) sans handler, une DIB section de 1 bit refusée.
+
+### SetThreadPriority : le GIMP interroge ses greffons, le 2026-11-22
+
+Laissé plus longtemps derrière sa fenêtre « GIMP Startup » (le banc la fermait 16 s après), le GIMP montrait une
+boîte « Error » de GLib : « g_thread_set_priority_win32_impl: error Incorrect function. during SetThreadPriority ».
+SetThreadPriority de `kernel32` est NtSetInformationThread(ThreadBasePriority, classe 3), sans handler :
+`STATUS_NOT_IMPLEMENTED`, que `kernel32` traduit en ERROR_INVALID_FUNCTION, et GLib s'arrête. Fait comme ReactOS
+(`ps/query.c`, KeSetBasePriorityThread, KeQueryBasePriorityThread ; `sys::process::nt_set_information_thread`,
+`ps::ethread::base_priority_of`, `EThread::set_base_increment`, `base_increment`) : un incrément de -2 à 2, ou ±16
+(la saturation que `kernel32` passe pour THREAD_PRIORITY_TIME_CRITICAL et THREAD_PRIORITY_IDLE), tout incrément
+dans un processus temps réel, sinon `STATUS_INVALID_PARAMETER` ; la priorité de base est celle du processus plus
+l'incrément, gardée dans la classe du processus (de 1 à 15, ou de 16 à 31 en temps réel) ; le thread garde sa
+saturation, que ThreadBasicInformation (GetThreadPriority) rend comme ±16. Scénario `thread-priority`
+(`tests/native/prio1.c`, AMD et Intel) ; deux mutations le font échouer (la classe refusée ; la saturation oubliée) ;
+test hôte `a_thread_base_priority_stays_in_its_process_class`.
+
+Sans l'erreur, le GIMP interroge ses greffons à son premier démarrage : un processus chacun (`wind.exe`,
+`whirl-pinch.exe`… `color-exchange.exe`, dans l'ordre inverse de l'alphabet), 152 en 300 s. Le banc laisse
+maintenant à un programme le temps de démarrer (`program_seconds` de `xtask/src/apps.rs`, `settle=` de `PROBE.TXT` ;
+5 s par défaut, 600 s pour le GIMP), et imprime ses fenêtres chaque minute. Le GIMP ouvre alors sa boîte à outils (« Toolbox »), la
+fenêtre « Layers, Channels, Paths, Undo - Brushes, Patterns, Gradients » et celle de l'image (« GNU Image
+Manipulation Program »), entre 440 et 560 s après son lancement, et se ferme avec 0 sur WM_CLOSE ; plancher relevé
+(la boîte à outils, la fermeture). KeePass, au délai par défaut, ne change pas.
+
+Restent à son démarrage, sans handler : NtUserGetThreadDesktop, NtUserGetObjectInformation, NtUserFindWindowEx,
+NtUserGetDoubleClickTime, NtUserMapVirtualKeyEx, NtGdiModifyWorldTransform, NtGdiGetRegionData,
+NtGdiExtCreateRegion ; une DIB section de 1 bit refusée. Son parcours (ouvrir une image, un filtre, l'export PNG)
+reste à faire.
+
+### Le parcours du GIMP, le 2026-11-22
+
+Le parcours de la liste (« ouvrir une image, appliquer un filtre, exporter en PNG ») tourne en Script-Fu, sans
+interface : `gimp-console-2.6.exe -i -d -f -b "(load \"C:/APPS/ROUTE.SCM\")" -b "(gimp-quit 0)"`. Le script ouvre
+`C:\APPS\ROUTE.BMP` (32 × 32, la moitié gauche noire, la droite blanche, écrit par `xtask` :
+`apps::half_black_bmp`), le floute (`plug-in-gauss`, rayon 10), l'exporte en `ROUTE.PNG` (`file-png-save`), rouvre le
+PNG et lit le pixel de la frontière : gris (142). Chaque étape passe par un greffon, donc un processus (`file-bmp`,
+`blur-gauss`, `file-png`, `script-fu`), et ses messages vont à la sortie de `gimp-console`. Le banc a pour cela une
+commande de parcours par application (`route` de `xtask/src/apps.rs`, `route=` et `route-seconds=` de `PROBE.TXT`,
+ses fichiers dans `C:\APPS`) : il la lance après le programme, sa sortie et ses erreurs dans
+`C:\APPS\ROUTE.LOG`, puis imprime son code de fin, sa sortie et ce qu'est `ROUTE.PNG`. Résultat : « batch command
+executed successfully », code 0 en 144 s, `ROUTE.PNG` un PNG de 149 octets.
+
+L'attente du programme est devenue déterministe : au-delà de 5 s, le banc attend que le programme montre une autre
+fenêtre que sa première (puis 10 s), au plus `program_seconds` (900 s pour le GIMP) ; un premier run, sur un hôte
+chargé, avait vu la boîte à outils arriver juste après les 600 s fixes d'avant.
+
+Plancher du GIMP : son installation, sa boîte à outils, sa fermeture par WM_CLOSE, puis chaque étape du parcours, le
+pixel gris et le PNG ; interdits : un parcours qui ne démarre pas ou dépasse son délai.
+
+### Le parcours de 7-Zip, le 2026-11-22
+
+Le parcours de la liste (« archiver un fichier, l'extraire, comparer ») passe par la ligne de commande de 7-Zip,
+`7z.exe`, dans un fichier de commandes que `cmd.exe` exécute : `C:\WINDOWS\system32\cmd.exe /c C:\APPS\ROUTE.CMD`.
+`xtask` écrit dans `C:\APPS` le texte à archiver, `ROUTE.TXT` (2 000 lignes numérotées, 133 790 octets :
+`apps::route_text`), et `ROUTE.CMD` (lignes CRLF) : `7z a` crée `ROUTE.7Z`, `7z t` le teste, `7z x -y -oC:\APPS\OUT`
+l'extrait, `fc /b` compare l'extrait à l'original ; chaque étape qui échoue termine `cmd.exe` avec son propre code
+(`exit 1` à `exit 4`). Pas `exit /b N` : le `cmd` de ReactOS 0.4.16 ne le transmet pas. Un fichier de commandes y
+rend le code de sa dernière commande (`Batch`, `base/shell/cmd/batch.c`), et `exit /b` dans un fichier rend 0
+(`CommandExit`, `internal.c`, qui ne pose que `nErrorLevel`) : `cmd /c` finissait avec 0 quand `fc` trouvait une
+différence. C'est le `cmd` épinglé, pas le noyau ; `exit N` arrête l'interpréteur avec N. Le banc décrit le fichier que fait le parcours, quel qu'il soit (`route-output=` de `PROBE.TXT`, `output` de
+`apps::Route`) : sa taille, s'il est un PNG et ses six premiers octets. Rien à corriger dans le noyau : du premier
+coup, « Everything is Ok » aux trois commandes, « FC: no differences encountered », code 0 en 2 à 12 s, `ROUTE.7Z` de
+2 202 octets qui commence par la signature de 7z (`37 7a bc af 27 1c`). Le scénario passe en 73 s (AMD, noyau déjà
+construit).
+
+Plancher de 7-Zip : son installation, son gestionnaire de fichiers, puis chaque étape du parcours (compression, test,
+extraction, comparaison, la ligne finale du fichier de commandes), le code 0 et la signature de l'archive ; interdits :
+un parcours qui ne démarre pas ou dépasse son délai. Vérifié par mutation : `fc /b` qui compare `ROUTE.TXT` à
+`ROUTE.CMD` trouve la différence, le fichier de commandes finit avec 4 et le scénario échoue (la comparaison, la
+ligne finale et le code 0 manquent) ; avec `exit /b 4`, il finissait avec 0.
+
+### La langue de l'interface : Notepad++ en néerlandais, le 2026-11-22
+
+En écrivant le parcours de Notepad++, un run a montré sa boîte Remplacer en néerlandais (« Vervang », « Vind wat »),
+un autre en anglais. NtQueryDefaultUILanguage et NtQueryInstallUILanguage n'avaient pas de handler, et le
+GetUserDefaultUILanguage du `kernel32` de ReactOS (`winnls/string/locale.c`, comme GetSystemDefaultUILanguage) ne
+regarde pas le statut : il rend le LANGID de sa pile, n'importe lequel. L'installeur NSIS silencieux de Notepad++ en
+tirait sa langue. Faits comme ReactOS (`ex/locale.c`, ExpGetCurrentUserUILanguage ; `config/cmcontrl.c` pour
+PsInstallUILanguageId) : la langue d'installation vient d'`InstallLanguage` de `Nls\Language` (sinon celle des
+paramètres régionaux du système : `ex::locale::set_install_ui_language`, lue au montage de la ruche SYSTEM) ; celle de
+l'utilisateur, de `MultiUILanguageId` de son `Control Panel\Desktop` (une REG_SZ lue comme RtlUnicodeStringToInteger
+en base 16 : `ex::locale::parse_ui_language`), la langue d'installation à défaut (`sys::locale`). Scénario
+`ui-language` (`tests/native/uilang1.c`, AMD et Intel) : les deux services, les fonctions de `kernel32`, la valeur
+de l'utilisateur en chaîne, en REG_DWORD, effacée, les pointeurs refusés ; sans les handlers, il échoue (`c0000002`,
+`GetUserDefaultUILanguage` rend 0 ce jour-là). Les autres installeurs NSIS (AbiWord, Dev-C++) prenaient leur
+langue de la même façon.
+### Le parcours de Notepad++, le 2026-11-22
+
+Le parcours de la liste (« taper, remplacer, enregistrer, rouvrir ») passe par les fenêtres de Notepad++, au clavier
+de QEMU. Le banc a pour cela des parcours par étapes (`steps` d'`apps::Route`, `route-step=` de `PROBE.TXT`,
+`run_window_route` d'`appbench.c`) : `start` lance la commande du parcours, `close` ferme le programme par WM_CLOSE et
+imprime son code ; `window TEXTE => ÉTIQUETTE` attend une fenêtre visible du programme dont le titre contient le
+texte, `no-window TEXTE => ÉTIQUETTE` qu'il n'y en ait plus, `clipboard => ÉTIQUETTE` que le presse-papiers change,
+puis en imprime le texte. Chaque attente imprime « route step: ÉTIQUETTE », et les `keys` du scénario s'y
+accrochent. Le banc imprime ensuite le fichier que fait le parcours (`route-output=`), ligne à ligne si c'est un
+texte court.
+
+Notepad++ ouvre `C:\APPS\ROUTE.TXT` (« Mino route », écrit par `xtask` ; `notepad++.exe -nosession
+C:\APPS\ROUTE.TXT`) ; Ctrl+Fin et « the quick brown fox jumps »
+(le titre prend son `*`) ; Ctrl+H ouvre « Replace », « fox », Tab, « cat », Alt+A (Replace All), Échap (la boîte se
+cache) ; Ctrl+S (le `*` part) ; fermé avec 0. Rouvert, Ctrl+A et Ctrl+C mettent son texte dans le presse-papiers, que
+le banc lit : « Mino route », « the quick brown cat jumps ». Le fichier fait 37 octets, ces deux lignes. Aucun mot
+tapé ne commence comme un autre du fichier : la complétion des mots de Notepad++ (dès la première lettre) n'en
+propose aucun.
+
+Deux runs ont fait deux corrections. Le deuxième a montré la boîte en néerlandais (« Vervang ») : la langue de
+l'interface, plus haut, corrigée dans le noyau. Le troisième, en anglais, n'a copié que « jumps » : Ctrl+H étend la
+sélection au mot sous le curseur, la session de Notepad++ la garde à la fermeture et la remet au second lancement,
+après que la fenêtre montre son titre ; le Ctrl+A arrivé avant était défait. Les deux lancements prennent donc
+`-nosession` (une option de Notepad++) : le second relit le fichier sur le disque, sans rien de la session ni de ses
+copies de sauvegarde, ce que « rouvrir » demande. Le parcours dure alors 23 s, le scénario 246 s (AMD).
+
+Le banc lit le texte rouvert par le presse-papiers, pas par WM_GETTEXT au contrôle Scintilla : win32k ne traduit pas
+encore les pointeurs d'un message envoyé à un autre processus (`win32k::sent::unmarshalled`, « not yet »). C'est une
+dette de USER, pas du parcours.
+
+Plancher de Notepad++ : son installation, sa fenêtre, puis chaque étape du parcours, le texte du presse-papiers, sa
+fermeture avec 0 et les deux lignes du fichier ; interdits : un parcours qui ne démarre pas, dépasse son délai, un
+programme qui finit seul, « fox » dans le fichier. Vérifié par mutation : sans Alt+A (pas de Replace All), le reste
+du parcours va au bout, mais « fox » reste dans le fichier et le scénario échoue.
+
+### WH_CBT : KeePass n'exécutait pas son OnInitDialog, le 2026-11-22
+
+En écrivant le parcours de KeePass, ses touches (Ctrl+N) et WM_CLOSE n'avaient aucun effet, alors qu'elles lui
+parvenaient : la fenêtre est au premier plan et répond aux messages envoyés ; ses GetMessage et PeekMessage sont ceux
+de la boucle modale de MFC, sans filtre ; WM_KEYDOWN de Ctrl et de N, WM_CLOSE et le WM_COMMAND IDCANCEL que poste
+DefDlgProc sortent de sa file (traces temporaires dans `sys::message`). Mais après eux, aucun NtUserTranslateAccelerator,
+aucun appel de son OnCancel ; NtUserCreateAcceleratorTable n'était jamais appelé ; et MFC envoyait WM_KICKIDLE et
+TTM_RELAYEVENT à la fenêtre 0. Le journal disait pourquoi : « a hook of type 5 is set, but hooks of that type are not
+called yet ». MFC pose un crochet WH_CBT autour de chaque CreateWindowEx et CreateDialog et, dans HCBT_CREATEWND, attache
+son `CWnd` à la fenêtre et la sous-classe. Sans l'appel, le `CDialog` de KeePass n'avait jamais de fenêtre :
+`AfxDlgProc` ne le trouvait pas à WM_INITDIALOG, son OnInitDialog ne tournait pas (ni accélérateurs, ni titre, ni
+contrôles remplis), et ses commandes allaient à DefDlgProc, qui n'en fait rien.
+
+Fait comme ReactOS (`co_UserCreateWindowEx`, `co_IntCallHookProc`, `User32CallHookProcFromKernel`) : WH_CBT est appelé
+pour HCBT_CREATEWND dans `win32k::window::create_window`, une fois la fenêtre et le menu de sa classe faits, avant
+WM_GETMINMAXINFO et WM_NCCREATE (`win32k::hook::create_window`). Le crochet reçoit la fenêtre et un CBT_CREATEWND :
+le style réel, la place et la taille données, les pointeurs de nom et de classe de l'appelant (ReactOS donne pour la
+classe une adresse du noyau ; Mino, l'atome ou le nom que l'appelant a passé) ; ce qu'il change de la place, de la
+taille et de la fenêtre d'avant revient (cette dernière n'est pas encore suivie) ; un résultat non nul refuse la
+fenêtre. Les arguments du rappel sont HOOKPROC_CALLBACK_ARGUMENTS puis HOOKPROC_CBT_CREATEWND_EXTRA_ARGUMENTS
+(`abi::user::CbtCreateWndExtra32`), et NtUserCallNextHookEx lit et réécrit le CBT_CREATEWND de l'appelant. Les autres
+codes de HCBT (ACTIVATE, DESTROYWND, SETFOCUS, MINMAX, MOVESIZE…) ne sont pas encore appelés.
+
+Scénario `cbt-hook` (`tests/native/cbt1.c`, AMD et Intel) : ce que voit le crochet, la sous-classe (le premier
+message est alors WM_GETMINMAXINFO), la largeur qu'il donne, un refus, deux crochets et CallNextHookEx, une boîte de
+dialogue vue comme #32770 avant WM_INITDIALOG, puis rien une fois décroché ; il échoue si le crochet est appelé pour
+une autre fenêtre et son résultat ignoré. KeePass : son titre devient « KeePass Password Safe » et WM_CLOSE le ferme
+(code 2, l'IDCANCEL de DoModal) ; plancher relevé. WinMerge 2.12.4, un programme MFC lui aussi, qui finissait sur
+0xC0000005 à son lancement (« Application Error »), montre maintenant sa fenêtre principale (`WinMergeWindowClassW`,
+« WinMerge ») et se ferme avec 0 ; plancher relevé (son installation, sa fenêtre, sa fermeture).
+
+### Le parcours de KeePass, le 2026-11-22
+
+Le parcours de la liste (« créer une base et une entrée, enregistrer, rouvrir avec le mot de passe ») passe par les
+fenêtres de KeePass 1.18, au clavier de QEMU, comme celui de Notepad++ (`steps` d'`apps::Route`). Il a d'abord demandé
+WH_CBT (plus haut) : sans lui, KeePass ne faisait rien de ses touches. Ses fenêtres ont été trouvées par l'étape
+`show SECONDES => ÉTIQUETTE` du banc (les fenêtres du programme, leurs contrôles, le premier plan, le presse-papiers,
+au bout de ce temps : pour explorer, pas pour un plancher). Le banc a aussi `start ARGUMENTS` (la commande du parcours
+avec ces arguments) et `new-window TEXTE` (une autre fenêtre de ce titre que la dernière trouvée : les deux boîtes du
+mot de passe maître s'appellent toutes deux « Create New Password Database »), et il prend 24 étapes, en disant s'il
+en laisse (il en prenait 16 sans le dire).
+
+KeePass démarre ; Ctrl+N ouvre « Create New Password Database » : « minopass », Entrée, puis la seconde boîte, encore
+« minopass », Entrée ; Ctrl+Y ouvre « Add Entry » : « Mino », Tab, « mino », Entrée ; Ctrl+S ouvre « Save As » :
+`C:\APPS\ROUTE.KDB`, Entrée ; le titre devient « ROUTE.KDB - KeePass Password Safe » ; fermé par WM_CLOSE (code 2).
+Puis `KeePass.exe C:\APPS\ROUTE.KDB` : « Open Database - ROUTE.KDB », « minopass », Entrée ; la base s'ouvre et Ctrl+B
+copie le nom d'utilisateur de l'entrée, que le banc lit dans le presse-papiers : « mino ». `ROUTE.KDB` fait 1 388
+octets et commence par la signature de KeePass 1.x (`03 d9 a2 9a 65 fb`). Ctrl+Q ne ferme pas KeePass 1.18 (le
+raccourci des sources récentes) : la fermeture est celle du banc. Le parcours dure 25 s, le scénario 146 s (AMD).
+
+Plancher de KeePass : chaque étape du parcours, les deux fermetures avec 2, le nom d'utilisateur copié, la signature
+de la base ; interdits : un parcours qui ne démarre pas, dépasse son délai, un programme qui finit seul, des étapes
+laissées. Vérifié par mutation : un mauvais mot de passe à la réouverture (« Invalid/wrong key ») et le scénario
+échoue (le parcours dépasse son délai à « database opened »).
+
+### Le parcours de PeaZip, le 2026-11-23
+
+Le parcours de la liste (« ouvrir une archive, l'extraire ») est fait pour l'extraction, par la ligne de commande de
+PeaZip : `peazip.exe -ext2folder C:\APPS\ROUTE.ZIP`. `xtask` écrit `ROUTE.ZIP`, une archive où `ROUTE.TXT` (66 octets,
+deux lignes) est stocké (`zip::stored`, relue par `zip::entries` et `zip::extract` dans un test hôte). PeaZip lance un
+second `peazip.exe`, qui confie le travail à son 7-Zip (`res\7z\7z.exe`), puis à `cmd.exe` et `pealauncher.exe`, et le
+premier finit avant eux : la nouvelle étape `file CHEMIN => ÉTIQUETTE` du banc attend que le fichier existe (le
+programme peut avoir fini entre-temps), puis le banc imprime ses lignes. Rien à corriger dans le noyau pour cela :
+`C:\APPS\ROUTE\ROUTE.TXT` sort avec ses deux lignes. Quand le fichier attendu manque, le banc liste `C:\APPS`, et
+`show` imprime aussi les contrôles des fenêtres du programme (classe et texte). L'extraction prend 14 s, le scénario
+177 s (AMD).
+
+L'ouverture dans le gestionnaire de fichiers de PeaZip n'est pas encore une étape : une capture de l'écran (le
+pixel de `screen`, son image gardée) montre la boîte de la LCL « Failed to get raw image description from bitmap.
+Press OK to ignore and risk data corruption. Press Cancel to kill the program. », au lancement de PeaZip comme à
+l'ouverture d'une archive. C'est elle, et non le gestionnaire, la « fenêtre du programme » qu'attendait le plancher
+(classe `Window`, deux boutons sans texte). Trace temporaire des services de bitmap de PeaZip : NtGdiExtGetObjectW
+réussit toujours (1 486 appels), mais NtGdiCreateBitmap rend 0 pour 24 bits par pixel (16 × 16, 60 fois) et
+NtGdiCreateDIBSection rend 0 136 fois, quand `win32k::gdi::surface` refuse les DIB sections de 24 bits (« pas encore :
+les DIB sections de 1, 16 et 24 bits ») ; la LCL reçoit alors un HBITMAP nul. La suite : les surfaces de 24 bits
+(`gdi::surface`, `dibits`, `bitblt`).
+
+Plancher de PeaZip : son installation, ce qu'il montre, puis l'extraction (l'étape, `ROUTE.TXT` de 66 octets, ses deux
+lignes) ; interdits : un parcours qui ne démarre pas ou dépasse son délai. Vérifié par mutation : un octet des données
+de l'archive changé, 7-Zip écrit quand même le fichier (« QeaZip… », son CRC faux) et le scénario échoue sur sa
+première ligne.
 
 ### La suite
 

@@ -8,8 +8,8 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 
 | Table | Implémentés | Services |
 |---|---:|---:|
-| ntoskrnl | 135 | 296 |
-| win32k | 222 | 737 |
+| ntoskrnl | 137 | 296 |
+| win32k | 224 | 737 |
 
 ## ntoskrnl
 
@@ -165,7 +165,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x0093` | `NtQueryBootOptions` | 2 |  |
 | `0x0094` | `NtQueryDebugFilterState` | 2 | ✅ |
 | `0x0095` | `NtQueryDefaultLocale` | 2 | ✅ |
-| `0x0096` | `NtQueryDefaultUILanguage` | 1 |  |
+| `0x0096` | `NtQueryDefaultUILanguage` | 1 | ✅ |
 | `0x0097` | `NtQueryDirectoryFile` | 11 | ✅ |
 | `0x0098` | `NtQueryDirectoryObject` | 7 |  |
 | `0x0099` | `NtQueryDriverEntryOrder` | 2 |  |
@@ -179,7 +179,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x00a1` | `NtQueryInformationProcess` | 5 | ✅ |
 | `0x00a2` | `NtQueryInformationThread` | 5 | ✅ |
 | `0x00a3` | `NtQueryInformationToken` | 5 | ✅ |
-| `0x00a4` | `NtQueryInstallUILanguage` | 1 |  |
+| `0x00a4` | `NtQueryInstallUILanguage` | 1 | ✅ |
 | `0x00a5` | `NtQueryIntervalProfile` | 2 |  |
 | `0x00a6` | `NtQueryIoCompletion` | 5 | ✅ |
 | `0x00a7` | `NtQueryKey` | 5 | ✅ |
@@ -687,7 +687,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1170` | `NtUserEndMenu` | 0 | ✅ |
 | `0x1171` | `NtUserEndPaint` | 2 | ✅ |
 | `0x1172` | `NtUserEnumDisplayDevices` | 4 | ✅ |
-| `0x1173` | `NtUserEnumDisplayMonitors` | 5 |  |
+| `0x1173` | `NtUserEnumDisplayMonitors` | 5 | ✅ |
 | `0x1174` | `NtUserEnumDisplaySettings` | 4 | ✅ |
 | `0x1175` | `NtUserEvent` | 1 |  |
 | `0x1176` | `NtUserExcludeUpdateRgn` | 2 |  |
@@ -713,7 +713,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x118a` | `NtUserGetComboBoxInfo` | 2 | ✅ |
 | `0x118b` | `NtUserGetControlBrush` | 3 | ✅ |
 | `0x118c` | `NtUserGetControlColor` | 4 | ✅ |
-| `0x118d` | `NtUserGetCPD` | 3 |  |
+| `0x118d` | `NtUserGetCPD` | 3 | ✅ |
 | `0x118e` | `NtUserGetCursorFrameInfo` | 4 |  |
 | `0x118f` | `NtUserGetCursorInfo` | 1 |  |
 | `0x1190` | `NtUserGetDC` | 1 | ✅ |

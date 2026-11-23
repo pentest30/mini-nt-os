@@ -1,7 +1,8 @@
-//! ZIP archives (PKWARE APPNOTE), to unpack what `fetch-userland` downloads;
-//! std only. The central directory lists the entries; an entry is stored or
-//! deflated, and its size and CRC-32 check what comes out. No ZIP64, no
-//! encryption, no archive split over several files.
+//! ZIP archives (PKWARE APPNOTE), to unpack what `fetch-userland` downloads,
+//! and to make the stored archives of the M7 routes ([`stored`]); std only.
+//! The central directory lists the entries; an entry is stored or deflated,
+//! and its size and CRC-32 check what comes out. No ZIP64, no encryption, no
+//! archive split over several files.
 
 use std::io::Write;
 
@@ -24,6 +25,56 @@ const CENTRAL_DIRECTORY_HEADER: u32 = 0x0201_4b50;
 const LOCAL_HEADER: u32 = 0x0403_4b50;
 const STORED: u16 = 0;
 const DEFLATED: u16 = 8;
+
+/// A ZIP archive of `files` (name, bytes), each stored (not compressed),
+/// dated 2004-08-04 12:00 like the disks' files; the names in ASCII.
+pub fn stored(files: &[(&str, &[u8])]) -> Vec<u8> {
+    // MS-DOS time and date: 12:00:00, 2004-08-04.
+    const TIME: u16 = 12 << 11;
+    const DATE: u16 = ((2004 - 1980) << 9) | (8 << 5) | 4;
+    let mut archive = Vec::new();
+    let mut central = Vec::new();
+    for (name, data) in files {
+        let mut crc = Crc32::new();
+        crc.update(data);
+        let (crc, size, at) = (crc.value(), data.len() as u32, archive.len() as u32);
+        let common = |out: &mut Vec<u8>| {
+            out.extend_from_slice(&20u16.to_le_bytes()); // version needed: 2.0
+            out.extend_from_slice(&0u16.to_le_bytes()); // flags
+            out.extend_from_slice(&STORED.to_le_bytes());
+            out.extend_from_slice(&TIME.to_le_bytes());
+            out.extend_from_slice(&DATE.to_le_bytes());
+            out.extend_from_slice(&crc.to_le_bytes());
+            out.extend_from_slice(&size.to_le_bytes()); // compressed
+            out.extend_from_slice(&size.to_le_bytes());
+            out.extend_from_slice(&(name.len() as u16).to_le_bytes());
+            out.extend_from_slice(&0u16.to_le_bytes()); // extra field
+        };
+        archive.extend_from_slice(&LOCAL_HEADER.to_le_bytes());
+        common(&mut archive);
+        archive.extend_from_slice(name.as_bytes());
+        archive.extend_from_slice(data);
+        central.extend_from_slice(&CENTRAL_DIRECTORY_HEADER.to_le_bytes());
+        central.extend_from_slice(&20u16.to_le_bytes()); // made by: MS-DOS, 2.0
+        common(&mut central);
+        central.extend_from_slice(&0u16.to_le_bytes()); // comment
+        central.extend_from_slice(&0u16.to_le_bytes()); // disk
+        central.extend_from_slice(&0u16.to_le_bytes()); // internal attributes
+        central.extend_from_slice(&0x20u32.to_le_bytes()); // external: archive
+        central.extend_from_slice(&at.to_le_bytes());
+        central.extend_from_slice(name.as_bytes());
+    }
+    let (start, length, count) = (archive.len() as u32, central.len() as u32, files.len() as u16);
+    archive.extend_from_slice(&central);
+    archive.extend_from_slice(&END_OF_CENTRAL_DIRECTORY.to_le_bytes());
+    archive.extend_from_slice(&[0, 0, 0, 0]); // this disk, the directory's disk
+    archive.extend_from_slice(&count.to_le_bytes());
+    archive.extend_from_slice(&count.to_le_bytes());
+    archive.extend_from_slice(&length.to_le_bytes());
+    archive.extend_from_slice(&start.to_le_bytes());
+    archive.extend_from_slice(&0u16.to_le_bytes()); // comment
+    archive
+}
 
 fn u16_at(data: &[u8], at: usize) -> Result<u16, String> {
     data.get(at..at + 2).map(|b| u16::from_le_bytes([b[0], b[1]])).ok_or_else(|| "zip: truncated".to_string())
@@ -143,6 +194,24 @@ mod tests {
             extract(&archive, &entries[1], &mut bytes).expect("b.bin");
             assert_eq!(bytes, (0..64).collect::<Vec<u8>>());
         }
+    }
+
+    #[test]
+    fn a_stored_archive_reads_back() {
+        let archive = stored(&[("ROUTE.TXT", b"PeaZip route\r\n"), ("b.bin", &[0, 1, 2, 255])]);
+        let entries = entries(&archive).expect("a valid archive");
+        let names: Vec<_> = entries.iter().map(|e| (e.name.as_str(), e.size, e.method)).collect();
+        assert_eq!(names, [("ROUTE.TXT", 14, STORED), ("b.bin", 4, STORED)]);
+        let mut text = Vec::new();
+        extract(&archive, &entries[0], &mut text).expect("ROUTE.TXT, its CRC-32 checked");
+        assert_eq!(text, b"PeaZip route\r\n");
+        let mut bytes = Vec::new();
+        extract(&archive, &entries[1], &mut bytes).expect("b.bin");
+        assert_eq!(bytes, [0, 1, 2, 255]);
+        // The local header of the first entry: its signature, version 2.0,
+        // stored, then its date.
+        assert_eq!(archive[..10], [0x50, 0x4B, 0x03, 0x04, 20, 0, 0, 0, 0, 0]);
+        assert_eq!(u16_at(&archive, 12), Ok((24 << 9) | (8 << 5) | 4), "2004-08-04");
     }
 
     #[test]

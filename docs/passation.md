@@ -9,6 +9,183 @@
   fichier faites en même temps prennent le même segment (`36611e1`, `io::section_cache::Cache::insert`). Sans suite,
   comme ReactOS : SetParent sous la fenêtre d'un autre bureau ; une lecture courte du fichier complétée de zéros.
   **Pas testé** : la course de deux fautes sur une page (il faudrait une lecture qui bloque au bon moment).
+- **Le parcours de PeaZip** (`claude/peazip-route`, sur la PR 171, M7,
+  [`compat/applications.md`](compat/applications.md#le-parcours-de-peazip-le-2026-11-23) ; demandé le 2026-11-23).
+  L'extraction : `peazip.exe -ext2folder C:\APPS\ROUTE.ZIP` (`zip::stored` écrit l'archive), l'étape `file CHEMIN`
+  attend `C:\APPS\ROUTE\ROUTE.TXT` (PeaZip finit avant son 7-Zip), ses deux lignes imprimées. `show` imprime aussi les
+  contrôles ; un fichier attendu qui manque fait lister `C:\APPS`. Tests hôte `peazip_has_an_archive_to_extract`,
+  `a_stored_archive_reads_back`. Vérifié : lint, tests hôte, `app-peazip` (AMD, 177 s, l'extraction en 14 s ; une
+  archive dont un octet est changé le fait échouer). **Pas encore** : l'ouverture dans le gestionnaire de PeaZip, qui
+  s'arrête sur la boîte de la LCL « Failed to get raw image description from bitmap » (NtGdiCreateBitmap de 24 bits,
+  NtGdiCreateDIBSection de 24 bits refusés : `gdi::surface`) ; la « fenêtre du programme » du plancher était cette
+  boîte. **Suite** : les surfaces de 24 bits, près du travail GDI d'une autre session (à convenir).
+- **Le parcours de KeePass** (`claude/keepass-route`, sur la PR 170, M7,
+  [`compat/applications.md`](compat/applications.md#le-parcours-de-keepass-le-2026-11-22) ; demandé le 2026-11-22).
+  Au clavier de QEMU, par étapes : une base (le mot de passe deux fois), une entrée, `ROUTE.KDB` enregistré, fermé ;
+  rouvert avec le mot de passe, le nom d'utilisateur copié (Ctrl+B) lu dans le presse-papiers. Le banc a
+  `show SECONDES` (pour explorer les fenêtres d'un parcours), `start ARGUMENTS`, `new-window TEXTE`, 24 étapes (il en
+  laissait au-delà de 16 sans le dire). Le correctif du noyau qu'il a demandé est la PR 170 (WH_CBT). Tests hôte
+  `keepass_has_a_route_through_its_windows`, `the_steps_of_each_route_go_to_the_probe`. Vérifié : lint, tests hôte,
+  `app-keepass` (AMD, 146 s, le parcours en 25 s ; un mauvais mot de passe à la réouverture le fait échouer).
+  **Suite** : les parcours d'AbiWord et de PeaZip par la même voie ; `show` y trouve les fenêtres.
+- **WH_CBT à la création d'une fenêtre** (`claude/cbt-hook`, sur la PR 169, M7, USER,
+  [`compat/applications.md`](compat/applications.md#wh_cbt--keepass-nexécutait-pas-son-oninitdialog-le-2026-11-22) ;
+  trouvé par le parcours de KeePass, le 2026-11-22). HCBT_CREATEWND appelé dans `win32k::window::create_window`
+  (`win32k::hook::create_window`, `HookParam`, `abi::user::CbtCreateWndExtra32` ; NtUserCallNextHookEx lit et réécrit le
+  CBT_CREATEWND) : MFC y attache son `CWnd` ; sans lui, KeePass ne faisait jamais son OnInitDialog (ni accélérateurs, ni
+  fermeture) ; WinMerge, MFC aussi, finissait sur 0xC0000005 à son lancement : il montre sa fenêtre et se ferme avec
+  0. Scénario `cbt-hook` (`tests/native/cbt1.c`). Vérifié : lint, 1 263 tests hôte, `cbt-hook` (AMD, Intel ; il échoue
+  si le crochet est appelé pour une autre fenêtre et son résultat ignoré), `hooks` (AMD, Intel), `app-keepass` (titre,
+  fermeture avec 2), `app-winmerge` (fenêtre, fermeture avec 0) ; planchers relevés. **Pas encore** : les autres codes
+  de HCBT, la fenêtre d'avant que rend le crochet ; les autres scénarios `app-*` non relancés.
+- **La langue de l'interface** (`claude/ui-language`, sur la PR 167, M7, Ex,
+  [`compat/applications.md`](compat/applications.md#la-langue-de-linterface--notepad-en-néerlandais-le-2026-11-22) ;
+  trouvé par le parcours de Notepad++, le 2026-11-22). NtQueryInstallUILanguage et NtQueryDefaultUILanguage
+  (`sys::locale`, `ex::locale::install_ui_language`, `parse_ui_language`) : `InstallLanguage` de `Nls\Language`,
+  puis `MultiUILanguageId` de `HKCU\Control Panel\Desktop`. Sans eux, GetUserDefaultUILanguage de `kernel32` rendait
+  sa pile, et Notepad++ s'installait en néerlandais ou en anglais selon le run. Scénario `ui-language`
+  (`tests/native/uilang1.c`). Vérifié : lint, 1 261 tests hôte, `ui-language` (AMD, Intel ; sans les handlers, il
+  échoue). Pas encore relancé : les scénarios `app-*` des autres installeurs NSIS.
+- **Le parcours de Notepad++** (`claude/notepadpp-route`, sur la PR 168, M7,
+  [`compat/applications.md`](compat/applications.md#le-parcours-de-notepad-le-2026-11-22) ; demandé le 2026-11-22).
+  Le banc a des parcours par étapes (`steps` d'`apps::Route`, `route-step=`, `run_window_route` d'`appbench.c` :
+  `start`, `close`, `window TEXTE`, `no-window TEXTE`, `clipboard`, chaque attente imprime son étiquette, à laquelle
+  les `keys` du scénario s'accrochent ; le fichier fait est imprimé ligne à ligne s'il est un texte court).
+  Notepad++ (`-nosession` : sinon la session remettait, après le Ctrl+A, la sélection du mot que Ctrl+H avait
+  prise) ouvre `ROUTE.TXT`, une ligne tapée, « fox » remplacé par « cat » (Ctrl+H, Alt+A), Ctrl+S ; rouvert, son
+  texte copié dans le presse-papiers, que le banc lit. Le correctif du noyau qu'il a demandé est la PR 168 (la langue
+  de l'interface : Notepad++ s'installait en néerlandais) ; le parcours en 23 s ; le parcours de la liste est fait.
+  Test hôte `notepadpp_has_a_route_through_its_windows`. Vérifié : lint, tests hôte, `app-notepadpp` (AMD, 246 s ;
+  deux runs avec `-nosession`, dont la mutation sans Alt+A, qui échoue sur « fox »). Pas relancé : `app-7zip`,
+  `app-gimp` (leur ligne du fichier fait est inchangée ; un texte court en a de plus). **Dette** : le
+  texte d'une fenêtre d'un autre processus ne se lit pas par WM_GETTEXT (`win32k::sent::unmarshalled`). **Suite** :
+  les parcours de KeePass, AbiWord, PeaZip par la même voie.
+- **Le parcours de 7-Zip** (`claude/7zip-route`, sur la PR 165, M7,
+  [`compat/applications.md`](compat/applications.md#le-parcours-de-7-zip-le-2026-11-22) ; demandé le 2026-11-22).
+  Par sa ligne de commande : `cmd.exe /c C:\APPS\ROUTE.CMD`, un fichier de commandes que `xtask` écrit avec le texte
+  à archiver (`apps::route_text`) : `7z a`, `7z t`, `7z x`, puis `fc /b` ; chaque étape qui échoue a son code (`exit 1` à `exit 4` : le `cmd` de
+  ReactOS 0.4.16 ne transmet pas `exit /b N`, un fichier de commandes y rend le code de sa dernière commande).
+  Le banc décrit le fichier que fait un parcours, quel qu'il soit (`route-output=`, `apps::Route::output` : taille,
+  PNG ou non, premiers octets). Aucun correctif du noyau : code 0 en 2 à 12 s, « FC: no differences encountered »,
+  `ROUTE.7Z` de 2 202 octets à la signature de 7z ; le parcours de la liste est fait. Test hôte
+  `seven_zip_has_a_route_by_its_command_line`. Vérifié : lint, tests hôte, `app-7zip` (AMD, 73 s) ; par mutation
+  (`fc` contre un autre fichier : code 4, le scénario échoue). Pas relancé : `app-gimp` (sa ligne de sortie garde
+  « ROUTE.PNG, » et « a PNG 1 », que son plancher attend), Intel (les scénarios `app-*` ne tournent que sur AMD). **Suite** : les parcours de Notepad++, KeePass,
+  AbiWord, PeaZip, par la même voie quand ils ont une ligne de commande, sinon par `keys` et la souris de QEMU.
+- **Le parcours du GIMP** (`claude/gimp-route`, sur la PR 164, M7,
+  [`compat/applications.md`](compat/applications.md#le-parcours-du-gimp-le-2026-11-22) ; demandé le 2026-11-22).
+  Le banc a une commande de parcours par application (`route` de `xtask/src/apps.rs` : commande, délai, fichiers mis
+  dans `C:\APPS` ; `route=`, `route-seconds=` de `PROBE.TXT` ; `run_route` d'`appbench.c` : sortie et erreurs dans
+  `C:\APPS\ROUTE.LOG`, imprimées avec le code de fin et ce qu'est `ROUTE.PNG`). Le GIMP, en Script-Fu par
+  `gimp-console` : ouvre `ROUTE.BMP` (noir et blanc, `apps::half_black_bmp`), le floute, exporte `ROUTE.PNG`, le
+  rouvre : le pixel de la frontière est gris (142) ; code 0 en 144 s ; le parcours de la liste est fait. L'attente
+  du programme ne dépend plus de l'heure : jusqu'à une autre fenêtre que la première (puis 10 s), au plus
+  `program_seconds` (900 s pour le GIMP ; scénario de 2 400 s au plus). Test hôte
+  `gimp_has_a_route_with_its_image_and_script`. Vérifié : lint, 1 256 tests hôte, `app-gimp` (1 466 s : la fenêtre de l'image
+  après 514 s, le parcours en 94 s), `app-keepass` (le délai de 5 s, inchangé). **Suite** : les parcours de 7-Zip, Notepad++,
+  KeePass, AbiWord, PeaZip par la même voie quand ils ont un mode en ligne de commande, sinon par `keys` et la souris
+  de QEMU.
+- **Les revues des bots des PR 161 à 164** (demandé le 2026-11-22 ;
+  [`revues/mergestorm-vortex.md`](revues/mergestorm-vortex.md), une section par PR, chacune sur la branche de sa
+  PR, remontées par merge : 161 → 162 → 163 → 164). Onze remarques. Corrigé : le cache des procédures d'appel
+  compare le processus et le bureau, SetWindowLong rend l'ancienne procédure dans le jeu de l'appelant (`48460d8`,
+  PR 161 ; étapes 5 et 7 de `ansictl1.c`) ; la phrase de l'alias 8.3 dans `compat/applications.md` (PR 162) ;
+  ProcessBasePriority décale chaque thread comme KeSetPriorityAndQuantumProcess, saturés compris (`e484a94`, PR 164 ;
+  étape 4 de `prio1.c`). Sans suite, comme ReactOS : l'origine du DC d'EnumDisplayMonitors (la borne de `prgnVis`) ;
+  une classe enregistrée avec une procédure d'appel de l'autre jeu (ses fenêtres prennent le jeu de la classe ; ce
+  que fait XP reste à confirmer). Vérifié : lint, tests hôte, `ansi-controls` (AMD, Intel), `scroll-control`,
+  `notepad`, `thread-priority` (AMD, Intel) ; chaque correctif par mutation. **Reste à évaluer** : les remarques des
+  bots des PR 158 et 159 (fusionnées), et celles de Vortex sur la PR 160 à `f623515` et `dd65dcd` (sa section ne couvre que
+  `9997c91` ; la branche est à une autre session).
+- **SetThreadPriority : le GIMP démarre** (`claude/thread-base-priority`, sur la PR 163, M7,
+  [`compat/applications.md`](compat/applications.md#setthreadpriority-le-gimp-interroge-ses-greffons-le-2026-11-22) ;
+  demandé le 2026-11-22). Laissé plus de 16 s, le GIMP montrait la boîte fatale de GLib « error Incorrect function.
+  during SetThreadPriority » : NtSetInformationThread(ThreadBasePriority, classe 3) manquait. Fait comme ReactOS
+  (`ps/query.c`, KeSetBasePriorityThread, KeQueryBasePriorityThread) : `sys::process::nt_set_information_thread`,
+  `ps::ethread::base_priority_of` (la classe du processus gardée), `EThread::set_base_increment`, `base_increment`
+  (la saturation ±16 de TIME_CRITICAL et IDLE rendue par ThreadBasicInformation). Scénario `thread-priority`
+  (`tests/native/prio1.c`, AMD et Intel) ; deux mutations le font échouer ; test hôte
+  `a_thread_base_priority_stays_in_its_process_class`. Le banc laisse à un programme le temps de démarrer
+  (`program_seconds` de `xtask/src/apps.rs`, `settle=` de `PROBE.TXT`, 600 s pour le GIMP qui interroge ses
+  150 greffons, un processus chacun, à son premier démarrage) : le GIMP ouvre sa boîte à outils et la fenêtre de
+  l'image vers 500 s, puis se ferme avec 0 ; plancher relevé (scénario de 1 800 s au plus). Vérifié : lint,
+  1 255 tests hôte, `thread-priority` (AMD, Intel), `app-gimp`, `app-keepass`. **Dettes** : ThreadPriority
+  (classe 2, la priorité absolue) n'est pas faite. ProcessBasePriority garde maintenant l'incrément de chaque
+  thread et sa saturation (`e484a94`, revue de la PR 164). **Suite** : les services
+  qui manquent au démarrage du GIMP, puis son parcours.
+- **EnumDisplayMonitors : le GIMP s'ouvre** (`claude/enum-display-monitors`, sur la PR 162, M7,
+  [`compat/applications.md`](compat/applications.md#enumdisplaymonitors-le-gimp-souvre-le-2026-11-22) ; demandé le
+  2026-11-22). `gimp-2.6.exe` lisait `0xC` dans `libgdk` après NtUserEnumDisplayMonitors, sans handler (0 : aucun
+  moniteur). Fait comme `monitor.c` de ReactOS (`sys::monitor::nt_user_enum_display_monitors`,
+  `win32k::monitor::search_area`, `intersecting`, `enumerate` ; la borne de la région visible d'un DC lue dans son
+  état, sans rien y changer). Scénario `enum-monitors` (`tests/native/enummon1.c`, AMD et Intel) ; deux mutations le
+  font échouer ; test hôte `monitors_are_enumerated_where_the_area_crosses_them`. Sans la PR 162, le GIMP finissait
+  sur `STATUS_DLL_NOT_FOUND` (`libgimpbase-2.0-0.dll` au nom long coupé par un trou) : la branche part donc d'elle. Sur
+  elle, le GIMP s'installe et ouvre « GIMP Startup » ; il ne se ferme pas sur WM_CLOSE en 15 s ; plancher relevé.
+  Vérifié : lint, 1 253 tests hôte, `enum-monitors` (AMD, Intel), `app-gimp`. **Suite** : ce qui manque à son
+  démarrage (NtUserGetThreadDesktop, NtUserGetObjectInformation, NtUserFindWindowEx, NtUserGetDoubleClickTime,
+  NtUserMapVirtualKeyEx, NtGdiModifyWorldTransform, la DIB section de 1 bit ; SaveDC et RestoreDC sont à une autre
+  session), puis son parcours (ouvrir une image, un filtre, l'export PNG).
+- **Un nom long dans un trou d'un répertoire FAT : PeaZip** (`claude/fat-long-dir-name`, sur la PR 161, M7,
+  [`compat/applications.md`](compat/applications.md#un-nom-long-dans-un-trou-le-2026-11-21) ; demandé le
+  2026-11-21, la suite de la PR 161). PeaZip ne pouvait créer `res\themes\nographic-embedded\fm-theme.bmp` (« The
+  system cannot find the path specified »). Les emplacements du répertoire `themes` sur le disque du run : les deux
+  entrées de nom long de `nographic-embedded` dans les emplacements 2 et 3, son entrée 8.3 `NOGRAP~1` dans le 10 —
+  un trou laissé par une entrée effacée : Inno déplace chaque fichier par MoveFile, que `kernel32` fait par une copie
+  puis un effacement (FileRenameInformation manque). `io::fat::add_named_entry` mettait chaque entrée dans le premier
+  emplacement libre, une à une ; le nom long, séparé de son entrée 8.3, n'était plus reconnu. Comme
+  `vfatFindDirSpace` de `vfatfs` (FATAddEntry) : les entrées d'un nom prennent une suite d'emplacements libres
+  consécutifs (`FatVolume::add_entries`, d'un cluster au suivant au besoin), le répertoire grandit sinon, avant que
+  rien ne soit écrit. Test hôte `a_long_name_takes_a_run_of_free_slots_past_a_short_hole` (qui échoue sans le
+  correctif : l'entrée 8.3 à l'emplacement 7, comme sur le disque de PeaZip) ;
+  `a_long_name_that_cannot_be_written_leaves_no_entry` adapté (rien n'est plus écrit). PeaZip s'installe (code 0
+  en 91 s) et `peazip.exe` ouvre sa fenêtre et se ferme avec 0 ; plancher relevé. Vérifié : lint, 1 253 tests hôte ; `app-peazip`, `app-keepass`, `logon`,
+  `persistence`, `power-cut`, `installer-finish` et `notepad-save` (ces quatre derniers sur AMD et Intel) passent ;
+  `fsck.vfat` manque sur l'hôte Windows. **Suite** :
+  le parcours de PeaZip (ouvrir une archive, l'extraire) ; à son lancement, NtUserSetClassLong,
+  NtUserChildWindowFromPointEx et les DIB sections de 24 bits manquent ; FileRenameInformation (chaque MoveFile des
+  Inno est une copie et un effacement, ce qui fait ces trous).
+- **CALLPROCDATA : Inno Setup 5.4 installe** (`claude/callprocdata`, sur la PR 158, M7,
+  [`compat/m6-fenetres.md`](compat/m6-fenetres.md) étape 47,
+  [`compat/applications.md`](compat/applications.md#callprocdata-inno-setup-54-installe-le-2026-11-21) ; demandé le
+  2026-11-21, premier point de la liste : PeaZip et GIMP). L'hypothèse de la passation (une page du tas que Mino ne
+  projette pas) était fausse. Mesuré (trace temporaire des services et des exceptions du `setup.tmp`, jamais
+  commitée ; le `setup.tmp` récupéré d'une image de disque et désassemblé) : la faute est dans `InsertFree` du
+  gestionnaire de mémoire de Delphi, et la liste libre du tas contient du texte UTF-16. Le TEdit de Delphi prend la
+  procédure d'Edit par GetClassInfoA et l'appelle par CallWindowProcA ; le manifeste de `setup.tmp` fait d'« Edit »
+  celui de `comctl32` 6, Unicode et sans FNID, et win32k rendait sa procédure à l'appelant ANSI : le WM_GETTEXT du
+  contrôle écrivait deux octets par caractère dans un tampon ANSI. Fait comme ReactOS : les procédures d'appel
+  (`win32k::callproc`, `abi::user::CallProcData32`, objets `TYPE_CALLPROC` dans le tas du bureau, NtUserGetCPD),
+  rendues par `Class::procedure` (IntGetClassWndProc) et `window::seen_by_client` (IntGetWindowProc) pour une
+  procédure de l'autre jeu de caractères, reconnues par SetWindowLong(GWLP_WNDPROC) et à la création d'une fenêtre ;
+  et deux écarts trouvés en route par le banc : la classe d'un contrôle de `user32` se voit par la procédure du
+  client du jeu demandé (GetClassInfoA d'« Edit » rendait EditWndProcW), et un contrôle créé en ANSI est une
+  fenêtre ANSI (`window::creation_procedure`, IntCreateWindow : un Edit de CreateWindowExA ne gardait que la
+  première lettre de son texte). Scénario `ansi-controls` (`tests/native/ansictl1.c`, AMD et Intel) ; six
+  mutations le font échouer chacune. PeaZip : `setup.tmp` ne plante plus, il copie 78 fichiers dans
+  `C:\Program Files\PeaZip`, puis ne peut créer `res\themes\nographic-embedded\fm-theme.bmp` (« The system cannot
+  find the path specified ») et revient en arrière (code 5) ; plancher relevé. **GIMP s'installe** (code 0 en
+  558 s ; `gimp-2.6.exe` lit `0xC` dans `libgdk` juste après NtUserEnumDisplayMonitors, sans handler) ; plancher
+  relevé aux lignes de la fin de son journal (le banc n'imprime que les 64 derniers Kio d'un journal plus long :
+  le début, la version d'Inno, n'y est plus — à corriger dans `appbench.c`). KeePass se lit « KeePass » (« K »
+  avant) ; AbiWord ouvre « Untitled1 - AbiWord » et se ferme avec 0, déjà sur la base (pas cette branche).
+  Vérifié : lint,
+  1 252 tests hôte, la suite de démarrage sans `app-openoffice` (172 runs passés sur 177) ; échecs
+  `display-desktop` (AMD, Intel) : son marqueur `…\Desktop\*.*` est une ligne de listage que le filtre de débogage
+  de la PR 155 n'imprime plus (comme `logon` et `folder-view`, adaptés), et `keyboard` (AMD, Intel) : le
+  programme va au bout, mais sous le PID 8 quand le marqueur fige le 28 — les deux échouent de même sur la base
+  (`9014bc5`, la PR 158), à corriger à part ; et `app-gimp`, dont l'ancien plancher attendait le début du journal. **Suite** :
+  NtUserEnumDisplayMonitors (GIMP) ; ce répertoire à nom
+  long de 18 caractères est écrit sans son nom long (seule l'entrée 8.3 `NOGRAP~1` est sur le disque, alors que
+  `firecrystal.theme.7z`, 20 caractères, a le sien) — Io, le prochain blocage de PeaZip ; FileRenameInformation
+  (`kernel32` copie puis efface à chaque MoveFile : « Forcing copy, renaming not supported by FSD »). **Revue des
+  bots** (le 2026-11-22, [`revues/mergestorm-vortex.md`](revues/mergestorm-vortex.md#pr-161--les-procédures-de-lautre-jeu-de-caractères-callprocdata)) :
+  `48460d8` ; une procédure d'appel déjà faite n'est rendue qu'à son processus, sur son bureau (`callproc::get` :
+  GetClassLong d'une fenêtre d'un autre processus y mettait à la classe un handle que `user32` refuse ensuite à son
+  propre processus ; un thread d'un autre bureau recevait un handle de tas qu'il ne lit pas), et SetWindowLong
+  d'une procédure d'appel rend l'ancienne procédure dans le jeu de l'appelant (IntSetWindowProc) ; étapes 5 et 7 de
+  `ansictl1.c`, vérifiées par mutation. Reste, comme ReactOS : une classe enregistrée avec une procédure d'appel de
+  l'autre jeu fait des fenêtres du jeu de la classe.
 - **Les sections de fichiers paginées à la demande** (`claude/demand-paged-sections`, sur la PR 158, M7 ;
   [ADR-024](03-decisions.md#adr-024--sections-de-fichiers--les-pages-dune-section-de-données-lues-à-la-faute-partagées-par-le-segment-du-fichier),
   proposée ; [`compat/m6-logon.md`](compat/m6-logon.md) ; demandé le 2026-11-21 après la mesure de l'entrée

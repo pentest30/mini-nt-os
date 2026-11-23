@@ -10,9 +10,10 @@ use alloc::vec::Vec;
 use core::mem::size_of;
 
 use abi::ntstatus::NtStatus;
-use abi::user::{wh, Msg32};
+use abi::user::{hcbt, wh, CbtCreateWnd32, CbtCreateWndExtra32, CreateStructW32, Msg32};
 use abi::winerror::dos_error;
 use win32k::gui::ThreadInfo;
+use win32k::hook::HookParam;
 use win32k::hook::Request;
 
 /// 0 avec `error` comme dernière erreur.
@@ -45,6 +46,50 @@ fn read_message(address: u32) -> Result<Msg32, NtStatus> {
 /// Écrit `message` en `address`.
 fn write_message(address: u32, message: &Msg32) -> Result<(), NtStatus> {
     ke::usermem::copy_to_user(u64::from(address), message.as_bytes())
+}
+
+/// Le CBT_CREATEWNDW en `address` et le CREATESTRUCTW qu'il désigne.
+fn read_cbt_create(address: u32) -> Result<CbtCreateWndExtra32, NtStatus> {
+    let mut head = [0u8; size_of::<CbtCreateWnd32>()];
+    ke::usermem::copy_from_user(&mut head, u64::from(address))?;
+    let word = |bytes: &[u8], i: usize| {
+        u32::from_le_bytes([bytes[4 * i], bytes[4 * i + 1], bytes[4 * i + 2], bytes[4 * i + 3]])
+    };
+    let mut bytes = [0u8; size_of::<CreateStructW32>()];
+    ke::usermem::copy_from_user(&mut bytes, u64::from(word(&head, 0)))?;
+    Ok(CbtCreateWndExtra32 {
+        create_struct: CreateStructW32 {
+            create_params: word(&bytes, 0),
+            instance: word(&bytes, 1),
+            menu: word(&bytes, 2),
+            parent: word(&bytes, 3),
+            cy: word(&bytes, 4) as i32,
+            cx: word(&bytes, 5) as i32,
+            y: word(&bytes, 6) as i32,
+            x: word(&bytes, 7) as i32,
+            style: word(&bytes, 8),
+            name: word(&bytes, 9),
+            class: word(&bytes, 10),
+            ex_style: word(&bytes, 11),
+        },
+        insert_after: word(&head, 1),
+    })
+}
+
+/// UserCallNextHookEx : ce qu'un crochet a pu changer revient au
+/// CBT_CREATEWNDW de l'appelant (`hwndInsertAfter`) et à son CREATESTRUCTW
+/// (`x`, `y`, `cx`, `cy`).
+fn write_cbt_create(address: u32, create: &CbtCreateWndExtra32) -> Result<(), NtStatus> {
+    let mut head = [0u8; size_of::<CbtCreateWnd32>()];
+    ke::usermem::copy_from_user(&mut head, u64::from(address))?;
+    let lpcs = u32::from_le_bytes([head[0], head[1], head[2], head[3]]);
+    ke::usermem::copy_to_user(u64::from(address) + 4, &create.insert_after.to_le_bytes())?;
+    let placed = create.create_struct;
+    let mut place = [0u8; 16];
+    for (i, value) in [placed.cy, placed.cx, placed.y, placed.x].into_iter().enumerate() {
+        place[4 * i..4 * i + 4].copy_from_slice(&value.to_le_bytes());
+    }
+    ke::usermem::copy_to_user(u64::from(lpcs) + 16, &place)
 }
 
 /// Pose le crochet `request` (`win32k::hook::set_windows_hook`).
@@ -98,6 +143,17 @@ pub(super) fn nt_user_call_next_hook_ex(arguments: &[u32]) -> NtStatus {
     let [code, w_param, l_param, _ansi] = arguments[..4] else { unreachable!("4 arguments") };
     let thread = current();
     let Some(id) = win32k::hook::current_id(&thread) else { return NtStatus(0) };
+    if id == wh::CBT {
+        // Only HCBT_CREATEWND is called: its CBT_CREATEWNDW, read and
+        // written back where the caller has it.
+        if code as i32 != hcbt::CREATEWND || l_param == 0 {
+            return NtStatus(0);
+        }
+        let Ok(mut create) = read_cbt_create(l_param) else { return NtStatus(0) };
+        let result = win32k::hook::call_next(&thread, code as i32, w_param, &mut HookParam::CreateWindow(&mut create));
+        let _ = write_cbt_create(l_param, &create);
+        return NtStatus(result);
+    }
     let mut message = Msg32::default();
     if l_param != 0 {
         match read_message(l_param) {
@@ -105,7 +161,7 @@ pub(super) fn nt_user_call_next_hook_ex(arguments: &[u32]) -> NtStatus {
             Err(_) => return NtStatus(0),
         }
     }
-    let result = win32k::hook::call_next(&thread, code as i32, w_param, &mut message);
+    let result = win32k::hook::call_next(&thread, code as i32, w_param, &mut HookParam::Message(&mut message));
     if id == wh::GETMESSAGE && l_param != 0 {
         let _ = write_message(l_param, &message);
     }

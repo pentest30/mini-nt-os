@@ -579,8 +579,29 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   : AbiWord passe `libAbiWord.dll`. La croissance de pile suit XP (`mm::fault::stack_extension` : la limite
   suit la page touchée, la garde ne descend que s'il reste une page, l'accès dans la réserve étend aussi) et
   `NtQueryDebugFilterState` aussi (`Kd_WIN2000_Mask = 1` : le niveau ERROR seul passe) — le `STATUS_BAD_STACK`
-  et la boucle de débogage des installeurs Inno 5.4 disparus ; leur blocage suivant est la récursion de leur
-  propre code sur une page de tas non projetée.
+  et la boucle de débogage des installeurs Inno 5.4 disparus. Les procédures d'appel (CALLPROCDATA,
+  `win32k::callproc`, NtUserGetCPD ; `Class::procedure`, `window::seen_by_client`) : une procédure demandée dans
+  l'autre jeu de caractères (GetClassInfoA d'une classe Unicode) se donne par un handle que CallWindowProc
+  convertit ; la classe d'un contrôle de `user32` se voit par la procédure du client du jeu demandé, un contrôle
+  créé en ANSI est une fenêtre ANSI (`window::creation_procedure`) ; scénario `ansi-controls`. Le TEdit de Delphi
+  appelait l'Edit Unicode de `comctl32` 6 avec des messages ANSI et son WM_GETTEXT écrasait le tas : Inno Setup 5.4
+  installe ; GIMP s'installe. Les entrées d'un nom long prennent une suite d'emplacements libres consécutifs du
+  répertoire (`io::fat::FatVolume::add_entries`, vfatFindDirSpace : un MoveFile fait par copie et effacement
+  laissait des trous où le nom long se séparait de son entrée 8.3) : PeaZip s'installe et s'ouvre.
+  NtUserEnumDisplayMonitors (`win32k::monitor::enumerate`) : le GIMP ouvre sa fenêtre « GIMP Startup » ;
+  NtSetInformationThread(ThreadBasePriority) (`ps::ethread::base_priority_of`, la saturation gardée ;
+  ProcessBasePriority décale chaque thread, `ps::ethread::rebased_priority`) : il interroge ses greffons et ouvre
+  sa boîte à outils (le banc attend une autre fenêtre que la première : `program_seconds` de `xtask/src/apps.rs`).
+  Le parcours d'une application (`route` de `xtask/src/apps.rs`, `run_route` d'`appbench.c`) : le GIMP ouvre une
+  image, la floute et l'exporte en PNG en Script-Fu (`gimp-console`) ; 7-Zip archive un fichier, l'extrait et
+  `fc /b` les compare, par `7z.exe` dans un fichier de commandes de `cmd.exe`. NtQueryInstallUILanguage et
+  NtQueryDefaultUILanguage (`sys::locale`, `ex::locale::install_ui_language`) : `kernel32` rendait sa pile pour la
+  langue de l'interface, et Notepad++ s'installait en néerlandais ; scénario `ui-language`. Notepad++ tape,
+  remplace, enregistre et rouvre, au clavier de QEMU (un parcours par étapes : `run_window_route`, `route-step=`).
+  WH_CBT pour HCBT_CREATEWND (`win32k::hook::create_window`, avant WM_GETMINMAXINFO) : MFC y attache son `CWnd`, et
+  KeePass fait enfin son OnInitDialog ; scénario `cbt-hook`. KeePass crée une base et une entrée, l'enregistre et la
+  rouvre avec son mot de passe (`show`, `start ARGUMENTS`, `new-window` dans les étapes d'un parcours). PeaZip
+  extrait une archive par `-ext2folder` (l'étape `file CHEMIN`) ; son gestionnaire attend les bitmaps de 24 bits.
   Suite : [`docs/passation.md`](docs/passation.md).
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.

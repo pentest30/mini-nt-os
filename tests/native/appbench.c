@@ -17,6 +17,17 @@ static char text[4096];
 static WCHAR install[1024], visible[1024], log_path[MAX_PATH], program[MAX_PATH];
 static char name[128];
 static DWORD timeout_seconds = 300;
+/* How long the program runs after its first window before WM_CLOSE. */
+static DWORD settle_seconds = 5;
+/* The route of the M7 list (route=), how long it may take, and the file
+   it makes (route-output=). */
+static WCHAR route[2048], route_output[MAX_PATH];
+static DWORD route_seconds = 600;
+/* A route through the program's windows (route-step= lines, in order):
+   `start`, `close`, or a wait on its windows that prints its label. */
+#define ROUTE_STEPS 24
+static WCHAR route_steps[ROUTE_STEPS][160];
+static unsigned int route_step_count, route_steps_dropped;
 
 static unsigned int length(const char *s) { unsigned int n = 0; while (s[n]) ++n; return n; }
 static unsigned int wlength(const WCHAR *s) { unsigned int n = 0; while (s[n]) ++n; return n; }
@@ -75,6 +86,29 @@ static void read_commands(void)
     narrow(value, name, sizeof(name));
     if (!value_of("log", log_path, MAX_PATH)) log_path[0] = 0;
     if (!value_of("visible", visible, 1024)) visible[0] = 0;
+    if (!value_of("route", route, 2048)) route[0] = 0;
+    if (!value_of("route-output", route_output, MAX_PATH)) route_output[0] = 0;
+    if (value_of("route-seconds", value, 128)) {
+        route_seconds = 0;
+        for (WCHAR *d = value; *d >= L'0' && *d <= L'9'; ++d) route_seconds = route_seconds * 10 + (*d - L'0');
+    }
+    for (const char *line = text; *line;) {
+        const char *end = line;
+        while (*end && *end != '\r' && *end != '\n') ++end;
+        if (prefix(line, "route-step=") && route_step_count == ROUTE_STEPS) {
+            ++route_steps_dropped;
+        } else if (prefix(line, "route-step=")) {
+            WCHAR *step = route_steps[route_step_count++];
+            int n = MultiByteToWideChar(CP_ACP, 0, line + 11, (int)(end - line - 11), step, 159);
+            step[n > 0 ? n : 0] = 0;
+        }
+        line = end;
+        while (*line == '\r' || *line == '\n') ++line;
+    }
+    if (value_of("settle", value, 128)) {
+        settle_seconds = 0;
+        for (WCHAR *d = value; *d >= L'0' && *d <= L'9'; ++d) settle_seconds = settle_seconds * 10 + (*d - L'0');
+    }
     if (value_of("timeout", value, 128)) {
         timeout_seconds = 0;
         for (WCHAR *d = value; *d >= L'0' && *d <= L'9'; ++d) timeout_seconds = timeout_seconds * 10 + (*d - L'0');
@@ -358,6 +392,19 @@ static BOOL CALLBACK find_titled(HWND window, LPARAM argument)
     }
     return TRUE;
 }
+/* A visible titled window of the program other than `first`. */
+struct find_other { DWORD pid; HWND first; HWND window; };
+static BOOL CALLBACK find_other_titled(HWND window, LPARAM argument)
+{
+    struct find_other *find = (struct find_other *)argument;
+    DWORD pid = 0;
+    GetWindowThreadProcessId(window, &pid);
+    if (pid == find->pid && window != find->first && IsWindowVisible(window) && GetWindowTextLengthW(window) > 0) {
+        find->window = window;
+        return FALSE;
+    }
+    return TRUE;
+}
 static BOOL CALLBACK close_window(HWND window, LPARAM pid)
 {
     DWORD owner = 0;
@@ -399,8 +446,31 @@ static void run_program(void)
         GetClassNameW(find.window, class_name, 64);
         DbgPrint(TAG "program window after %lu s: class %s, \"%s\"\n", (GetTickCount() - started) / 1000,
                  narrow(class_name, b, sizeof(b)), narrow(title, line, sizeof(line)));
-        Sleep(5000);
-        print_windows(TRUE);
+        /* A slow start (GIMP's splash, while it queries its plug-ins): up to
+           its time (settle=), until it shows a window other than its first
+           (then 10 s more), or ends by itself; its windows every minute. */
+        if (settle_seconds > 5) {
+            DWORD waited = 0;
+            struct find_other other = {process.dwProcessId, find.window, 0};
+            while (!other.window && waited < settle_seconds) {
+                if (WaitForSingleObject(process.hProcess, 5000) == WAIT_OBJECT_0) break;
+                waited += 5;
+                EnumWindows(find_other_titled, (LPARAM)&other);
+                if (!other.window && waited % 60 == 0) {
+                    DbgPrint(TAG "program running after %lu s:\n", (GetTickCount() - started) / 1000);
+                    print_windows(TRUE);
+                }
+            }
+            if (other.window) {
+                WCHAR title[160];
+                GetWindowTextW(other.window, title, 160);
+                DbgPrint(TAG "program shows another window after %lu s: \"%s\"\n", (GetTickCount() - started) / 1000,
+                         narrow(title, line, sizeof(line)));
+                if (WaitForSingleObject(process.hProcess, 10000) != WAIT_OBJECT_0) print_windows(TRUE);
+            }
+        } else if (WaitForSingleObject(process.hProcess, settle_seconds * 1000) != WAIT_OBJECT_0) {
+            print_windows(TRUE);
+        }
     }
     DWORD code = 0;
     if (WaitForSingleObject(process.hProcess, 0) == WAIT_OBJECT_0) {
@@ -423,6 +493,342 @@ static void run_program(void)
     }
     CloseHandle(process.hThread);
     CloseHandle(process.hProcess);
+}
+
+/* The lines of `p`, each as "  WHAT: line". */
+static void print_tagged(const char *p, const char *what)
+{
+    char line[300];
+    while (*p) {
+        unsigned int n = 0;
+        while (p[n] && p[n] != '\n' && n < sizeof(line) - 1) { line[n] = p[n] == '\r' ? ' ' : p[n]; ++n; }
+        line[n] = 0;
+        if (n) DbgPrint(TAG "  %s: %s\n", what, line);
+        p += n;
+        while (*p && *p != '\n') ++p;
+        if (*p) ++p;
+    }
+}
+
+/* What the file the route makes is (route-output=): its size, whether it
+   is a PNG, its first bytes; a short text, its lines. */
+static char output_bytes[4097];
+static void describe_output(void)
+{
+    if (!route_output[0]) return;
+    const WCHAR *name = route_output;
+    for (const WCHAR *c = route_output; *c; ++c)
+        if (*c == L'\\') name = c + 1;
+    char shown[64];
+    narrow(name, shown, sizeof(shown));
+    HANDLE made = CreateFileW(route_output, GENERIC_READ, FILE_SHARE_READ, 0, OPEN_EXISTING, 0, 0);
+    if (made == INVALID_HANDLE_VALUE) {
+        /* Where the route's files went: C:\APPS, two levels down. */
+        DbgPrint(TAG "route: no %s (error %lu); C:\\APPS has:\n", shown, GetLastError());
+        listed = 0;
+        list_dir(L"C:\\APPS", 1);
+        return;
+    }
+    DWORD read = 0, size = GetFileSize(made, 0);
+    ReadFile(made, output_bytes, sizeof(output_bytes) - 1, &read, 0);
+    CloseHandle(made);
+    output_bytes[read] = 0;
+    unsigned char signature[8] = {0};
+    for (unsigned int i = 0; i < 8 && i < read; ++i) signature[i] = (unsigned char)output_bytes[i];
+    static const unsigned char png[8] = {0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n'};
+    BOOL is_png = read >= 8, is_text = size == read;
+    for (unsigned int i = 0; i < 8; ++i) is_png &= signature[i] == png[i];
+    for (unsigned int i = 0; i < read; ++i) {
+        unsigned char c = (unsigned char)output_bytes[i];
+        is_text &= (c >= 0x20 && c < 0x7F) || c == '\t' || c == '\r' || c == '\n';
+    }
+    DbgPrint(TAG "route: %s, %lu bytes, a PNG %d, begins %02x %02x %02x %02x %02x %02x\n", shown, size, is_png,
+             signature[0], signature[1], signature[2], signature[3], signature[4], signature[5]);
+    if (is_text) print_tagged(output_bytes, "route file");
+}
+
+/* The route (the "Parcours" column of docs/compat/applications.md): its
+   command line, its output (stdout and stderr) in C:\APPS\ROUTE.LOG, its
+   exit code, then its output line by line and what the file it makes is. */
+static char route_text[16384];
+static void run_route(void)
+{
+    char line[300];
+    SECURITY_ATTRIBUTES inherit = {sizeof(inherit), 0, TRUE};
+    HANDLE log = CreateFileW(L"C:\\APPS\\ROUTE.LOG", GENERIC_WRITE, FILE_SHARE_READ, &inherit, CREATE_ALWAYS, 0, 0);
+    if (log == INVALID_HANDLE_VALUE) {
+        DbgPrint(TAG "route: no log (error %lu)\n", GetLastError());
+        return;
+    }
+    STARTUPINFOW startup = {0}; PROCESS_INFORMATION process = {0};
+    startup.cb = sizeof(startup); startup.lpDesktop = L"WinSta0\\Default";
+    startup.dwFlags = STARTF_USESTDHANDLES;
+    startup.hStdOutput = log; startup.hStdError = log;
+    DbgPrint(TAG "route: %s\n", narrow(route, line, sizeof(line)));
+    DWORD started = GetTickCount(), code = 0;
+    if (!CreateProcessW(0, route, 0, 0, TRUE, 0, 0, L"C:\\APPS", &startup, &process)) {
+        DbgPrint(TAG "route did not start (error %lu)\n", GetLastError());
+        CloseHandle(log);
+        return;
+    }
+    CloseHandle(log);
+    if (WaitForSingleObject(process.hProcess, route_seconds * 1000) == WAIT_OBJECT_0) {
+        GetExitCodeProcess(process.hProcess, &code);
+        DbgPrint(TAG "route ended: exit code %lx after %lu s\n", code, (GetTickCount() - started) / 1000);
+    } else {
+        DbgPrint(TAG "route still running after %lu s: the windows, then terminated\n", route_seconds);
+        print_windows(TRUE);
+        TerminateProcess(process.hProcess, 0xDEAD);
+        WaitForSingleObject(process.hProcess, 5000);
+    }
+    CloseHandle(process.hThread);
+    CloseHandle(process.hProcess);
+    HANDLE file = CreateFileW(L"C:\\APPS\\ROUTE.LOG", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, 0,
+                              OPEN_EXISTING, 0, 0);
+    DWORD count = 0;
+    if (file != INVALID_HANDLE_VALUE) {
+        ReadFile(file, route_text, sizeof(route_text) - 1, &count, 0);
+        CloseHandle(file);
+    }
+    route_text[count] = 0;
+    DbgPrint(TAG "route output, %lu bytes:\n", count);
+    print_tagged(route_text, "route");
+    describe_output();
+}
+
+/* `s` begins with `p`. */
+static BOOL prefix_w(const WCHAR *s, const WCHAR *p)
+{
+    while (*p)
+        if (*s++ != *p++) return FALSE;
+    return TRUE;
+}
+
+/* `part` is in `s`. */
+static BOOL contains(const WCHAR *s, const WCHAR *part)
+{
+    for (; *s; ++s) {
+        unsigned int i = 0;
+        while (part[i] && s[i] == part[i]) ++i;
+        if (!part[i]) return TRUE;
+    }
+    return !*part;
+}
+/* A visible top-level window of `pid` whose title holds `part`. */
+struct find_part { DWORD pid; const WCHAR *part; HWND window; HWND except; };
+static BOOL CALLBACK find_part_window(HWND window, LPARAM argument)
+{
+    struct find_part *find = (struct find_part *)argument;
+    WCHAR title[260];
+    DWORD pid = 0;
+    GetWindowThreadProcessId(window, &pid);
+    if (pid == find->pid && window != find->except && IsWindowVisible(window) && GetWindowTextW(window, title, 260) > 0 &&
+        contains(title, find->part)) {
+        find->window = window;
+        return FALSE;
+    }
+    return TRUE;
+}
+
+/* The controls of the visible windows of a process: class and text. */
+static BOOL CALLBACK print_control(HWND child, LPARAM count)
+{
+    WCHAR text[120], class_name[64]; char a[160], b[80];
+    if (++*(int *)count > 30) return FALSE;
+    text[0] = class_name[0] = 0;
+    GetWindowTextW(child, text, 120);
+    GetClassNameW(child, class_name, 64);
+    DbgPrint(TAG "   control %s%s: \"%s\"\n", narrow(class_name, b, sizeof(b)), IsWindowVisible(child) ? "" : " (hidden)",
+             narrow(text, a, sizeof(a)));
+    return TRUE;
+}
+static BOOL CALLBACK print_controls_of(HWND window, LPARAM pid)
+{
+    DWORD owner = 0;
+    GetWindowThreadProcessId(window, &owner);
+    if (owner == (DWORD)pid && IsWindowVisible(window)) {
+        WCHAR title[160]; char line[200];
+        int count = 0;
+        title[0] = 0;
+        GetWindowTextW(window, title, 160);
+        DbgPrint(TAG "route controls of \"%s\":\n", narrow(title, line, sizeof(line)));
+        EnumChildWindows(window, print_control, (LPARAM)&count);
+    }
+    return TRUE;
+}
+
+/* The text on the clipboard (CF_UNICODETEXT), line by line. */
+static char clipboard_text[4096];
+static void print_clipboard(void)
+{
+    BOOL opened = FALSE;
+    for (unsigned int tries = 0; tries < 20 && !(opened = OpenClipboard(0)); ++tries) Sleep(100);
+    if (!opened) {
+        DbgPrint(TAG "route clipboard: not opened (error %lu)\n", GetLastError());
+        return;
+    }
+    HANDLE data = GetClipboardData(CF_UNICODETEXT);
+    const WCHAR *text = data ? GlobalLock(data) : 0;
+    if (text) {
+        narrow(text, clipboard_text, sizeof(clipboard_text));
+        GlobalUnlock(data);
+        print_tagged(clipboard_text, "route clipboard");
+    } else {
+        DbgPrint(TAG "route clipboard: no text (error %lu)\n", GetLastError());
+    }
+    CloseClipboard();
+}
+
+/* A route through the program's windows (route-step=, in order), the keys
+   typed by the scenario (`keys`) when a step prints its label:
+   - `start`: starts the route's command line (route=), in C:\APPS;
+     `start ARGUMENTS`: with these after it;
+   - `window TEXT => LABEL`: waits for a visible window of the program
+     whose title holds TEXT;
+   - `no-window TEXT => LABEL`: waits until none has;
+   - `clipboard => LABEL`: waits for the clipboard to change, then prints
+     its text;
+   - `close`: WM_CLOSE to the program's windows, then its exit code;
+   - `new-window TEXT => LABEL`: the same, for another window than the
+     one the last wait found (a second dialog with the first one's title);
+   - `file PATH => LABEL`: waits for the file PATH to exist; the program
+     may have ended meanwhile (it gave the work to another process);
+   - `show SECONDS => LABEL`: waits that long, then prints the windows,
+     the controls of the program's windows and the clipboard: to find a
+     route's windows, not for a floor (a time is not an event).
+   Each wait prints "route step: LABEL"; all of them have route-seconds.
+   Then what the file it makes is (route-output=). */
+static void run_window_route(void)
+{
+    char line[300], label[160];
+    STARTUPINFOW startup = {0}; PROCESS_INFORMATION process = {0};
+    startup.cb = sizeof(startup); startup.lpDesktop = L"WinSta0\\Default";
+    DWORD started = GetTickCount();
+    if (route_steps_dropped) DbgPrint(TAG "route: %u steps beyond %u not taken\n", route_steps_dropped, ROUTE_STEPS);
+    /* The window the last wait found. */
+    HWND found = 0;
+    for (unsigned int i = 0; i < route_step_count; ++i) {
+        WCHAR *step = route_steps[i];
+        label[0] = 0;
+        for (WCHAR *c = step; *c; ++c)
+            if (c[0] == L' ' && c[1] == L'=' && c[2] == L'>' && c[3] == L' ') {
+                *c = 0;
+                narrow(c + 4, label, sizeof(label));
+                break;
+            }
+        if (prefix_w(step, L"start") && (step[5] == 0 || step[5] == L' ')) {
+            static WCHAR command[2400];
+            unsigned int n = 0;
+            for (const WCHAR *c = route; *c && n < 2300; ++c) command[n++] = *c;
+            for (const WCHAR *c = step + 5; *c && n < 2398; ++c) command[n++] = *c;
+            command[n] = 0;
+            DbgPrint(TAG "route: %s\n", narrow(command, line, sizeof(line)));
+            if (!CreateProcessW(0, command, 0, 0, FALSE, 0, 0, L"C:\\APPS", &startup, &process)) {
+                DbgPrint(TAG "route did not start (error %lu)\n", GetLastError());
+                return;
+            }
+            DbgPrint(TAG "route started: PID %lu\n", process.dwProcessId);
+            continue;
+        }
+        if (!process.hProcess) {
+            DbgPrint(TAG "route step %u without a program: %s\n", i, narrow(step, line, sizeof(line)));
+            return;
+        }
+        if (prefix_w(step, L"close") && step[5] == 0) {
+            DWORD code = 0;
+            EnumWindows(close_window, (LPARAM)process.dwProcessId);
+            if (WaitForSingleObject(process.hProcess, 15000) == WAIT_OBJECT_0) {
+                GetExitCodeProcess(process.hProcess, &code);
+                DbgPrint(TAG "route program closed: exit code %lx\n", code);
+            } else {
+                DbgPrint(TAG "route program still running 15 s after WM_CLOSE: the windows, then terminated\n");
+                print_windows(TRUE);
+                TerminateProcess(process.hProcess, 0xDEAD);
+                WaitForSingleObject(process.hProcess, 5000);
+            }
+            CloseHandle(process.hThread);
+            CloseHandle(process.hProcess);
+            process.hProcess = 0;
+            continue;
+        }
+        if (prefix_w(step, L"show ")) {
+            DWORD seconds = 0;
+            for (const WCHAR *d = step + 5; *d >= L'0' && *d <= L'9'; ++d) seconds = seconds * 10 + (*d - L'0');
+            WaitForSingleObject(process.hProcess, seconds * 1000);
+            DbgPrint(TAG "route windows after %lu s:\n", (GetTickCount() - started) / 1000);
+            print_windows(TRUE);
+            EnumWindows(print_controls_of, (LPARAM)process.dwProcessId);
+            /* Whether the program takes the keys: the foreground window, and
+               whether its window answers a sent message. */
+            WCHAR title[160];
+            HWND foreground = GetForegroundWindow();
+            title[0] = 0;
+            if (foreground) GetWindowTextW(foreground, title, 160);
+            DbgPrint(TAG "route foreground: %p \"%s\"\n", foreground, narrow(title, line, sizeof(line)));
+            struct find_part first = {process.dwProcessId, L"", 0, 0};
+            EnumWindows(find_part_window, (LPARAM)&first);
+            DWORD_PTR answer = 0;
+            BOOL answered = first.window && SendMessageTimeoutW(first.window, WM_NULL, 0, 0, SMTO_ABORTIFHUNG, 2000, &answer);
+            DbgPrint(TAG "route window %p answers WM_NULL: %d (error %lu)\n", first.window, answered, GetLastError());
+            DbgPrint(TAG "route clipboard sequence %lu\n", GetClipboardSequenceNumber());
+            print_clipboard();
+            DbgPrint(TAG "route step: %s, after %lu s\n", label, (GetTickCount() - started) / 1000);
+            continue;
+        }
+        BOOL clipboard = contains(step, L"clipboard") && step[9] == 0;
+        BOOL none = prefix_w(step, L"no-window ");
+        BOOL fresh = prefix_w(step, L"new-window ");
+        BOOL file = prefix_w(step, L"file ");
+        const WCHAR *part = step;
+        while (*part && *part != L' ') ++part;
+        if (*part) ++part;
+        DWORD sequence = GetClipboardSequenceNumber();
+        for (;;) {
+            BOOL done;
+            if (clipboard) {
+                done = GetClipboardSequenceNumber() != sequence;
+            } else if (file) {
+                done = GetFileAttributesW(part) != INVALID_FILE_ATTRIBUTES;
+            } else {
+                struct find_part find = {process.dwProcessId, part, 0, fresh ? found : 0};
+                EnumWindows(find_part_window, (LPARAM)&find);
+                done = none ? !find.window : find.window != 0;
+                if (done && !none) found = find.window;
+            }
+            if (done) break;
+            DWORD code = 0;
+            if (WaitForSingleObject(process.hProcess, 250) == WAIT_OBJECT_0 && file) {
+                Sleep(250);
+            } else if (WaitForSingleObject(process.hProcess, 0) == WAIT_OBJECT_0) {
+                GetExitCodeProcess(process.hProcess, &code);
+                DbgPrint(TAG "route program ended by itself at \"%s\": exit code %lx\n", label, code);
+                CloseHandle(process.hThread);
+                CloseHandle(process.hProcess);
+                return;
+            }
+            if (GetTickCount() - started >= route_seconds * 1000) {
+                DbgPrint(TAG "route still running after %lu s, at \"%s\": the windows, then terminated\n",
+                         route_seconds, label);
+                print_windows(TRUE);
+                TerminateProcess(process.hProcess, 0xDEAD);
+                WaitForSingleObject(process.hProcess, 5000);
+                CloseHandle(process.hThread);
+                CloseHandle(process.hProcess);
+                return;
+            }
+        }
+        DbgPrint(TAG "route step: %s, after %lu s\n", label, (GetTickCount() - started) / 1000);
+        if (clipboard) print_clipboard();
+    }
+    if (process.hProcess) {
+        DbgPrint(TAG "route ends with the program running: terminated\n");
+        TerminateProcess(process.hProcess, 0xDEAD);
+        WaitForSingleObject(process.hProcess, 5000);
+        CloseHandle(process.hThread);
+        CloseHandle(process.hProcess);
+    }
+    DbgPrint(TAG "route ended after %lu s\n", (GetTickCount() - started) / 1000);
+    describe_output();
 }
 
 DWORD WINAPI GuiStartup(void)
@@ -467,6 +873,8 @@ DWORD WINAPI GuiStartup(void)
     } else {
         DbgPrint(TAG "installed: %s\n", narrow(program, line, sizeof(line)));
         run_program();
+        if (route[0] && route_step_count) run_window_route();
+        else if (route[0]) run_route();
     }
     DbgPrint(TAG "%s: report done\n", name);
     ExitProcess(0);

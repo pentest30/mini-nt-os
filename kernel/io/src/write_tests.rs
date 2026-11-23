@@ -212,8 +212,10 @@ fn a_long_name_that_cannot_be_written_leaves_no_entry() {
     assert_eq!(volume.add_entry_long(root, &"n".repeat(256), 0x20, 3), Err(FatError::PathFormat));
     assert_eq!(volume.add_entry_long(root, &"n".repeat(900), 0x20, 3), Err(FatError::PathFormat));
     assert!(volume.dir_entries(root).unwrap().is_empty());
-    // The root keeps two free slots of its 16, and no cluster is left: the two
-    // parts of the name fit, its 8.3 entry would need the directory to grow.
+    // The root keeps two free slots of its 16, and no cluster is left: the
+    // three entries of the name (two parts, its 8.3 entry) need a run of three
+    // free slots, so the directory to grow — refused before anything is
+    // written.
     for i in 0..14 {
         volume.add_entry(root, &make_entry(&short_name(&std::format!("F{i}.DAT")).unwrap(), 0x20, 0, 0), 3).unwrap();
     }
@@ -222,7 +224,7 @@ fn a_long_name_that_cannot_be_written_leaves_no_entry() {
     assert_eq!(volume.add_entry_long(root, "A long file name.txt", 0x20, 3), Err(FatError::Full));
     for index in 14..16 {
         let entry = volume.read_entry(crate::fat::EntryRef { cluster: root, index }).unwrap();
-        assert_eq!(entry[0], 0xE5, "slot {index}: the part written is deleted again");
+        assert_eq!(entry[0], 0x00, "slot {index}: still free, nothing written");
     }
     assert_eq!(volume.dir_entries(root).unwrap().len(), 14);
     assert!(volume.find_entry(root, "A long file name.txt").is_err());
@@ -576,6 +578,39 @@ fn a_volume_creates_and_opens_long_names() {
     // The same long name twice is refused; a different one is not.
     assert_eq!(volume.create(&root, "KERNEL32_VISTA.DLL", false, 0).err(), Some(STATUS_OBJECT_NAME_COLLISION));
     assert!(volume.create(&root, "KERNEL32_VISTA.TXT", false, 0).is_ok());
+}
+
+/// A name's long-name entries go just before its 8.3 entry, in a run of free
+/// slots that holds them all (vfatFindDirSpace of ReactOS's vfatfs): a hole
+/// that a deleted entry left and that is too short is skipped, one that fits
+/// is taken again. Inno Setup moves each file it installs (MoveFile, which
+/// kernel32 makes a copy and a delete without FileRenameInformation): in
+/// PeaZip's `res\themes`, `nographic-embedded` was written with its two
+/// long-name entries in such a hole and its alias `NOGRAP~1` at the end,
+/// found by neither name ("The system cannot find the path specified").
+#[test]
+fn a_long_name_takes_a_run_of_free_slots_past_a_short_hole() {
+    let volume = FatVolume::mount(fat32(FSCK_CLUSTERS)).unwrap();
+    let root = volume.root_cluster();
+    let (dir, _) = volume.create_directory(root, "themes", 3).unwrap();
+    // Slots 2 and 3: a name that takes two (one long-name entry, its alias).
+    let temp = volume.add_entry_long(dir, "Temp File.tmp", 0x20, 3).unwrap();
+    assert_eq!(temp.index, 3);
+    volume.add_entry_long(dir, "firecrystal.theme.7z", 0x20, 3).unwrap();
+    volume.delete_entry(temp, 0).unwrap();
+    // Three entries: not in the hole of two.
+    let (theme, at) = volume.create_directory(dir, "nographic-embedded", 3).unwrap();
+    assert_eq!(at.index, 9, "its alias after its two long-name entries, past the hole");
+    let (found, _) = volume.find_entry(dir, "nographic-embedded").expect("found by its long name");
+    assert_eq!(found.first_cluster, theme);
+    let names: Vec<String> = volume.dir_entries(dir).unwrap().into_iter().map(|entry| entry.name).collect();
+    assert!(names.iter().any(|name| name == "nographic-embedded"), "listed by its long name: {names:?}");
+    assert!(!names.iter().any(|name| name == "NOGRAP~1"), "not by its alias alone: {names:?}");
+    // Two entries (13 characters: one long-name entry): the hole again.
+    let again = volume.add_entry_long(dir, "Short One.txt", 0x20, 3).unwrap();
+    assert_eq!(again.index, 3, "the hole holds it");
+    assert!(volume.find_entry(dir, "short one.txt").is_ok());
+    assert_clean(volume);
 }
 
 /// What a [`ReadCounting`] disk counts: the calls that read it, and the

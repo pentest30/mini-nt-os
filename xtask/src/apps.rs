@@ -34,8 +34,189 @@ pub struct App {
     pub free_mib: u32,
     /// How long the installation may take, in seconds.
     pub install_seconds: u32,
+    /// How long the probe lets the program run after its first window before
+    /// it closes it, in seconds, at most: past 5, until it shows another
+    /// window (then 10 s more). GIMP queries its 150 plug-ins at its first
+    /// start, each a process, behind its "GIMP Startup" window.
+    pub program_seconds: u32,
     /// Guest memory, in MiB.
     pub memory_mb: u32,
+    /// Its route of the M7 list (the "Parcours" column of
+    /// `docs/compat/applications.md`), which the probe runs after the
+    /// program, if it has one.
+    pub route: Option<Route>,
+}
+
+/// A route: a command line the probe runs (its output captured in
+/// `C:\APPS\ROUTE.LOG`), how long it may take, the files it needs in
+/// `C:\APPS` (name, bytes), and the file it makes, which the probe
+/// describes (its size, its first bytes, a short text's lines). With
+/// `steps`, the probe goes through the program's windows instead, the
+/// scenario's `keys` typed at the label each step prints (`start`, `close`,
+/// `window TEXT => LABEL`, `no-window TEXT => LABEL`, `clipboard => LABEL`:
+/// `run_window_route` of `tests/native/appbench.c`).
+#[derive(Clone, Copy)]
+pub struct Route {
+    pub command: &'static str,
+    pub seconds: u32,
+    pub files: fn() -> Vec<(&'static str, Vec<u8>)>,
+    pub output: &'static str,
+    pub steps: &'static [&'static str],
+}
+
+/// Notepad++'s route, through its windows: open `ROUTE.TXT`, type a line
+/// (the title gets its `*`), replace a word (Ctrl+H, Replace All), save
+/// (Ctrl+S, the `*` goes), close, open it again and copy its text (Ctrl+A,
+/// Ctrl+C) for the probe to read on the clipboard. The keys are in
+/// `tests/boot/app-notepadpp/scenario.txt`. No word the scenario types
+/// begins like another of the file, so that word completion (from the first
+/// letter) proposes none. `-nosession`: the second start reads the file from
+/// the disk, without the session of the first (which keeps its selection,
+/// the word that Ctrl+H selected: put back after the window shows its
+/// title, it undid the Ctrl+A that came before it).
+const NOTEPADPP_ROUTE_STEPS: &[&str] = &[
+    "start",
+    "window ROUTE.TXT => editor up",
+    "window * => typed",
+    "window Replace => replace dialog",
+    "no-window Replace => replaced",
+    "no-window * => saved",
+    "close",
+    "start",
+    "window ROUTE.TXT => reopened",
+    "clipboard => copied",
+    "close",
+];
+
+/// KeePass's route, through its windows: a new database (Ctrl+N, its
+/// master password twice, two dialogs of the same title), an entry
+/// (Ctrl+Y), saved as `ROUTE.KDB` (Ctrl+S), the program closed, then started
+/// on the database, opened with its password, and the entry's user name
+/// copied (Ctrl+B) for the probe to read on the clipboard. The keys are in
+/// `tests/boot/app-keepass/scenario.txt`.
+const KEEPASS_ROUTE_STEPS: &[&str] = &[
+    "start",
+    "window KeePass Password Safe => main up",
+    "window Create New Password Database => new database",
+    "new-window Create New Password Database => repeat password",
+    "no-window Create New Password Database => database created",
+    "window Add Entry => add entry",
+    "no-window Add Entry => entry added",
+    "window Save As => save as",
+    "window ROUTE.KDB - KeePass Password Safe => saved",
+    "close",
+    r"start C:\APPS\ROUTE.KDB",
+    "window Open Database - ROUTE.KDB => open database",
+    "window ROUTE.KDB - KeePass Password Safe => database opened",
+    "clipboard => copied",
+    "close",
+];
+
+/// The most steps a route has: the probe takes no more
+/// (`ROUTE_STEPS` of `tests/native/appbench.c`), each under 160 characters.
+pub const ROUTE_STEPS: usize = 24;
+
+/// PeaZip's route: `ROUTE.ZIP` extracted to a folder of its name
+/// (`-ext2folder`); PeaZip hands the work to its 7-Zip (`res\7z\7z.exe`)
+/// and its launcher, and ends before them: the route waits for the file.
+/// Opening the archive in PeaZip's file manager is not yet a step: the
+/// manager stops on LCL's "Failed to get raw image description from
+/// bitmap", win32k refusing 24-bit bitmaps (docs/compat/applications.md).
+const PEAZIP_ROUTE_STEPS: &[&str] =
+    &[r"start -ext2folder C:\APPS\ROUTE.ZIP", r"file C:\APPS\ROUTE\ROUTE.TXT => extracted", "close"];
+
+/// The text PeaZip's route archives.
+const PEAZIP_ROUTE_TEXT: &[u8] = b"PeaZip route: an archive opened, then extracted\r\nits second line\r\n";
+
+fn peazip_route_files() -> Vec<(&'static str, Vec<u8>)> {
+    vec![("ROUTE.ZIP", crate::zip::stored(&[("ROUTE.TXT", PEAZIP_ROUTE_TEXT)]))]
+}
+
+fn notepadpp_route_files() -> Vec<(&'static str, Vec<u8>)> {
+    vec![("ROUTE.TXT", b"Mino route\r\n".to_vec())]
+}
+
+/// 7-Zip's route, by its command line (`7z.exe`) in a batch file: archive
+/// `ROUTE.TXT`, test the archive, extract it elsewhere, compare (`fc /b`).
+/// Each step that fails ends `cmd.exe` with its own code: `exit N`, not
+/// `exit /b N`, which the `cmd` of ReactOS 0.4.16 does not pass on (a
+/// batch returns the code of its last command, 0 for `exit /b`).
+const SEVEN_ZIP_ROUTE_SCRIPT: &str = r#"@echo off
+"C:\Program Files\7-Zip\7z.exe" a C:\APPS\ROUTE.7Z C:\APPS\ROUTE.TXT
+if errorlevel 1 exit 1
+"C:\Program Files\7-Zip\7z.exe" t C:\APPS\ROUTE.7Z
+if errorlevel 1 exit 2
+"C:\Program Files\7-Zip\7z.exe" x -y -oC:\APPS\OUT C:\APPS\ROUTE.7Z
+if errorlevel 1 exit 3
+fc /b C:\APPS\ROUTE.TXT C:\APPS\OUT\ROUTE.TXT
+if errorlevel 1 exit 4
+echo route: the extracted file is the archived one
+"#;
+
+/// A text of `lines` numbered lines (CRLF), to archive.
+pub fn route_text(lines: u32) -> Vec<u8> {
+    (0..lines)
+        .flat_map(|i| {
+            format!("line {i:05}: the quick brown fox jumps over the lazy dog, {} times\r\n", i % 97).into_bytes()
+        })
+        .collect()
+}
+
+fn seven_zip_route_files() -> Vec<(&'static str, Vec<u8>)> {
+    vec![("ROUTE.TXT", route_text(2000)), ("ROUTE.CMD", SEVEN_ZIP_ROUTE_SCRIPT.replace('\n', "\r\n").into_bytes())]
+}
+
+/// GIMP's route, by Script-Fu in batch mode (`gimp-console`, no interface):
+/// open `ROUTE.BMP`, blur it (plug-in-gauss), export `ROUTE.PNG`, open the
+/// PNG again and say whether the pixel at the edge between black and white
+/// is gray.
+const GIMP_ROUTE_SCRIPT: &str = r#"(let* ((image (car (gimp-file-load RUN-NONINTERACTIVE "C:/APPS/ROUTE.BMP" "ROUTE.BMP")))
+       (drawable (car (gimp-image-get-active-drawable image))))
+  (gimp-message "route: opened ROUTE.BMP")
+  (plug-in-gauss RUN-NONINTERACTIVE image drawable 10 10 0)
+  (gimp-message "route: blurred")
+  (file-png-save RUN-NONINTERACTIVE image drawable "C:/APPS/ROUTE.PNG" "ROUTE.PNG" 0 9 0 0 0 0 0)
+  (gimp-message "route: exported ROUTE.PNG")
+  (let* ((again (car (file-png-load RUN-NONINTERACTIVE "C:/APPS/ROUTE.PNG" "ROUTE.PNG")))
+         (layer (car (gimp-image-get-active-drawable again)))
+         (value (vector-ref (cadr (gimp-drawable-get-pixel layer 16 8)) 0)))
+    (gimp-message
+      (string-append "route: the pixel at the edge "
+                     (if (and (> value 32) (< value 224)) "is gray" "is not gray")
+                     " (" (number->string value) ")"))))
+"#;
+
+/// A 24-bit BMP of `size` × `size` pixels, its left half black and its
+/// right half white.
+pub fn half_black_bmp(size: u32) -> Vec<u8> {
+    let row = (size * 3).next_multiple_of(4);
+    let pixels = row * size;
+    let mut bmp = Vec::with_capacity(54 + pixels as usize);
+    bmp.extend_from_slice(b"BM");
+    bmp.extend_from_slice(&(54 + pixels).to_le_bytes());
+    bmp.extend_from_slice(&[0; 4]);
+    bmp.extend_from_slice(&54u32.to_le_bytes());
+    bmp.extend_from_slice(&40u32.to_le_bytes());
+    bmp.extend_from_slice(&size.to_le_bytes());
+    bmp.extend_from_slice(&size.to_le_bytes());
+    bmp.extend_from_slice(&1u16.to_le_bytes());
+    bmp.extend_from_slice(&24u16.to_le_bytes());
+    bmp.extend_from_slice(&[0; 4]);
+    bmp.extend_from_slice(&pixels.to_le_bytes());
+    bmp.extend_from_slice(&[0; 16]);
+    for _ in 0..size {
+        let start = bmp.len();
+        for x in 0..size {
+            let value = if x < size / 2 { 0 } else { 255 };
+            bmp.extend_from_slice(&[value; 3]);
+        }
+        bmp.resize(start + row as usize, 0);
+    }
+    bmp
+}
+
+fn gimp_route_files() -> Vec<(&'static str, Vec<u8>)> {
+    vec![("ROUTE.BMP", half_black_bmp(32)), ("ROUTE.SCM", GIMP_ROUTE_SCRIPT.as_bytes().to_vec())]
 }
 
 /// The installer's silent mode.
@@ -70,7 +251,15 @@ pub const APPS: [App; 10] = [
         program: r"C:\Program Files\7-Zip\7zFM.exe",
         free_mib: 64,
         install_seconds: 300,
+        program_seconds: 5,
         memory_mb: 256,
+        route: Some(Route {
+            command: r"C:\WINDOWS\system32\cmd.exe /c C:\APPS\ROUTE.CMD",
+            seconds: 300,
+            files: seven_zip_route_files,
+            output: r"C:\APPS\ROUTE.7Z",
+            steps: &[],
+        }),
     },
     App {
         id: "notepadpp",
@@ -83,7 +272,15 @@ pub const APPS: [App; 10] = [
         program: r"C:\Program Files\Notepad++\notepad++.exe",
         free_mib: 64,
         install_seconds: 300,
+        program_seconds: 5,
         memory_mb: 256,
+        route: Some(Route {
+            command: r#""C:\Program Files\Notepad++\notepad++.exe" -nosession C:\APPS\ROUTE.TXT"#,
+            seconds: 300,
+            files: notepadpp_route_files,
+            output: r"C:\APPS\ROUTE.TXT",
+            steps: NOTEPADPP_ROUTE_STEPS,
+        }),
     },
     App {
         id: "keepass",
@@ -96,7 +293,15 @@ pub const APPS: [App; 10] = [
         program: r"C:\Program Files\KeePass Password Safe\KeePass.exe",
         free_mib: 64,
         install_seconds: 300,
+        program_seconds: 5,
         memory_mb: 256,
+        route: Some(Route {
+            command: r#""C:\Program Files\KeePass Password Safe\KeePass.exe""#,
+            seconds: 300,
+            files: Vec::new,
+            output: r"C:\APPS\ROUTE.KDB",
+            steps: KEEPASS_ROUTE_STEPS,
+        }),
     },
     App {
         id: "winmerge",
@@ -109,7 +314,9 @@ pub const APPS: [App; 10] = [
         program: r"C:\Program Files\WinMerge\WinMergeU.exe",
         free_mib: 64,
         install_seconds: 300,
+        program_seconds: 5,
         memory_mb: 256,
+        route: None,
     },
     App {
         id: "sumatrapdf",
@@ -122,7 +329,9 @@ pub const APPS: [App; 10] = [
         program: r"C:\Program Files\SumatraPDF\SumatraPDF.exe",
         free_mib: 64,
         install_seconds: 300,
+        program_seconds: 5,
         memory_mb: 256,
+        route: None,
     },
     App {
         id: "abiword",
@@ -135,7 +344,9 @@ pub const APPS: [App; 10] = [
         program: r"C:\Program Files\AbiSuite2\AbiWord\bin\AbiWord.exe",
         free_mib: 96,
         install_seconds: 300,
+        program_seconds: 5,
         memory_mb: 256,
+        route: None,
     },
     App {
         id: "peazip",
@@ -148,7 +359,15 @@ pub const APPS: [App; 10] = [
         program: r"C:\Program Files\PeaZip\peazip.exe",
         free_mib: 96,
         install_seconds: 300,
+        program_seconds: 5,
         memory_mb: 256,
+        route: Some(Route {
+            command: r#""C:\Program Files\PeaZip\peazip.exe""#,
+            seconds: 300,
+            files: peazip_route_files,
+            output: r"C:\APPS\ROUTE\ROUTE.TXT",
+            steps: PEAZIP_ROUTE_STEPS,
+        }),
     },
     App {
         id: "devcpp",
@@ -161,7 +380,9 @@ pub const APPS: [App; 10] = [
         program: r"C:\Dev-Cpp\devcpp.exe",
         free_mib: 192,
         install_seconds: 600,
+        program_seconds: 5,
         memory_mb: 256,
+        route: None,
     },
     App {
         id: "gimp",
@@ -174,7 +395,15 @@ pub const APPS: [App; 10] = [
         program: r"C:\Program Files\GIMP-2.0\bin\gimp-2.6.exe",
         free_mib: 320,
         install_seconds: 900,
+        program_seconds: 900,
         memory_mb: 512,
+        route: Some(Route {
+            command: r#""C:\Program Files\GIMP-2.0\bin\gimp-console-2.6.exe" -i -d -f -b "(load \"C:/APPS/ROUTE.SCM\")" -b "(gimp-quit 0)""#,
+            seconds: 600,
+            files: gimp_route_files,
+            output: r"C:\APPS\ROUTE.PNG",
+            steps: &[],
+        }),
     },
     App {
         id: "openoffice",
@@ -187,7 +416,9 @@ pub const APPS: [App; 10] = [
         program: r"C:\Program Files\OpenOffice 4\program\soffice.exe",
         free_mib: 1024,
         install_seconds: 1500,
+        program_seconds: 5,
         memory_mb: 768,
+        route: None,
     },
 ];
 
@@ -330,13 +561,136 @@ pub fn probe_commands_for(app: &App, interactive: bool) -> String {
     if app.kind == Kind::Nsis {
         text.push_str(&format!("visible=\"{installer}\"\r\n"));
     }
-    text.push_str(&format!("timeout={}\r\nprogram={}\r\n", app.install_seconds, app.program));
+    text.push_str(&format!(
+        "timeout={}\r\nprogram={}\r\nsettle={}\r\n",
+        app.install_seconds, app.program, app.program_seconds
+    ));
+    if let Some(route) = app.route {
+        text.push_str(&format!(
+            "route={}\r\nroute-seconds={}\r\nroute-output={}\r\n",
+            route.command, route.seconds, route.output
+        ));
+        // The table's own invariant: the probe would leave the others.
+        assert!(route.steps.len() <= ROUTE_STEPS, "{}: more route steps than the probe takes", app.id);
+        for step in route.steps {
+            text.push_str(&format!("route-step={step}\r\n"));
+        }
+    }
     text
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gimp_has_a_route_with_its_image_and_script() {
+        let bmp = half_black_bmp(32);
+        assert_eq!(&bmp[..2], b"BM");
+        assert_eq!(bmp.len(), 54 + 32 * 96, "rows of 96 bytes");
+        assert_eq!(u32::from_le_bytes(bmp[18..22].try_into().unwrap()), 32, "width");
+        assert_eq!(u16::from_le_bytes(bmp[28..30].try_into().unwrap()), 24, "bits per pixel");
+        assert_eq!(&bmp[54 + 15 * 3..54 + 16 * 3], &[0, 0, 0], "the last black pixel of a row");
+        assert_eq!(&bmp[54 + 16 * 3..54 + 17 * 3], &[255, 255, 255], "the first white one");
+        let gimp = APPS.iter().find(|app| app.id == "gimp").unwrap();
+        let route = gimp.route.expect("GIMP's route");
+        let files = (route.files)();
+        assert_eq!(files.iter().map(|(name, _)| *name).collect::<Vec<_>>(), ["ROUTE.BMP", "ROUTE.SCM"]);
+        let text = probe_commands_for(gimp, false);
+        assert!(text.contains("route=\"C:\\Program Files\\GIMP-2.0\\bin\\gimp-console-2.6.exe\" -i -d -f -b "));
+        assert!(text.contains("route-seconds=600\r\n"));
+        assert!(text.contains("route-output=C:\\APPS\\ROUTE.PNG\r\n"));
+        assert!(!text.contains("route-step="));
+        assert!(APPS
+            .iter()
+            .filter(|app| !["gimp", "7zip", "notepadpp", "keepass", "peazip"].contains(&app.id))
+            .all(|app| app.route.is_none()));
+    }
+
+    #[test]
+    fn seven_zip_has_a_route_by_its_command_line() {
+        let seven = APPS.iter().find(|app| app.id == "7zip").unwrap();
+        let route = seven.route.expect("7-Zip's route");
+        let files = (route.files)();
+        assert_eq!(files.iter().map(|(name, _)| *name).collect::<Vec<_>>(), ["ROUTE.TXT", "ROUTE.CMD"]);
+        assert_eq!(files[0].1.iter().filter(|&&byte| byte == b'\n').count(), 2000);
+        assert_eq!(route_text(1), b"line 00000: the quick brown fox jumps over the lazy dog, 0 times\r\n");
+        let script = String::from_utf8(files[1].1.clone()).unwrap();
+        assert!(script.split_inclusive('\n').all(|line| line.ends_with("\r\n")), "a batch file of CRLF lines");
+        assert!(
+            script.contains("\r\n\"C:\\Program Files\\7-Zip\\7z.exe\" a C:\\APPS\\ROUTE.7Z C:\\APPS\\ROUTE.TXT\r\n")
+        );
+        assert!(script.contains("\r\nfc /b C:\\APPS\\ROUTE.TXT C:\\APPS\\OUT\\ROUTE.TXT\r\n"));
+        let text = probe_commands_for(seven, false);
+        assert!(text.contains("route=C:\\WINDOWS\\system32\\cmd.exe /c C:\\APPS\\ROUTE.CMD\r\n"));
+        assert!(text.contains("route-output=C:\\APPS\\ROUTE.7Z\r\n"));
+    }
+
+    #[test]
+    fn notepadpp_has_a_route_through_its_windows() {
+        let app = APPS.iter().find(|app| app.id == "notepadpp").unwrap();
+        let route = app.route.expect("Notepad++'s route");
+        assert_eq!((route.files)(), [("ROUTE.TXT", b"Mino route\r\n".to_vec())]);
+        let text = probe_commands_for(app, false);
+        assert!(
+            text.contains("route=\"C:\\Program Files\\Notepad++\\notepad++.exe\" -nosession C:\\APPS\\ROUTE.TXT\r\n")
+        );
+        assert!(text.contains("route-output=C:\\APPS\\ROUTE.TXT\r\n"));
+        assert_eq!(route.steps.first(), Some(&"start"));
+    }
+
+    #[test]
+    fn keepass_has_a_route_through_its_windows() {
+        let app = APPS.iter().find(|app| app.id == "keepass").unwrap();
+        let route = app.route.expect("KeePass's route");
+        assert!((route.files)().is_empty(), "KeePass makes its file");
+        let text = probe_commands_for(app, false);
+        assert!(text.contains("route=\"C:\\Program Files\\KeePass Password Safe\\KeePass.exe\"\r\n"));
+        assert!(text.contains("route-output=C:\\APPS\\ROUTE.KDB\r\n"));
+        assert!(route.steps.contains(&"new-window Create New Password Database => repeat password"));
+        assert!(route.steps.contains(&r"start C:\APPS\ROUTE.KDB"), "the second start, on the database");
+    }
+
+    #[test]
+    fn peazip_has_an_archive_to_extract() {
+        let app = APPS.iter().find(|app| app.id == "peazip").unwrap();
+        let route = app.route.expect("PeaZip's route");
+        let files = (route.files)();
+        assert_eq!(files.iter().map(|(name, _)| *name).collect::<Vec<_>>(), ["ROUTE.ZIP"]);
+        let entries = crate::zip::entries(&files[0].1).expect("a valid archive");
+        assert_eq!(entries.iter().map(|e| (e.name.as_str(), e.size)).collect::<Vec<_>>(), [("ROUTE.TXT", 66)]);
+        let mut text = Vec::new();
+        crate::zip::extract(&files[0].1, &entries[0], &mut text).expect("ROUTE.TXT");
+        assert_eq!(text, PEAZIP_ROUTE_TEXT);
+        let text = probe_commands_for(app, false);
+        assert!(text.contains("route-output=C:\\APPS\\ROUTE\\ROUTE.TXT\r\n"), "where -ext2folder puts it");
+        assert!(text.contains("route-step=file C:\\APPS\\ROUTE\\ROUTE.TXT => extracted\r\n"));
+    }
+
+    #[test]
+    fn the_steps_of_each_route_go_to_the_probe() {
+        for app in APPS.iter().filter(|app| app.route.is_some_and(|route| !route.steps.is_empty())) {
+            let route = app.route.unwrap();
+            // In their order, one line each, as many as the probe takes.
+            let text = probe_commands_for(app, false);
+            let steps: Vec<&str> = text.lines().filter_map(|line| line.strip_prefix("route-step=")).collect();
+            assert_eq!(steps, route.steps, "{}", app.id);
+            assert!(steps.len() <= ROUTE_STEPS && steps.iter().all(|step| step.len() < 160), "{}", app.id);
+            assert!(steps.first().is_some_and(|step| step.starts_with("start")), "{}", app.id);
+            assert_eq!(steps.last(), Some(&"close"), "{}", app.id);
+            // Each wait has a label, no label begins another: the
+            // scenario's keys follow them.
+            let starts_or_closes = |step: &&str| step.starts_with("start") || *step == "close";
+            let labels: Vec<&str> =
+                steps.iter().filter_map(|step| step.split_once(" => ").map(|(_, label)| label)).collect();
+            assert_eq!(labels.len(), steps.iter().filter(|step| !starts_or_closes(step)).count(), "{}", app.id);
+            assert!(
+                labels.iter().all(|label| labels.iter().filter(|other| other.starts_with(label)).count() == 1),
+                "{}",
+                app.id
+            );
+        }
+    }
 
     #[test]
     fn each_application_is_pinned_once() {
@@ -383,7 +737,8 @@ mod tests {
         assert!(!msi.contains("visible="));
         let inno = probe_commands_for(find("keepass").unwrap(), false);
         assert!(inno.contains(r#"/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /LOG="C:\APPS\INSTALL.LOG""#));
-        assert!(inno.contains("timeout=300\r\nprogram=C:\\Program Files\\KeePass Password Safe\\KeePass.exe\r\n"));
+        assert!(inno
+            .contains("timeout=300\r\nprogram=C:\\Program Files\\KeePass Password Safe\\KeePass.exe\r\nsettle=5\r\n"));
         assert!(probe_commands_for(find("sumatrapdf").unwrap(), false).contains(r#"-install.exe" /s"#));
     }
 

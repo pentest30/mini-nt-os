@@ -89,6 +89,68 @@ pub(super) fn nt_user_monitor_from_point(arguments: &[u32]) -> NtStatus {
     monitor_of(Rect::new(x, y, x.wrapping_add(1), y.wrapping_add(1)), flags)
 }
 
+/// NtUserEnumDisplayMonitors(hdc, lprcClip, phMonitorList, prcMonitorList,
+/// dwListSize) : le nombre de moniteurs que coupe la zone
+/// (`win32k::monitor::search_area` : `lprcClip` à l'écran, ou depuis la
+/// borne de la région visible du DC `hdc`, ou cette borne ; ni l'un ni
+/// l'autre : tout l'écran virtuel), et, s'il y a de la place
+/// (`dwListSize`), leurs handles et la partie coupée de chacun (depuis le
+/// coin de la borne, avec un DC). `user32` (EnumDisplayMonitors) le
+/// demande deux fois : le compte, puis les listes ; sans handler, 0, et
+/// GTK (le GIMP) restait sans moniteur. -1 pour un `lprcClip` illisible,
+/// un DC inconnu ou des listes qu'on ne peut écrire ; 0 pour un DC qui ne
+/// peint nulle part. Comme ReactOS (`monitor.c`), sauf que seules les
+/// entrées remplies sont écrites (ReactOS copie toute la liste).
+pub(super) fn nt_user_enum_display_monitors(arguments: &[u32]) -> NtStatus {
+    const FAILED: NtStatus = NtStatus(u32::MAX);
+    let [hdc, clip, handles, rects, size] = arguments[..5] else { unreachable!("5 arguments") };
+    let read_rect = |address: u32| -> Result<Rect, NtStatus> {
+        let mut bytes = [0u8; 16];
+        copy_from_user(&mut bytes, u64::from(address))?;
+        let word = |i: usize| i32::from_le_bytes([bytes[4 * i], bytes[4 * i + 1], bytes[4 * i + 2], bytes[4 * i + 3]]);
+        Ok(Rect::new(word(0), word(1), word(2), word(3)))
+    };
+    let clip = if clip == 0 {
+        None
+    } else {
+        match read_rect(clip) {
+            Ok(rect) => Some(rect),
+            Err(status) => {
+                let _ = win32k::set_last_error(dos_error(status));
+                return FAILED;
+            }
+        }
+    };
+    let dc_box = if hdc == 0 {
+        None
+    } else {
+        let Some(dc) = win32k::gdi::dc::lock(hdc) else { return FAILED };
+        let vis = dc.state().vis;
+        if vis.is_empty() {
+            return NtStatus(0);
+        }
+        Some(vis.bounds())
+    };
+    let found = win32k::monitor::enumerate(win32k::monitor::search_area(clip, dc_box));
+    let count = found.len() as u32;
+    if count == 0 || size == 0 || (handles == 0 && rects == 0) {
+        return NtStatus(count);
+    }
+    let (dx, dy) = dc_box.map_or((0, 0), |dc| (dc.left, dc.top));
+    for (i, (handle, rect)) in found.iter().take(size as usize).enumerate() {
+        let at = |base: u32, width: u32| u64::from(base) + u64::from(width) * i as u64;
+        let rect = [rect.left - dx, rect.top - dy, rect.right - dx, rect.bottom - dy];
+        let bytes: Vec<u8> = rect.iter().flat_map(|word| word.to_le_bytes()).collect();
+        let written = (if handles != 0 { copy_to_user(at(handles, 4), &handle.to_le_bytes()) } else { Ok(()) })
+            .and_then(|()| if rects != 0 { copy_to_user(at(rects, 16), &bytes) } else { Ok(()) });
+        if let Err(status) = written {
+            let _ = win32k::set_last_error(dos_error(status));
+            return FAILED;
+        }
+    }
+    NtStatus(count)
+}
+
 /// NtUserGetMonitorInfo(hMonitor, lpmi) : le rectangle du moniteur, sa zone
 /// de travail, `MONITORINFOF_PRIMARY` et, dans un `MONITORINFOEXW`, le nom
 /// de son périphérique ; TRUE. Un moniteur inconnu :
