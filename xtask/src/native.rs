@@ -67,6 +67,7 @@ const PROGRAMS: &[(&[&str], &str, Toolchain)] = &[
     (&["debugport1.c"], "DBGPORT1.EXE", Toolchain::MinGwWin32),
     (&["lock1.c"], "LOCK1.EXE", Toolchain::MinGwWin32),
     (&["setpar1.c"], "SETPAR1.EXE", Toolchain::MinGwWin32),
+    (&["savedc1.c"], "SAVEDC1.EXE", Toolchain::MinGwWin32),
     (&["caret1.c"], "CARET1.EXE", Toolchain::MinGwWin32),
     (&["hook1.c"], "HOOK1.EXE", Toolchain::MinGwWin32),
     (&["section1.c"], "SECTION1.EXE", Toolchain::MinGwWin32),
@@ -113,6 +114,7 @@ const PROGRAMS: &[(&[&str], &str, Toolchain)] = &[
     (&["prio1.c"], "PRIO1.EXE", Toolchain::MinGwWin32),
     (&["uilang1.c"], "UILANG1.EXE", Toolchain::MinGwWin32),
     (&["cbt1.c"], "CBT1.EXE", Toolchain::MinGwWin32),
+    (&["bmp24.c"], "BMP24.EXE", Toolchain::MinGwWin32),
     (&["minoinit.c"], "MINOINIT.EXE", Toolchain::MinGwWin32),
 ];
 

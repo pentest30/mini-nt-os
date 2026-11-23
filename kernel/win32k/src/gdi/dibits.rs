@@ -25,8 +25,9 @@
 //! des lignes d'un bitmap en DIB de 1 bit (noir 0, blanc 1, la table de deux
 //! couleurs), de 4 ou 8 bits (la table de la DIB section indexée de même
 //! profondeur, sinon la table par défaut : [`default_palette`] ; l'index de
-//! la couleur la plus proche) ou de 32 bits (l'octet haut tel que le bitmap
-//! le garde : l'alpha d'une DIB section), comptées depuis le bas du bitmap
+//! la couleur la plus proche), de 24 bits (BGR) ou de 32 bits (l'octet haut
+//! tel que le bitmap le garde : l'alpha d'une DIB section), comptées depuis
+//! le bas du bitmap
 //! ([`scan_window`], [`encode_lines`]). C'est ce que la liste d'images de
 //! `comctl32` lit des copies des bitmaps d'une icône (ImageList_ReplaceIcon,
 //! add_with_alpha), et la table qu'elle demande pour une liste ILC_COLOR4 ou
@@ -412,7 +413,7 @@ pub fn create_dibitmap(
 /// GetDIBits sait rendre une DIB de `bit_count` bits par pixel : 1, 4, 8 ou
 /// 32.
 pub const fn encodes(bit_count: u16) -> bool {
-    matches!(bit_count, 1 | 4 | 8 | 32)
+    matches!(bit_count, 1 | 4 | 8 | 24 | 32)
 }
 
 /// Les 20 couleurs fixes de la palette par défaut (DefLogPaletteQuads) :
@@ -492,11 +493,12 @@ pub fn scan_window(bitmap_height: u32, dib_height: u32, start: u32, lines: u32) 
 
 /// Les octets de `lines` lignes, à partir de la ligne `top` (depuis le haut)
 /// d'un bitmap de `width` × `height` pixels de 32 bits (`pixels`, la ligne du
-/// haut d'abord), en DIB de `dib_width` pixels de `bit_count` bits (1, 4, 8
-/// ou 32 : [`encodes`]), la ligne du bas d'abord sauf `top_down`. Hors du
-/// bitmap, des zéros. En 1 bit, le blanc le plus proche (`to_monochrome`)
-/// donne 1 ; en 4 et 8 bits, l'index de la couleur la plus proche dans
-/// `palette`.
+/// haut d'abord), en DIB de `dib_width` pixels de `bit_count` bits (1, 4, 8,
+/// 24 ou 32 : [`encodes`]), la ligne du bas d'abord sauf `top_down`. Hors du
+/// bitmap, des zéros. En 1, 4 et 8 bits, l'index de la couleur la plus
+/// proche dans `palette`, la table que GetDIBits rend (celle d'une DIB
+/// section indexée, sinon celle par défaut) : EXLATEOBJ_iXlateRGBtoPal de
+/// ReactOS, dont la palette d'une DIB n'est pas monochrome.
 pub fn encode_lines(
     pixels: &[u32],
     (width, height): (u32, u32),
@@ -519,7 +521,7 @@ pub fn encode_lines(
         for (x, &raw) in source.iter().enumerate().take(dib_width as usize) {
             match bit_count {
                 1 => {
-                    if to_monochrome(layout.color(raw)) == ColorRef::rgb(255, 255, 255) {
+                    if super::surface::nearest_index(palette, layout.color(raw)) == 1 {
                         out[x / 8] |= 0x80 >> (x % 8);
                     }
                 }
@@ -528,6 +530,7 @@ pub fn encode_lines(
                     out[x / 2] |= if x % 2 == 0 { index << 4 } else { index & 0x0F };
                 }
                 8 => out[x] = super::surface::nearest_index(palette, layout.color(raw)),
+                24 => out[3 * x..3 * x + 3].copy_from_slice(&raw.to_le_bytes()[..3]),
                 _ => out[4 * x..4 * x + 4].copy_from_slice(&raw.to_le_bytes()),
             }
         }
@@ -811,7 +814,7 @@ mod tests {
         assert_eq!(&bottom_up[8..], &[0xFF, 0xFF, 0xFF, 0, 0, 0, 0xFF, 0x80], "BGRA, the alpha kept");
         let top_down = encode_lines(&pixels, (2, 2), 0, 2, (2, 32, &[]), true);
         assert_eq!(&top_down[..8], &bottom_up[8..], "the top line first");
-        let mono = encode_lines(&pixels, (2, 2), 0, 2, (2, 1, &[]), false);
+        let mono = encode_lines(&pixels, (2, 2), 0, 2, (2, 1, &default_palette(1)), false);
         assert_eq!(mono, [0b0000_0000, 0, 0, 0, 0b1000_0000, 0, 0, 0], "white is 1; lines of 4 bytes");
         let wider = encode_lines(&pixels, (2, 2), 0, 1, (3, 32, &[]), true);
         assert_eq!(wider.len(), 12);
@@ -819,7 +822,12 @@ mod tests {
         let above = encode_lines(&pixels, (2, 2), -1, 2, (2, 32, &[]), true);
         assert_eq!(&above[..8], &[0; 8], "above the bitmap: zeros");
         assert_eq!(&above[8..12], &[0xFF, 0xFF, 0xFF, 0]);
-        assert!(encodes(1) && encodes(4) && encodes(8) && encodes(32) && !encodes(24) && !encodes(16));
+        assert!(encodes(1) && encodes(4) && encodes(8) && encodes(24) && encodes(32) && !encodes(16));
+        // 24 bits: BGR, no alpha, each line padded to 32 bits.
+        let three = encode_lines(&pixels, (2, 2), 0, 2, (2, 24, &[]), false);
+        assert_eq!(three.len(), 16);
+        assert_eq!(&three[..8], &[0, 0, 0, 0x40, 0x40, 0x40, 0, 0], "the bottom line first, padded");
+        assert_eq!(&three[8..], &[0xFF, 0xFF, 0xFF, 0, 0, 0xFF, 0, 0], "BGR, the alpha dropped");
         // 4 bits: the index of the nearest colour of the table, two a byte.
         let vga = default_palette(4);
         let four = encode_lines(&pixels, (2, 2), 0, 2, (2, 4, &vga), true);
@@ -831,6 +839,18 @@ mod tests {
         let eight = encode_lines(&pixels, (2, 2), 0, 1, (2, 8, &default_palette(8)), true);
         assert_eq!(&eight[..2], &[225, 190], "white and red: the cube's, before the fixed colours at the end");
         assert_eq!((dib_stride(16, 1), dib_stride(33, 1), dib_stride(3, 32)), (4, 8, 12));
+    }
+
+    #[test]
+    fn a_one_bit_dib_takes_the_index_of_its_table() {
+        // A 1-bit DIB section whose table is white then black: GetDIBits
+        // gives its table back, the bits are indexes in it.
+        let (white, black) = (0x00FF_FFFF, 0);
+        let inverted = [ColorRef::rgb(255, 255, 255), ColorRef::rgb(0, 0, 0)];
+        let bits = encode_lines(&[white, black], (2, 1), 0, 1, (2, 1, &inverted), true);
+        assert_eq!(bits, [0b0100_0000, 0, 0, 0], "white is index 0, black index 1");
+        let bits = encode_lines(&[white, black], (2, 1), 0, 1, (2, 1, &default_palette(1)), true);
+        assert_eq!(bits, [0b1000_0000, 0, 0, 0], "black then white: white is 1");
     }
 
     #[test]

@@ -764,10 +764,10 @@ pub(super) fn nt_gdi_create_bitmap(arguments: &[u32]) -> NtStatus {
     let [width, height, planes, bits_pixel, bits] = arguments[..5] else { unreachable!("5 arguments") };
     // La géométrie d'abord, avant toute allocation : les dimensions que le
     // moteur tient (celles de `surface::create_from_bits`), la profondeur
-    // qu'il convertit (la monochrome et le 32 bits), le pas et la taille
+    // qu'il convertit (la monochrome, 24 et 32 bits), le pas et la taille
     // totale en arithmétique contrôlée et bornée — un appelant pourrait
     // autrement demander des gigaoctets pour une hauteur sans fond.
-    let Some(depth) = planes.checked_mul(bits_pixel).filter(|&depth| depth == 1 || depth == 32) else {
+    let Some(depth) = planes.checked_mul(bits_pixel).filter(|&depth| matches!(depth, 1 | 24 | 32)) else {
         return fail(ERROR_INVALID_PARAMETER, 0);
     };
     if width == 0 || height == 0 || width > 4096 || height > 4096 {
@@ -1024,7 +1024,7 @@ pub(super) fn nt_gdi_create_dib_section(arguments: &[u32]) -> NtStatus {
         // The colour table of 4 and 8 bits, after the whole header: biClrUsed
         // entries, or all of them.
         let mut palette = alloc::vec::Vec::new();
-        if matches!(header.bit_count, 4 | 8) {
+        if matches!(header.bit_count, 1 | 4 | 8) {
             let full = 1u32 << header.bit_count;
             let colors = if (1..=full).contains(&header.clr_used) { header.clr_used } else { full };
             let mut table = alloc::vec![0u8; colors as usize * 4];
@@ -1034,7 +1034,7 @@ pub(super) fn nt_gdi_create_dib_section(arguments: &[u32]) -> NtStatus {
         Ok((header, masks, palette))
     };
     let Ok((header, masks, palette)) = read() else { return fail(ERROR_INVALID_PARAMETER, 0) };
-    if usage != abi::gdi::DIB_RGB_COLORS && matches!(header.bit_count, 4 | 8) {
+    if usage != abi::gdi::DIB_RGB_COLORS && matches!(header.bit_count, 1 | 4 | 8) {
         static PAL_REPORTED: AtomicBool = AtomicBool::new(false);
         if !PAL_REPORTED.swap(true, Ordering::Relaxed) {
             log::warn!("sys: NtGdiCreateDIBSection with a table of palette indices: not yet");

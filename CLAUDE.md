@@ -601,7 +601,11 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   WH_CBT pour HCBT_CREATEWND (`win32k::hook::create_window`, avant WM_GETMINMAXINFO) : MFC y attache son `CWnd`, et
   KeePass fait enfin son OnInitDialog ; scénario `cbt-hook`. KeePass crée une base et une entrée, l'enregistre et la
   rouvre avec son mot de passe (`show`, `start ARGUMENTS`, `new-window` dans les étapes d'un parcours). PeaZip
-  extrait une archive par `-ext2folder` (l'étape `file CHEMIN`) ; son gestionnaire attend les bitmaps de 24 bits.
+  extrait une archive par `-ext2folder` (l'étape `file CHEMIN`). Les bitmaps de 24 bits (`gdi::surface::Format::Bgr`,
+  GetDIBits de 24 bits) et les DIB sections de 1 bit : PeaZip ouvre son gestionnaire et une archive ; scénario
+  `bitmap-24`. Il ne se ferme pas seul : il attend un `cmd.exe` détaché sans handles standard, que le `cmd` de
+  ReactOS fige à son premier message (`conutils` : le verrou d'un flux au handle nul n'est pas initialisé), un défaut
+  de ReactOS que le banc contourne en terminant PeaZip.
   Suite : [`docs/passation.md`](docs/passation.md).
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.
