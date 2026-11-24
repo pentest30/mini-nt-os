@@ -119,6 +119,11 @@ fn give_non_client_metrics(pv: u32, size: u32, bytes: &[u8]) -> NtStatus {
 /// - SPI_GETNONCLIENTMETRICS : les tailles du cadre et les polices du système
 ///   (`win32k::metrics::non_client_metrics`), pour un NONCLIENTMETRICSW d'XP
 ///   ou de Vista ([`give_non_client_metrics`]) ;
+/// - SPI_GETMINIMIZEDMETRICS, SPI_SETMINIMIZEDMETRICS : la largeur, les
+///   écarts et la disposition des fenêtres réduites (MINIMIZEDMETRICS, 20
+///   octets ; `win32k::metrics::set_minimized_metrics`) ; `explorer` y
+///   demande `ARW_HIDE` : réduites, ses fenêtres sortent de l'écran, sa
+///   barre des tâches les montre ;
 /// - SPI_GETICONTITLELOGFONT : la police des titres d'icônes, Tahoma de 8
 ///   points, la police par défaut d'une ListView ;
 /// - SPI_GETFOCUSBORDERWIDTH, SPI_GETFOCUSBORDERHEIGHT : l'épaisseur d'un
@@ -134,6 +139,33 @@ pub(super) fn nt_user_system_parameters_info(arguments: &[u32]) -> NtStatus {
         abi::user::SPI_GETNONCLIENTMETRICS => {
             let metrics = win32k::metrics::non_client_metrics(&win32k::metrics::Parameters::DEFAULT);
             give_non_client_metrics(pv, param, metrics.as_bytes())
+        }
+        abi::user::SPI_GETMINIMIZEDMETRICS => {
+            let parameters = win32k::metrics::parameters();
+            let fields = [
+                20,
+                parameters.minimized_width,
+                parameters.minimized_horizontal_gap,
+                parameters.minimized_vertical_gap,
+                parameters.minimized_arrange,
+            ];
+            let mut metrics = [0u8; 20];
+            for (bytes, field) in metrics.chunks_exact_mut(4).zip(fields) {
+                bytes.copy_from_slice(&field.to_le_bytes());
+            }
+            give_parameter(pv, 0, &metrics, false)
+        }
+        abi::user::SPI_SETMINIMIZEDMETRICS => {
+            let mut metrics = [0u8; 20];
+            if ke::usermem::copy_from_user(&mut metrics, u64::from(pv)).is_err() {
+                return NtStatus(0);
+            }
+            let field = |i: usize| {
+                i32::from_le_bytes([metrics[4 * i], metrics[4 * i + 1], metrics[4 * i + 2], metrics[4 * i + 3]])
+            };
+            // ReactOS fixes the caller's cbSize first.
+            let _ = ke::usermem::copy_to_user(u64::from(pv), &20u32.to_le_bytes());
+            NtStatus(u32::from(win32k::metrics::set_minimized_metrics(field(1), field(2), field(3), field(4)).is_ok()))
         }
         abi::user::SPI_GETICONTITLELOGFONT => {
             give_parameter(pv, param, win32k::metrics::system_font(400).as_bytes(), false)

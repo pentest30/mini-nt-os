@@ -386,6 +386,12 @@ pub fn set_window_pos(window: &Arc<Window>, insert_after: u32, x: i32, y: i32, c
         // The children keep their place in the client area.
         window::move_tree(window, new_client.left - old.client.left, new_client.top - old.client.top);
     }
+    // The shell hooks, before WS_VISIBLE changes (co_WinPosSetWindowPos).
+    if pos.flags & SWP_HIDEWINDOW != 0 {
+        crate::shellhook::window_hidden(window);
+    } else if pos.flags & SWP_SHOWWINDOW != 0 {
+        crate::shellhook::window_shown(window, pos.flags);
+    }
     let state = window::change(window, |state| {
         (state.window, state.client) = (new_window, new_client);
         if pos.flags & SWP_HIDEWINDOW != 0 {

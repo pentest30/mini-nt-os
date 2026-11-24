@@ -9,7 +9,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | Table | Implémentés | Services |
 |---|---:|---:|
 | ntoskrnl | 137 | 296 |
-| win32k | 224 | 737 |
+| win32k | 226 | 737 |
 
 ## ntoskrnl
 
@@ -630,9 +630,9 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1137` | `NtUserBuildHwndList` | 7 | ✅ |
 | `0x1138` | `NtUserBuildNameList` | 4 |  |
 | `0x1139` | `NtUserBuildPropList` | 4 |  |
-| `0x113a` | `NtUserCallHwnd` | 2 |  |
+| `0x113a` | `NtUserCallHwnd` | 2 | ✅ |
 | `0x113b` | `NtUserCallHwndLock` | 2 | ✅ |
-| `0x113c` | `NtUserCallHwndOpt` | 2 |  |
+| `0x113c` | `NtUserCallHwndOpt` | 2 | ✅ |
 | `0x113d` | `NtUserCallHwndParam` | 3 | ✅ |
 | `0x113e` | `NtUserCallHwndParamLock` | 3 | ✅ |
 | `0x113f` | `NtUserCallMsgFilter` | 2 | ✅ |

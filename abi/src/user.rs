@@ -528,6 +528,27 @@ pub const HWNDLOCK_ROUTINE_UPDATEWINDOW: u32 = 0x5E;
 /// HWNDLOCK_ROUTINE_DRAWMENUBAR: DrawMenuBar, by NtUserCallHwndLock (XP's
 /// order of the enum, as the routines above).
 pub const HWNDLOCK_ROUTINE_DRAWMENUBAR: u32 = 0x55;
+/// HWND_ROUTINE_*, the routines of NtUserCallHwnd(hWnd, Routine), as
+/// `user32` passes them. DeregisterShellHookWindow.
+pub const HWND_ROUTINE_DEREGISTERSHELLHOOKWINDOW: u32 = 0x45;
+/// RegisterShellHookWindow.
+pub const HWND_ROUTINE_REGISTERSHELLHOOKWINDOW: u32 = 0x48;
+/// HWNDOPT_ROUTINE_*, the routines of NtUserCallHwndOpt(hWnd, Routine):
+/// SetProgmanWindow.
+pub const HWNDOPT_ROUTINE_SETPROGMANWINDOW: u32 = 0x4A;
+/// SetTaskmanWindow.
+pub const HWNDOPT_ROUTINE_SETTASKMANWINDOW: u32 = 0x4B;
+/// HSHELL_*, the codes of the shell hook message ("SHELLHOOK") in its
+/// `wParam`; `lParam` is the window.
+pub const HSHELL_WINDOWCREATED: u32 = 1;
+pub const HSHELL_WINDOWDESTROYED: u32 = 2;
+pub const HSHELL_WINDOWACTIVATED: u32 = 4;
+pub const HSHELL_REDRAW: u32 = 6;
+pub const HSHELL_LANGUAGE: u32 = 8;
+pub const HSHELL_APPCOMMAND: u32 = 12;
+/// HSHELL_RUDEAPPACTIVATED: a full-screen window activated
+/// (HSHELL_WINDOWACTIVATED | HSHELL_HIGHBIT).
+pub const HSHELL_RUDEAPPACTIVATED: u32 = 0x8004;
 /// HWNDLOCK_ROUTINE_SETFOREGROUNDWINDOW: SetForegroundWindow, by
 /// NtUserCallHwndLock.
 pub const HWNDLOCK_ROUTINE_SETFOREGROUNDWINDOW: u32 = 0x5B;
@@ -539,6 +560,11 @@ pub const SPI_GETICONTITLELOGFONT: u32 = 0x001F;
 /// SPI_GETNONCLIENTMETRICS: fills a NONCLIENTMETRICSW (`uiParam` its size
 /// or 0, `pvParam` it, its `cbSize` set).
 pub const SPI_GETNONCLIENTMETRICS: u32 = 0x0029;
+/// SPI_GETMINIMIZEDMETRICS: fills a MINIMIZEDMETRICS (`pvParam`, 20 bytes:
+/// cbSize, iWidth, iHorzGap, iVertGap, iArrange).
+pub const SPI_GETMINIMIZEDMETRICS: u32 = 0x002B;
+/// SPI_SETMINIMIZEDMETRICS: takes one; a shell asks for `ARW_HIDE`.
+pub const SPI_SETMINIMIZEDMETRICS: u32 = 0x002C;
 /// SPI_GETFOCUSBORDERWIDTH: the width of the sides of a focus rectangle
 /// (`pvParam` a UINT), which DrawFocusRect reads.
 pub const SPI_GETFOCUSBORDERWIDTH: u32 = 0x200E;
@@ -911,6 +937,9 @@ pub const WS_EX_NOPARENTNOTIFY: u32 = 0x0000_0004;
 pub const WS_EX_TOPMOST: u32 = 0x0000_0008;
 pub const WS_EX_MDICHILD: u32 = 0x0000_0040;
 pub const WS_EX_TOOLWINDOW: u32 = 0x0000_0080;
+/// WS_EX_APPWINDOW: a top-level window that a taskbar shows, whatever its
+/// owner.
+pub const WS_EX_APPWINDOW: u32 = 0x0004_0000;
 pub const WS_EX_CLIENTEDGE: u32 = 0x0000_0200;
 pub const WS_EX_LEFTSCROLLBAR: u32 = 0x0000_4000;
 pub const WS_EX_LAYOUTRTL: u32 = 0x0040_0000;
@@ -1229,6 +1258,10 @@ pub const THREADSTATE_FOCUSWINDOW: u32 = 0;
 pub const THREADSTATE_ACTIVEWINDOW: u32 = 1;
 pub const THREADSTATE_CAPTUREWINDOW: u32 = 2;
 pub const THREADSTATE_GETCURSOR: u32 = 6;
+/// THREADSTATE_PROGMANWINDOW, THREADSTATE_TASKMANWINDOW: GetProgmanWindow,
+/// GetTaskmanWindow (the `DESKTOPINFO` of the thread's desktop).
+pub const THREADSTATE_PROGMANWINDOW: u32 = 0x13;
+pub const THREADSTATE_TASKMANWINDOW: u32 = 0x14;
 /// WM_ACTIVATE, WM_SETFOCUS, WM_KILLFOCUS: a window activated or not,
 /// taking or losing the keyboard.
 pub const WM_ACTIVATE: u32 = 0x0006;

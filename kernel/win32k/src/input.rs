@@ -697,6 +697,7 @@ pub fn activate_event(thread: &ThreadInfo, hwnd: u32, foreground_from: Option<u3
     }
     let _ = crate::window::send_message(&window, WM_NCACTIVATE, u32::from(foreground), LParam::Value(0));
     if foreground {
+        crate::shellhook::activated(&window);
         let flags = SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE;
         crate::winpos::set_window_pos(&window, HWND_TOP, 0, 0, 0, 0, flags);
     }
@@ -753,6 +754,9 @@ fn set_active_window(thread: &Arc<ThreadInfo>, window: &Arc<Window>, foreground_
     let _ = crate::window::send_message(window, WM_NCACTIVATE, u32::from(foreground), LParam::Value(0));
     let wparam = activate_wparam(WA_ACTIVE, window.state().style);
     let _ = crate::window::send_message(window, WM_ACTIVATE, wparam, LParam::Value(previous_active));
+    if window.state().style & WS_VISIBLE != 0 {
+        crate::shellhook::activated(window);
+    }
     // The focus goes to the window unless WM_ACTIVATE gave it to one of its
     // children (DefDlgProc: the control that had it); to nobody if it is
     // minimized.

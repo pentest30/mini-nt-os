@@ -332,6 +332,7 @@ pub(crate) fn release(window: &Window) {
         return;
     }
     WINDOWS.lock().remove(&window.handle);
+    crate::shellhook::deregister(window.handle);
     let _ = crate::handles::free(window.handle);
 }
 

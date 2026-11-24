@@ -229,3 +229,7 @@ SendMessageA@16
 GetWindowLongA@8
 RegisterClassW@4
 EnumDisplayMonitors@16
+RegisterShellHookWindow@4
+DeregisterShellHookWindow@4
+SetTaskmanWindow@4
+GetTaskmanWindow@0

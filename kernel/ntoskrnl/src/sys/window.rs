@@ -167,7 +167,10 @@ pub(super) fn nt_user_def_set_text(arguments: &[u32]) -> NtStatus {
         return fail(abi::winerror::ERROR_INVALID_WINDOW_HANDLE);
     };
     match win32k::window::set_text(&window, &text) {
-        Ok(()) => NtStatus(1),
+        Ok(()) => {
+            win32k::shellhook::title_changed(&window);
+            NtStatus(1)
+        }
         Err(status) => fail(dos_error(status)),
     }
 }
@@ -449,6 +452,55 @@ pub(super) fn nt_user_end_paint(arguments: &[u32]) -> NtStatus {
     let ps = abi::user::PaintStruct32::from_bytes(&bytes).expect("the size of a PAINTSTRUCT");
     win32k::paint::end_paint(&window, ps.hdc);
     NtStatus(1)
+}
+
+/// Les routines de NtUserCallHwnd demandées sans être implémentées.
+static UNSUPPORTED_HWND_ROUTINES: super::ClassReport = super::ClassReport::new("NtUserCallHwnd");
+
+/// NtUserCallHwnd(hWnd, Routine) : `HWND_ROUTINE_REGISTERSHELLHOOKWINDOW`
+/// et `HWND_ROUTINE_DEREGISTERSHELLHOOKWINDOW` (RegisterShellHookWindow,
+/// DeregisterShellHookWindow : `win32k::shellhook`), TRUE si c'est fait,
+/// FALSE pour une fenêtre qui n'existe pas. Une autre routine rend 0, avec
+/// `ERROR_CALL_NOT_IMPLEMENTED`, journalisée une fois.
+pub(super) fn nt_user_call_hwnd(arguments: &[u32]) -> NtStatus {
+    let [hwnd, routine] = arguments[..2] else { unreachable!("2 arguments") };
+    match routine {
+        abi::user::HWND_ROUTINE_REGISTERSHELLHOOKWINDOW => {
+            NtStatus(u32::from(win32k::window::get(hwnd).is_some_and(|window| win32k::shellhook::register(&window))))
+        }
+        abi::user::HWND_ROUTINE_DEREGISTERSHELLHOOKWINDOW => {
+            NtStatus(u32::from(win32k::window::get(hwnd).is_some() && win32k::shellhook::deregister(hwnd)))
+        }
+        _ => {
+            UNSUPPORTED_HWND_ROUTINES.report(routine);
+            let _ = win32k::set_last_error(abi::winerror::ERROR_CALL_NOT_IMPLEMENTED);
+            NtStatus(0)
+        }
+    }
+}
+
+/// Les routines de NtUserCallHwndOpt demandées sans être implémentées.
+static UNSUPPORTED_HWND_OPT_ROUTINES: super::ClassReport = super::ClassReport::new("NtUserCallHwndOpt");
+
+/// NtUserCallHwndOpt(hWnd, Routine) : `HWNDOPT_ROUTINE_SETTASKMANWINDOW` et
+/// `HWNDOPT_ROUTINE_SETPROGMANWINDOW` (SetTaskmanWindow, SetProgmanWindow) :
+/// `hWnd` va dans le `DESKTOPINFO` du bureau du thread courant
+/// (`win32k::desktop::Desktop::set_shell_helper_window`). Rend `hWnd`,
+/// comme ReactOS ; une autre routine est journalisée une fois.
+pub(super) fn nt_user_call_hwnd_opt(arguments: &[u32]) -> NtStatus {
+    let [hwnd, routine] = arguments[..2] else { unreachable!("2 arguments") };
+    let task_man = match routine {
+        abi::user::HWNDOPT_ROUTINE_SETTASKMANWINDOW => true,
+        abi::user::HWNDOPT_ROUTINE_SETPROGMANWINDOW => false,
+        _ => {
+            UNSUPPORTED_HWND_OPT_ROUTINES.report(routine);
+            return NtStatus(hwnd);
+        }
+    };
+    if let Some(desktop) = win32k::convert_current_thread().ok().and_then(|thread| thread.desktop()) {
+        let _ = desktop.desktop.set_shell_helper_window(task_man, hwnd);
+    }
+    NtStatus(hwnd)
 }
 
 /// Les routines de NtUserCallHwndLock demandées sans être implémentées.

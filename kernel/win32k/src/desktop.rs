@@ -248,6 +248,9 @@ pub struct Desktop {
     /// dwConsoleThreadId : le thread d'entrée des consoles de `consrv` sur
     /// ce bureau ; 0 sans lui.
     console_thread: AtomicU32,
+    /// ShellHookWindows : les fenêtres inscrites aux crochets du shell
+    /// (`crate::shellhook`).
+    pub shell_hooks: crate::shellhook::ShellHookWindows,
 }
 
 impl Desktop {
@@ -278,6 +281,42 @@ impl Desktop {
             self.heap.section.write_kernel(at + offset as u64, &value.to_le_bytes())?;
         }
         Ok(())
+    }
+
+    /// NtUserCallHwndOpt : SetTaskmanWindow (`task_man`) ou SetProgmanWindow
+    /// donne `hwnd` à son `DESKTOPINFO` (`hTaskManWindow`,
+    /// `hProgmanWindow`), où `user32` lit GetTaskmanWindow et
+    /// GetProgmanWindow.
+    ///
+    /// # Errors
+    /// Celles de l'écriture du tas.
+    ///
+    /// # IRQL
+    /// PASSIVE_LEVEL.
+    pub fn set_shell_helper_window(&self, task_man: bool, hwnd: u32) -> Result<(), NtStatus> {
+        let field = if task_man {
+            offset_of!(DeskInfoHead32, task_man_window)
+        } else {
+            offset_of!(DeskInfoHead32, progman_window)
+        };
+        let at = u64::from(self.desk_info) + field as u64;
+        self.heap.section.write_kernel(at, &hwnd.to_le_bytes())
+    }
+
+    /// GetTaskmanWindow (`task_man`) ou GetProgmanWindow : ce que son
+    /// `DESKTOPINFO` en tient ; 0 sans elle.
+    ///
+    /// # IRQL
+    /// PASSIVE_LEVEL.
+    pub fn shell_helper_window(&self, task_man: bool) -> u32 {
+        let field = if task_man {
+            offset_of!(DeskInfoHead32, task_man_window)
+        } else {
+            offset_of!(DeskInfoHead32, progman_window)
+        };
+        let mut hwnd = [0u8; 4];
+        let at = u64::from(self.desk_info) + field as u64;
+        self.heap.section.read_kernel(at, &mut hwnd).map_or(0, |()| u32::from_le_bytes(hwnd))
     }
 
     /// co_UserDestroyWindow : `hwnd`, détruite, n'est plus la fenêtre du
@@ -391,6 +430,7 @@ pub fn create(station: &Arc<Object<WindowStation>>, name: &str) -> Result<Arc<Ob
             window,
             message_window,
             console_thread: AtomicU32::new(0),
+            shell_hooks: crate::shellhook::ShellHookWindows::new(),
         },
     );
     station.add_desktop(Arc::downgrade(&desktop));

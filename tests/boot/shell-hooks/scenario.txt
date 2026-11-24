@@ -1,0 +1,40 @@
+# The shell hooks and the minimized windows of a shell (tests/native/shellhk1.c,
+# MinGW, linked to ReactOS's user32): SHELLHK1.EXE takes the place of
+# winlogon.exe. Explorer's taskbar showed no button: its task list registers
+# for the shell hooks (RegisterShellHookWindow; the registered message
+# "SHELLHOOK"), which win32k did not have; a minimized window went to the
+# bottom left, under the taskbar, as win32k did not take explorer's ARW_HIDE
+# (SPI_SETMINIMIZEDMETRICS). As ReactOS (desktop.c co_IntShellHookNotify,
+# IntRegisterShellHookWindow; winpos.c, window.c, focus.c UpdateShellHook;
+# simplecall.c; sysparams.c):
+# 1. RegisterShellHookWindow for another thread's window, SetTaskmanWindow;
+# 2. an application window shown: HSHELL_WINDOWCREATED, HSHELL_WINDOWACTIVATED;
+# 3. its title changed: HSHELL_REDRAW;
+# 4. hidden: HSHELL_WINDOWDESTROYED;
+# 5. a tool window, an owned window: nothing;
+# 6. destroyed: HSHELL_WINDOWDESTROYED;
+# 7. deregistered: nothing more;
+# 8. SPI_GET/SETMINIMIZEDMETRICS (SM_ARRANGE follows); with ARW_HIDE, a
+#    minimized window at (-32000, -32000).
+features = test-smss
+requires = userland, native
+initial-command = SHELLHK1.EXE
+cpus     = default, intel
+timeout  = 120
+
+expect = [shellhook] ready
+expect = [shellhook] step 1: RegisterShellHookWindow 1, SetTaskmanWindow 1, GetTaskmanWindow the listener 1
+expect = [shellhook] step 2: shown: created 1, activated 1
+expect = [shellhook] step 3: SetWindowText: redraw 1
+expect = [shellhook] step 4: hidden: destroyed 1
+expect = [shellhook] step 5: a tool window 0, an owned window 0
+expect = [shellhook] step 6: DestroyWindow: destroyed 1
+expect = [shellhook] step 7: DeregisterShellHookWindow 1, then 0 events
+expect = [shellhook] step 8: GET 1, arrange 0 (SM_ARRANGE 0); SET 1, read back 8 (SM_ARRANGE 8); minimized at (-32000, -32000)
+expect = [shellhook] done
+
+forbid = *** STOP:
+forbid = NtUserCallHwnd (0x113a) is not implemented
+forbid = NtUserCallHwndOpt (0x113c) is not implemented
+forbid = NtUserSystemParametersInfo class 0x2b is not implemented
+forbid = NtUserSystemParametersInfo class 0x2c is not implemented

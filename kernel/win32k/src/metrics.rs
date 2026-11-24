@@ -64,9 +64,9 @@ impl Parameters {
         minimized_horizontal_gap: 160,
         minimized_vertical_gap: 24,
         // ARW_BOTTOMLEFT | ARW_RIGHT: minimized windows at the bottom left,
-        // as on a system without a shell. ReactOS has ARW_HIDE, its
-        // explorer showing them in its taskbar (a shell asks for it by
-        // SPI_SETMINIMIZEDMETRICS, not yet).
+        // as on a system without a shell. ReactOS has ARW_HIDE; its
+        // explorer, which shows them in its taskbar, asks for it
+        // (SPI_SETMINIMIZEDMETRICS, `set_minimized_metrics`).
         minimized_arrange: 0,
         icon_horizontal_spacing: 64,
         icon_vertical_spacing: 64,
@@ -232,6 +232,43 @@ const fn rgb(r: u8, g: u8, b: u8) -> u32 {
     r as u32 | (g as u32) << 8 | (b as u32) << 16
 }
 
+/// Les paramètres en vigueur (`gspv`) : ceux par défaut, puis ce que
+/// SystemParametersInfo y change (MINIMIZEDMETRICS).
+static PARAMETERS: hal::sync::KSpinLock<Parameters> = hal::sync::KSpinLock::new(Parameters::DEFAULT);
+
+/// Les paramètres en vigueur.
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn parameters() -> Parameters {
+    *PARAMETERS.lock()
+}
+
+/// SPI_SETMINIMIZEDMETRICS : la largeur d'une fenêtre réduite, les écarts
+/// entre elles et leur disposition (`iArrange`, `ARW_*`), corrigés comme
+/// ReactOS (rien sous 0, `iArrange` sur 4 bits) ; les métriques qui en
+/// découlent (SM_CXMINIMIZED, SM_CXMINSPACING, SM_CYMINSPACING, SM_ARRANGE)
+/// sont réécrites, si elles l'ont déjà été.
+///
+/// # Errors
+/// Celles de l'écriture du `SERVERINFO`.
+///
+/// # IRQL
+/// PASSIVE_LEVEL.
+pub fn set_minimized_metrics(width: i32, horizontal_gap: i32, vertical_gap: i32, arrange: i32) -> Result<(), NtStatus> {
+    {
+        let mut parameters = PARAMETERS.lock();
+        parameters.minimized_width = width.max(0);
+        parameters.minimized_horizontal_gap = horizontal_gap.max(0);
+        parameters.minimized_vertical_gap = vertical_gap.max(0);
+        parameters.minimized_arrange = arrange & 0xF;
+    }
+    if METRICS.lock().is_none() {
+        return Ok(());
+    }
+    write_screen(get(sm::CXSCREEN), get(sm::CYSCREEN))
+}
+
 /// Les métriques en vigueur, une fois écrites (pour les calculs de
 /// win32k : bordures, zone cliente).
 static METRICS: hal::sync::KSpinLock<Option<[i32; SM_CMETRICS]>> = hal::sync::KSpinLock::new(None);
@@ -282,7 +319,7 @@ pub fn write() -> Result<(), NtStatus> {
 /// # IRQL
 /// PASSIVE_LEVEL.
 pub fn write_screen(width: i32, height: i32) -> Result<(), NtStatus> {
-    let metrics = system_metrics(width, height, &Parameters::DEFAULT);
+    let metrics = system_metrics(width, height, &parameters());
     let section = crate::shared::section().ok_or(STATUS_UNSUCCESSFUL)?;
     let at = u64::from(crate::shared::SERVER_INFO) + offset_of!(ServerInfo32, sys_met) as u64;
     let bytes: alloc::vec::Vec<u8> = metrics.iter().flat_map(|value| value.to_le_bytes()).collect();
