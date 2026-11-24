@@ -417,6 +417,52 @@ Scénario `thread-stack` (`tests/native/thrstk1.c`, AMD et Intel) :
 
 Sans le correctif (une mutation), les piles restent et le scénario échoue.
 
+## Une session sans fuite de pool (M7, le 2026-11-24)
+
+Le second critère du M7 : « une session complète (ouverture, travail, arrêt) se déroule sans erreur fatale ni
+fuite de pool mesurable ».
+
+**La mesure.** NtQuerySystemInformation(SystemPoolTagInformation, 22) rend ce que les pools tiennent sous chaque
+étiquette, comme ExGetPoolTagInfo : les blocs alloués et rendus depuis le démarrage, et les octets vivants, dans le
+pool paginé et le non paginé (`mm::pool::Pool::tag_records`, `mm::pool::merged_tags`, `abi::SystemPoolTag32`).
+Presque tout le noyau alloue par l'allocateur de Rust, sous « Rust ».
+
+Le scénario `session-work` (`tests/native/work1.c` comme shell d'`Administrator`) fait quatre tours de travail :
+- un fichier écrit ;
+- `cmd.exe /c copy` (un processus console) ;
+- `notepad.exe` qui l'ouvre, puis se ferme sur WM_CLOSE.
+
+Après chaque tour, il lit les pools une fois qu'ils ne bougent plus : trois lectures à 500 ms d'écart qui
+s'accordent. Ce qui finit après un processus a eu lieu à ce moment-là : les piles du *reaper*, le ménage de `csrss`
+pour un client mort, et les octets d'image que tenait la section de `notepad.exe` (344 Ko, qui allaient et venaient
+avec une attente fixe). Le premier tour remplit les caches. De la fin du tour 2 à celle du tour 4, les pools peuvent
+grandir de 256 octets au plus. Puis ExitWindowsEx arrête le système (`session-shutdown`).
+
+**Les fuites trouvées**, environ 49 Ko par tour au départ, chacune trouvée par des traces temporaires jamais
+commitées (le nombre d'objets de chaque type d'Ob, les allocations vivantes de Rust par taille, la pile d'appels
+des tailles qui grandissent, nommée par `llvm-nm`) :
+1. **La sonde du noyau gardait chaque processus créé.** C'est la sonde de `smss`, avec la feature `interactive`
+   (`ntoskrnl::userland::run_native`). Elle gardait chaque processus de la session, avec son jeton, jusqu'à sa
+   propre fin, donc jusqu'à l'arrêt : les objets Process et Token croissaient d'un par processus. Elle ne garde plus
+   que ses propres enfants (`csrss`, `winlogon`), les seuls dont elle rapporte la fin. Les images lancées à la main
+   (`cargo xtask image --apps`) y perdaient de la mémoire à chaque programme.
+2. **La section d'un client de `csrss` restait projetée chez lui.** À l'acceptation d'une connexion LPC, la section
+   du client est projetée chez le serveur (NtAcceptConnectPort) ; rien ne défaisait cette vue. Chaque client
+   laissait à `csrss` son segment de section, sa table de pages et ses pages. Le port de communication du serveur
+   défait maintenant la vue quand il disparaît (`lpc::Port::set_view_release`, LpcpDeletePort de ReactOS :
+   `ClientSectionBase`, `MappingProcess`).
+3. **La pile d'un thread fini** (la section précédente) : un nœud de VAD par console.
+
+Après les trois correctifs, les tours 2, 3 et 4 finissent sur le même total, octet pour octet, sur AMD et Intel
+(quatre runs).
+
+Vérifié par mutation : sans le filtre de la sonde, les pools grandissent de 97 368 octets ; sans la vue défaite, de
+1 984 ; le scénario échoue dans les deux cas. La pile a son propre scénario (`thread-stack`).
+
+**Vu, gardé comme ReactOS.** Le thread d'entrée des consoles de `consrv` ferme, en partant, le handle de son propre
+bureau. NtUserCloseDesktop le refuse (`ERROR_BUSY`), comme celui de ReactOS. Chaque console qui part laisse donc un
+handle de bureau chez `csrss`, sans croissance du pool mesurée sur quatre tours.
+
 ## La suite
 
 Le premier critère du M6 est atteint ; restent le changement de résolution (troisième critère : `bochs-dispi`,
