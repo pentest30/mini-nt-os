@@ -1,0 +1,26 @@
+# The stack of a finished thread is given back (tests/native/thrstk1.c,
+# MinGW, linked to ReactOS's kernel32): THRSTK1.EXE takes the place of
+# winlogon.exe. A thread that ends by ExitThread, or by returning, asks the
+# kernel to free its stack (TEB.FreeStackOnTermination, set by kernel32's
+# ExitThread and ntdll's RtlExitUserThread); Ps frees it from the TEB's
+# DeallocationStack before it deletes the TEB (PspExitThread). A thread
+# ended by TerminateThread keeps its stack, as on XP. Before, every thread
+# that ended in a process that lives on left its stack: its reservation,
+# its committed pages, a VAD node (csrss: one per console, the pool growth
+# the session-work scenario measured). MEM_FREE is 0x10000, MEM_RESERVE
+# 0x2000, MEM_COMMIT 0x1000.
+features = test-smss
+requires = userland, native
+initial-command = THRSTK1.EXE
+cpus     = default, intel
+timeout  = 120
+
+expect = [thrstk] started
+expect = [thrstk] step 1: a thread that returns 7: its stack 10000
+expect = [thrstk] step 2: a thread that calls ExitThread(8): its stack 10000
+expect = [thrstk] step 3: a thread ended by TerminateThread(9): its stack 1000
+expect = [thrstk] step 4: 20 threads that return: 20 stacks free
+expect = [thrstk] done
+
+forbid = *** STOP:
+forbid = [thrstk] FAIL

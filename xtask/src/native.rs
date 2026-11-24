@@ -118,6 +118,7 @@ const PROGRAMS: &[(&[&str], &str, Toolchain)] = &[
     (&["bmp16.c"], "BMP16.EXE", Toolchain::MinGwWin32),
     (&["priv1.c"], "PRIV1.EXE", Toolchain::MinGwWin32),
     (&["shutdn1.c"], "SHUTDN1.EXE", Toolchain::MinGwWin32),
+    (&["thrstk1.c"], "THRSTK1.EXE", Toolchain::MinGwWin32),
     (&["minoinit.c"], "MINOINIT.EXE", Toolchain::MinGwWin32),
 ];
 
