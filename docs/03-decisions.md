@@ -35,7 +35,7 @@ Pour changer une décision acceptée, on écrit une nouvelle ADR qui la remplace
 | 022 | FAT32 : crate partagée `fatfs` ; formatage et partitions servis par le noyau | **Proposée** (chantier d'installation) |
 | 023 | Premier démarrage en mode installation : couche Mino des ruches (`mino.inf`) et fin d'installation par un programme Mino | **Proposée** (scénario `logon`) |
 | 024 | Sections de fichiers : les pages d'une section de données lues à la faute, partagées par le segment du fichier | **Proposée** (scénarios `section-cache` et `folder-apps`) |
-| 025 | Direct3D : un ICD OpenGL Mesa llvmpipe construit pour XP depuis des sources épinglées, annoncé par le pilote d'affichage | **Proposée** (spike « ICD XP », scénario `d3d9-spike` jusqu'au triangle) |
+| 025 | Direct3D : un ICD OpenGL Mesa llvmpipe construit pour XP depuis des sources épinglées, annoncé par le pilote d'affichage | Acceptée |
 
 ---
 
@@ -495,6 +495,8 @@ scénarios qui chargent des images (`smss`, `logon`, `notepad`, `app-*`) ne rég
 ---
 
 ## ADR-025 — Direct3D : un ICD OpenGL Mesa llvmpipe construit pour XP depuis des sources épinglées, annoncé par le pilote d'affichage
+
+**Statut.** Acceptée par le mainteneur le 2026-11-24. Elle complète l'ADR-006 sans la remplacer.
 
 **Contexte.** L'ADR-006 fait passer Direct3D par la pile de ReactOS épinglé : `d3d8`, `d3d9` et `ddraw` de Wine,
 wined3d (`d3dwine.dll`), puis `opengl32`, dont le Mesa intégré rend en logiciel. Le spike du M8

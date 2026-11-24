@@ -140,7 +140,7 @@ M0 Assainir ─► M1 Ke ─► M2 Mm/Ob/Ps ─► M3 Frontière NT ─► M4 Io
 **But :** faire tourner le jeu de référence.
 
 - Pile Direct3D : wined3d puis Mesa en rendu logiciel (ADR-006), par un ICD Mesa llvmpipe construit pour XP
-  (ADR-025 proposée ; spike : [`compat/m8-direct3d.md`](compat/m8-direct3d.md)). Optimisation du moteur DIB et de
+  (ADR-025 ; spike : [`compat/m8-direct3d.md`](compat/m8-direct3d.md)). Optimisation du moteur DIB et de
   `StretchDIBits`.
 - Son : pilote HDA, et ADR à rédiger sur l'interface `winmm` et `dsound` (*kernel streaming* ou interface simplifiée).
 - DirectInput, timers haute résolution (`timeBeginPeriod(1)` réel).
