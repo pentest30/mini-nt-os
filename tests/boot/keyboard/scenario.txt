@@ -50,7 +50,11 @@ expect = [keys] sysdown 41 001e0001
 expect = [keys] sysup 41 c01e0001
 expect = [keys] SetFocus(window): before it, none
 expect = [keys] done
-expect = [m4] SMSS.EXE created winlogon.exe (PID 28): exit status 0x0000600d
+# KEYS1.EXE ends with its own status. Its PID is not fixed: the CID table
+# gives the last freed ID first, and csrss's first thread, which ends after
+# starting the server threads, frees its own just before.
+expect = [m4] SMSS.EXE created winlogon.exe (PID
+expect = ): exit status 0x0000600d
 forbid = *** STOP:
 forbid = sys: NtUserTranslateMessage (0x1235) is not implemented
 forbid = sys: NtUserGetKeyState (0x119f) is not implemented

@@ -1,5 +1,17 @@
 # Notes de passation
 
+- **Les scénarios `keyboard` et `display-desktop` réparés** (`claude/boot-scenarios`, sur `main` ; ils
+  échouaient sur `main` aussi, vus par la suite de démarrage de la PR 191). Rien à corriger dans le noyau.
+  `keyboard` figeait le PID de `KEYS1.EXE` à 28 : la table des CID redonne d'abord le dernier ID libéré
+  (`ps::cid`), et le thread initial de `csrss` se termine après avoir lancé ses threads serveurs (`csrss.c` de
+  ReactOS : « CSRSRV keeps us going ») : le programme reçoit son CID, 8. Le marqueur ne garde que le nom et le
+  code de fin. `display-desktop` attendait la ligne TRACE du listage du bureau (`Desktop\*.*`), que le filtre de
+  débogage n'imprime plus depuis la PR 155 (seul le niveau ERROR passe) : il prend la ligne de ReadDirectoryChangesW,
+  comme `logon` et `folder-view`. Vérifié : lint, les tests de `xtask`, `keyboard` (AMD, Intel),
+  `display-desktop` (AMD ; Intel au second run). Au premier run sous Intel, le journal s'arrête net après la commande
+  de la boîte Exécuter (`UrlApplySchemeW` de `shlwapi`, « stub ») : `control.exe` ne part pas, plus une ligne jusqu'au
+  délai. Sous AMD, la ligne suivante est ShellExecute (`shlexec.cpp`, « flags ignored »). **Suite** : ce blocage
+  d'Intel, une fois sur deux runs, à diagnostiquer (l'état des threads d'`explorer` à ce moment).
 - **L'interface de msiexec ne s'ouvrait pas** (`claude/null-instance-class`, sur `main` ; demandé le 2026-11-23 :
   le MSI de 7-Zip ouvert depuis l'explorateur dans VirtualBox ne montrait rien). `msiexec` (interface complète,
   niveau 5) échouait à chaque boîte (« Failed to create dialog "PrepareDlg" », `dll/win32/msi/dialog.c`) puis

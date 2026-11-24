@@ -25,8 +25,12 @@ cpus = default, intel
 timeout = 480
 
 expect = of explorer.exe
-expect = Documents and Settings\Administrator\Desktop\*.*
-keys = Documents and Settings\Administrator\Desktop\*.* => pause:15000 meta_l-r pause:6000 "control desk.cpl,,3" ret
+# The desktop is up once explorer watches the user's Desktop folder (its
+# ReadDirectoryChangesW error line, like `logon` and `folder-view`: the
+# TRACE line of its listing, Desktop\*.*, no longer prints since the debug
+# filter keeps the ERROR level only).
+expect = ReadDirectoryChangesW for 'C:\Documents and Settings\Administrator\Desktop'
+keys = ReadDirectoryChangesW for 'C:\Documents and Settings\Administrator\Desktop' => pause:15000 meta_l-r pause:6000 "control desk.cpl,,3" ret
 expect = of control.exe
 expect = of rundll32.exe
 keys = of rundll32.exe => pause:25000 alt-s home ret
