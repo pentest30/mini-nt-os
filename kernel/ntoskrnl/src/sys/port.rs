@@ -282,7 +282,8 @@ fn connect(
 /// `ConnectionRequest`, dont les données reviennent au client. Acceptée,
 /// l'appelant reçoit son port de communication, de contexte `PortContext`
 /// (son handle s'il est nul), la section du client est projetée chez lui et
-/// `ClientView` dit où ; le client attend NtCompleteConnectPort. Refusée, le
+/// `ClientView` dit où (la vue est défaite quand ce port disparaît :
+/// `lpc::Port::set_view_release`) ; le client attend NtCompleteConnectPort. Refusée, le
 /// client se réveille aussitôt, et rien n'est rendu. `STATUS_INVALID_CID`
 /// pour un client qui n'existe pas ; `STATUS_REPLY_MESSAGE_MISMATCH` s'il
 /// n'attend pas cette réponse de ce serveur.
@@ -320,6 +321,12 @@ pub(super) fn nt_accept_connect_port(arguments: &[u32]) -> NtStatus {
             return Ok(STATUS_SUCCESS);
         };
         let port = accepted.port.clone();
+        if let Some((base, _)) = accepted.client_view {
+            let process = super::current_process();
+            port.set_view_release(alloc::boxed::Box::new(move || {
+                let _ = process.with_space(|space| space.unmap_view(u64::from(base)));
+            }));
+        }
         let handle = insert_port(accepted.port)?;
         if context == 0 {
             port.set_context(handle.0);
