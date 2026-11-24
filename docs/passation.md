@@ -1,5 +1,26 @@
 # Notes de passation
 
+- **SPI_GETWORKAREA et SPI_SETWORKAREA : OpenOffice ouvre son Start Center** (`claude/spi-work-area`, M7,
+  [`compat/applications.md`](compat/applications.md#spi_getworkarea-openoffice-ouvrait-ses-fenêtres-hors-de-lécran-le-2026-11-23) ;
+  demandé le 2026-11-23, après les PR 181 et 182). Dans l'image VirtualBox, OpenOffice s'installe mais ne montre
+  rien, et chaque lancement reste vivant. Une trace temporaire de `soffice.bin` (noyau remplacé dans la partition EFI
+  du disque de la machine, jamais commitée) : SPI_GETWORKAREA (0x30) rendait FALSE, VCL centrait l'écran d'accueil
+  et l'assistant du premier démarrage dans un RECT non initialisé (x = 0x4E4F43C0) ; l'assistant attendait hors de
+  l'écran, et le lancement suivant attendait sa réponse par le tube d'OpenOffice. Fait comme ReactOS (SpiGet du
+  `rcWork` du moniteur principal) : `sys::user::nt_user_system_parameters_info`, `abi::user::SPI_GETWORKAREA`. Seul,
+  il faisait disparaître la barre des tâches (`logon` échouait) : le bureau du shell prenait tout l'écran, et le
+  détecteur d'applications en plein écran d'`explorer` passait la barre au fond de l'ordre Z. SPI_SETWORKAREA
+  (`win32k::monitor::set_work_area`, comme SpiSet) : la barre y réserve sa place ; avec SPIF_SENDCHANGE,
+  WM_SETTINGCHANGE aux fenêtres de premier niveau (`win32k::sent::broadcast`, 100 ms chacune, `lParam` nul ; le
+  bureau s'y redimensionne après un changement de résolution). Scénario `work-area` (`tests/native/workarea1.c`, AMD
+  et Intel) : sans le correctif, FALSE et le RECT intact ; sans l'envoi, la fenêtre d'un autre thread ne reçoit rien.
+  `folder-view` suit la zone de travail (la barre d'état remonte), `display-desktop` attend la ligne de
+  ReadDirectoryChangesW (il expirait sur main depuis la PR 155). Dans la machine (noyau des PR 181, 182 et de cette
+  branche), l'assistant puis le Start Center d'OpenOffice s'ouvrent, la barre des tâches visible. Vérifié : lint,
+  tests hôte, `work-area`, `display-desktop`, `display-mode`, `display-panel`, `logon`, `folder-view`. **Dettes** :
+  le `lParam` de WM_SETTINGCHANGE est nul (ReactOS passe « Control Panel\Desktop »). **Suite** : le bouton
+  d'OpenOffice dans la barre des tâches ; RpcSs, que `services.exe` ne démarre pas (FSCTL_PIPE_TRANSCEIVE manque) ; le
+  parcours d'OpenOffice (Writer).
 - **La fenêtre de PeaZip et sa fermeture** (`claude/peazip-window`, sur la PR 174, M7, le banc,
   [`compat/applications.md`](compat/applications.md#la-fenêtre-de-peazip-et-sa-fermeture-le-2026-11-23) ; demandé le
   2026-11-23). Rien à corriger dans Mino. Le gestionnaire se peint : la capture d'un scénario vient quand tous ses

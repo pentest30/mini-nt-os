@@ -858,6 +858,55 @@ symptôme contourné et maintenant expliqué. Son lancement par `-ext2folder` se
 ReactOS (`conutils` : initialiser le verrou même sans handle, ou ne pas écrire sur un flux qui n'a pas pu
 s'initialiser). Côté Mino, aucune tâche : un `cmd` corrigé viendrait avec un ReactOS épinglé plus récent.
 
+### SPI_GETWORKAREA : OpenOffice ouvrait ses fenêtres hors de l'écran, le 2026-11-23
+
+Avec les PR 181 et 182, dans l'image VirtualBox (`cargo xtask image --apps`), OpenOffice s'installe. Lancé, il ne
+montre rien : `soffice.exe` et `soffice.bin` restent vivants sans fenêtre (`win32k` ne journalise pas leur fin), et
+chaque nouveau lancement aussi ; le processeur est au repos. Une trace temporaire des services de `soffice.bin`
+(service, arguments, résultat ; le noyau remplacé dans la partition EFI du disque de la machine, l'installation
+gardée ; jamais commitée) montre :
+
+- le premier `soffice.bin` crée son écran d'accueil (551×366) puis l'assistant du premier démarrage (601×394), les
+  place par NtUserSetWindowPos en x = 0x4E4F43C0, y = 0x4E4F46CC, et en x = 0x50563CE8, les montre, et attend dans la
+  boucle de messages de l'assistant (NtUserGetMessage) ;
+- juste avant chaque placement, NtUserSystemParametersInfo(SPI_GETWORKAREA, 0x30) rendait FALSE (une action non
+  implémentée) : VCL centre ses fenêtres dans la zone de travail, et prenait son RECT non initialisé ;
+- le fil du tube d'OpenOffice accepte la demande du lancement suivant, mais ne la traite qu'une fois la boucle
+  principale prête (MsgWaitForMultipleObjects) ; le second `soffice.bin` a écrit ses arguments et attend la réponse
+  sans fin (NtReadFile en attente, puis NtWaitForSingleObject).
+
+Fait comme ReactOS (`sysparams.c`, UserSystemParametersInfo : le `rcWork` du moniteur principal, SpiGet) :
+`sys::user::nt_user_system_parameters_info` rend la zone de travail de `win32k::monitor::primary`, `uiParam` ignoré,
+FALSE pour un `pvParam` où l'on ne peut écrire.
+
+SPI_GETWORKAREA seul faisait disparaître la barre des tâches (scénario `logon`, et dans la machine dès l'arrivée
+d'OpenOffice) : le bureau du shell (`CDesktopBrowser::_Resize`) prend la zone de travail, qui restait l'écran entier
+faute de SPI_SETWORKAREA ; le détecteur d'applications en plein écran d'`explorer` (`taskswnd.cpp`, chaque seconde :
+une fenêtre visible qui couvre le moniteur, du thread au premier plan) le prenait pour l'une d'elles et passait la
+barre au fond de l'ordre Z (`SetWindowPos(HWND_BOTTOM)`), sous le bureau. Avant, le bureau recevait un RECT non
+initialisé et n'y tombait pas. SPI_SETWORKAREA fait comme ReactOS (SpiSet) : un rectangle non vide, entier dans le
+moniteur, devient son `rcWork` (`win32k::monitor::set_work_area`, `checked_work_area`) ; sinon FALSE, sans rien
+changer. La barre réserve sa place avant que le bureau soit créé (`explorer.cpp` : la barre d'abord). Après un
+changement de résolution, le bureau, encore grand comme l'ancien écran, couvrait le nouveau, et la barre disparaissait
+de nouveau (`display-desktop`, sur AMD) : comme ReactOS (co_IntSendMessageTimeout de HWND_BROADCAST), SPIF_SENDCHANGE
+envoie WM_SETTINGCHANGE (`wParam` SPI_SETWORKAREA) aux fenêtres de premier niveau du bureau de l'appelant, 100 ms au
+plus chacune, livré plus tard à celles qui tardent (`win32k::sent::broadcast`, que WM_DISPLAYCHANGE prend aussi), et
+le bureau s'y redimensionne (`CDesktopBrowser::OnSettingChange`). Son `lParam` est nul, ce que MSDN permet ; ReactOS
+passe « Control Panel\Desktop ». Un message à pointeur au `lParam` nul n'a rien à traduire : il va à un autre
+processus (`win32k::queue::carries_pointer`).
+
+Scénario `work-area` (`tests/native/workarea1.c`, AMD et Intel) : sans le correctif, FALSE et le RECT intact ; puis
+SPI_SETWORKAREA relu par SPI_GETWORKAREA et GetMonitorInfo, les rectangles vides ou hors de l'écran refusés,
+WM_SETTINGCHANGE reçu par la fenêtre d'un autre thread avec SPIF_SENDCHANGE seulement (sans l'envoi, le scénario
+échoue). `folder-view` : la fenêtre de dossier prend la zone de travail au-dessus de la barre, sa barre d'état
+remonte ; `display-desktop` attend la ligne de ReadDirectoryChangesW, comme `folder-view` (la ligne du listage du
+bureau ne s'imprime plus depuis la PR 155 : il expirait sur main). Dans la
+machine (le noyau des PR 181, 182 et de ce correctif dans la partition EFI de son disque), OpenOffice montre
+l'assistant du premier démarrage au centre de l'écran, puis son Start Center agrandi dans la zone de travail, la
+barre des tâches visible dessous. Restent : le bouton d'OpenOffice dans la barre des tâches, que rien n'y met ; le
+service RpcSs, que `services.exe` ne peut démarrer (TransactNamedPipe : FSCTL_PIPE_TRANSCEIVE, classe 5 de
+NtFsControlFile des tubes, manque).
+
 ### La suite
 
 **Mise à jour du 2026-11-20 : ProcessDebugPort** (`fix/ps-process-debug-port`).
