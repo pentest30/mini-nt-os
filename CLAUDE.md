@@ -605,7 +605,11 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   GetDIBits de 24 bits) et les DIB sections de 1 bit : PeaZip ouvre son gestionnaire et une archive ; scénario
   `bitmap-24`. Il ne se ferme pas seul : il attend un `cmd.exe` détaché sans handles standard, que le `cmd` de
   ReactOS fige à son premier message (`conutils` : le verrou d'un flux au handle nul n'est pas initialisé), un défaut
-  de ReactOS que le banc contourne en terminant PeaZip.
+  de ReactOS que le banc contourne en terminant PeaZip. Les polygones (`win32k::gdi::shape`, `win32k::gdi::polyfill` :
+  NtGdiPolyPolyDraw, Polygon et PolyPolygon remplis par lignes de balayage, ALTERNATE et WINDING, polylignes,
+  Bézier, CreatePolyPolygonRgn), les stylos de stock, le stylo et le mode de mélange des attributs du DC
+  (`dc::line_pen`, `dc::draw_modes`), NtGdiSetPixel : OpenOffice peint ses fonds par Polygon, et ne laisse plus de
+  traînées ; scénario `polygons` (`tests/native/poly1.c`).
   Suite : [`docs/passation.md`](docs/passation.md).
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.

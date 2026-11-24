@@ -858,6 +858,48 @@ symptôme contourné et maintenant expliqué. Son lancement par `-ext2folder` se
 ReactOS (`conutils` : initialiser le verrou même sans handle, ou ne pas écrire sur un flux qui n'a pas pu
 s'initialiser). Côté Mino, aucune tâche : un `cmd` corrigé viendrait avec un ReactOS épinglé plus récent.
 
+### Les polygones : les traînées d'OpenOffice, le 2026-11-24
+
+**Le constat** (machine VirtualBox, Apache OpenOffice 4.1.17 installé) : déplacer une fenêtre d'OpenOffice laisse des
+traînées, et un menu fermé reste peint à l'écran.
+
+**Le diagnostic** (QEMU sur une copie du disque de la machine, une trace temporaire des appels de `soffice.bin`).
+Le menu de la fenêtre ouvert par Alt+Espace puis fermé par Échap : OpenOffice repeint la zone découverte
+(GetUpdateRect, BeginPaint, EndPaint), puis peint le fond de son centre de démarrage, un dégradé, par bandes : pour
+chacune NtGdiCreateSolidBrush et NtGdiPolyPolyDraw (Polygon, une figure), sans handler, qui rendait 0. Rien n'était
+peint : ce que le menu, ou la fenêtre avant son déplacement, avait laissé restait. VCL dessine ses formes avec
+NULL_PEN, et NtGdiGetStockObject(NULL_PEN) rendait 0 (pas de stylos de stock). Deux points écartés : le DC propre
+d'une fenêtre (CS_OWNDC, que win32k remplace par un DC du cache) n'y est pour rien (une fenêtre CS_OWNDC déplacée
+par pas, peinte par son DC gardé, ne laisse rien) ; et il faut deux Échap pour quitter le menu de la fenêtre ouvert
+au clavier, comme sous XP (MENU_KeyEscape : le premier ferme le menu déroulant, la barre reste en mode menu).
+
+**Le changement** (`fillshap.c`, `polyfill.c`, `line.c` de ReactOS comme spécification) :
+
+- NtGdiPolyPolyDraw (`win32k::gdi::shape`) et ses six fonctions : Polygon et PolyPolygon (le pinceau du DC, puis le
+  contour fermé du stylo), Polyline et PolyPolyline, PolylineTo, PolyBezier et PolyBezierTo (la position courante),
+  CreatePolygonRgn et CreatePolyPolygonRgn (la région, coupée à ±32767) ;
+- le remplissage (`win32k::gdi::polyfill`) : un pixel est dedans quand son centre l'est, la règle des régions de
+  GDI, si bien que des bandes voisines se pavent sans trou ni recouvrement (ReactOS suit les arêtes par Bresenham) ;
+  les figures d'un PolyPolygon ensemble, selon `lFillMode` (ALTERNATE : un trou reste vide ; WINDING), là où
+  ReactOS remplit chaque figure à part et lit `jFillMode`, que `gdi32` n'écrit pas ;
+- les stylos de stock (WHITE_PEN, BLACK_PEN, NULL_PEN ; BLACK_PEN dans un DC neuf) et le stylo des attributs du DC
+  (DC_vUpdateLineBrush, `dc::line_pen`) : SelectObject de `gdi32` y écrit le stylo sans appeler le noyau, et LineTo
+  traçait toujours en noir ;
+- le mode de mélange des attributs (`jROP2`, `dc::draw_modes`) pour le remplissage et les traits : R2_NOT inverse,
+  comme VCL le fait pour ses cadres ;
+- LineTo et Rectangle comme ReactOS : un trait s'arrête avant son dernier pixel (IntEngLineTo), Rectangle remplit
+  sans sa colonne de droite ni sa ligne du bas, son contour du stylo du DC, rien pour un stylo nul ;
+- la couleur d'un trait dans l'ordre d'octets de la surface : un stylo rouge traçait en bleu sur l'écran et les DIB
+  sections de 32 bits ;
+- NtGdiSetPixel, par lequel VCL finit ses traits (SetPixelV).
+
+Scénario `polygons` (`tests/native/poly1.c`, AMD et Intel) : les étapes de GDI sur une DIB section, puis une fenêtre
+peinte par bandes de Polygon, un menu montré par-dessus puis détruit : l'écran montre de nouveau les bandes.
+
+**Pas encore** : ExtCreateRegion (VCL se replie sur CreateRectRgn et CombineRgn), les chemins (BeginPath, EndPath,
+PathToRegion, SelectClipPath), les ellipses, SetDIBitsToDevice, GetTransform, le DC propre d'une fenêtre ou de sa
+classe.
+
 ### La suite
 
 **Mise à jour du 2026-11-20 : ProcessDebugPort** (`fix/ps-process-debug-port`).
