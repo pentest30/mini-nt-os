@@ -21,7 +21,8 @@
 //! Pas encore : les pinceaux hachurés, le motif du bitmap d'un pinceau à
 //! motif d'un client (sa couleur de repli le peint), le pinceau du DC
 //! (`DC_BRUSH`), le cache de pinceaux du PEB, les autres objets de stock
-//! (stylos, palette), un changement des couleurs du système (SetSysColors).
+//! (palette, `DC_PEN`), un changement des couleurs du système (SetSysColors).
+//! Les stylos de stock sont créés avec eux (`super::pen::STOCK_PENS`).
 
 use alloc::sync::Arc;
 use core::mem::offset_of;
@@ -142,6 +143,9 @@ pub fn init(colors: &[u32; NUM_SYSCOLORS]) -> Result<(), NtStatus> {
     let mut objects = [0; stock::COUNT];
     for (slot, brush) in objects.iter_mut().zip(STOCK_BRUSHES) {
         *slot = create_stock(brush)?;
+    }
+    for (index, pen) in super::pen::STOCK_PENS {
+        objects[index] = super::pen::create_stock(pen)?;
     }
     for (index, logfont) in super::fontobj::stock_fonts() {
         objects[index] = super::fontobj::create_stock(logfont)?;

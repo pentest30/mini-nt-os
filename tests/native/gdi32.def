@@ -50,3 +50,14 @@ GetCurrentPositionEx@8
 MoveToEx@16
 RestoreDC@8
 SaveDC@4
+CreatePen@12
+CreatePolygonRgn@12
+LineTo@12
+PolyBezier@12
+PolyPolygon@16
+Polygon@12
+Polyline@12
+PolylineTo@12
+SetPixel@16
+SetPolyFillMode@8
+SetROP2@8

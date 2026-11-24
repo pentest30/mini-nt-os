@@ -337,6 +337,17 @@ pub fn brush(handle: u32, pid: u32) -> Option<Arc<Brush>> {
     }
 }
 
+/// Le stylo de `handle`, s'il est au processus `pid` ou public.
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn pen(handle: u32, pid: u32) -> Option<Arc<super::pen::Pen>> {
+    match get(handle, pid)? {
+        Object::Pen(pen) => Some(pen),
+        _ => None,
+    }
+}
+
 /// L'objet de `handle` et son propriétaire, quel qu'il soit
 /// (GreGetObjectOwner).
 ///

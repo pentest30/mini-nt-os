@@ -248,12 +248,37 @@ impl<'a> Bitmap<'a> {
     /// points sous le verrou de la surface quand les coordonnées sont
     /// absurdes (un LOGFONT jamais rempli).
     pub fn draw_line(&mut self, from: (i32, i32), to: (i32, i32), pen: &super::pen::Pen, clip: &[Rect]) {
+        self.stroke(from, to, pen, PATCOPY, true, clip);
+    }
+
+    /// IntEngLineTo : le trait de [`draw_line`](Self::draw_line), sans son
+    /// dernier pixel (LineTo, le contour d'un polygone : un sommet partagé
+    /// n'est pas dessiné deux fois), chaque pixel mélangé à la surface par
+    /// le mode `rop2` (R2_COPYPEN … : [`rop3_of_rop2`]).
+    pub fn draw_segment(&mut self, from: (i32, i32), to: (i32, i32), pen: &super::pen::Pen, rop2: u8, clip: &[Rect]) {
+        self.stroke(from, to, pen, rop3_of_rop2(rop2), false, clip);
+    }
+
+    /// Le trait de `from` à `to` (avec son dernier pixel si `with_end`),
+    /// chaque pixel posé par le ROP3 sans source `rop3`.
+    fn stroke(
+        &mut self,
+        from: (i32, i32),
+        to: (i32, i32),
+        pen: &super::pen::Pen,
+        rop3: u8,
+        with_end: bool,
+        clip: &[Rect],
+    ) {
         use super::pen::{PS_NULL, PS_SOLID};
         if pen.style == PS_NULL || clip.is_empty() {
             return;
         }
         let thickness = self.line_thickness(pen.width);
         let steps = u64::from(from.0.abs_diff(to.0).max(from.1.abs_diff(to.1)));
+        if !with_end && steps == 0 {
+            return;
+        }
         let (first, last) = if steps > u64::from(MAX_UNCUT_LINE) {
             let reach = clip.iter().skip(1).fold(clip[0], |all, part| all.union(part));
             match cut_steps(from, to, reach, thickness) {
@@ -263,6 +288,12 @@ impl<'a> Bitmap<'a> {
         } else {
             (0, steps)
         };
+        // Sans son dernier pixel : un pas de moins (il en a un au moins).
+        let last = if with_end { last } else { last.min(steps - 1) };
+        if first > last {
+            return;
+        }
+        let pixel = self.layout.pixel(pen.color);
         let mut walk = LineWalk::at(from, to, first);
         // Le pas des pointillés : un pixel dessiné, un sauté, comptés depuis
         // le début du trait.
@@ -273,7 +304,7 @@ impl<'a> Bitmap<'a> {
             if !dotted || step.is_multiple_of(2) {
                 if let (Ok(x), Ok(y)) = (i32::try_from(walk.x), i32::try_from(walk.y)) {
                     if clip.iter().any(|part| part.contains(x, y)) {
-                        self.set_line_pixel(x, y, pen.color, thickness, walk.sx as i32, walk.sy as i32);
+                        self.set_line_pixel(x, y, pixel, rop3, thickness, walk.sx as i32, walk.sy as i32);
                     }
                 }
             }
@@ -295,13 +326,26 @@ impl<'a> Bitmap<'a> {
     }
 
     /// Le pixel épais d'un trait : `(x, y)` et ses voisins perpendiculaires,
-    /// hors du négatif.
-    fn set_line_pixel(&mut self, x: i32, y: i32, color: ColorRef, thickness: i32, sx: i32, sy: i32) {
+    /// hors du négatif, chacun prenant `pixel` (déjà dans l'ordre d'octets
+    /// de la surface) par le ROP3 sans source `rop3`.
+    #[expect(clippy::too_many_arguments, reason = "a pixel of a line: where, what, how, and the line's direction")]
+    fn set_line_pixel(&mut self, x: i32, y: i32, pixel: u32, rop3: u8, thickness: i32, sx: i32, sy: i32) {
         for at in 0..thickness {
             let (ox, oy) = (x + sy * at, y - sx * at);
             if ox >= 0 && oy >= 0 {
-                self.set_pixel(ox as u32, oy as u32, color.0);
+                self.mix_pixel(ox as u32, oy as u32, pixel, rop3);
             }
+        }
+    }
+
+    /// Le pixel (`x`, `y`), s'il est sur la surface, prend `pattern` par le
+    /// ROP3 sans source `rop3` (PATCOPY : `pattern` tel quel).
+    pub fn mix_pixel(&mut self, x: u32, y: u32, pattern: u32, rop3: u8) {
+        if x < self.width && y < self.height {
+            let at = self.row(y) + x as usize;
+            let pixel = &mut self.pixels[at];
+            // The unused byte stays zero.
+            *pixel = if rop3 == PATCOPY { pattern } else { rop3_without_source(rop3, pattern, *pixel) & 0x00FF_FFFF };
         }
     }
 
@@ -471,6 +515,24 @@ pub const fn rop3_without_source(rop3: u8, pattern: u32, dest: u32) -> u32 {
     out
 }
 
+/// Le ROP3 sans source d'un mode de mélange de SetROP2 (`rop2`, de R2_BLACK
+/// à R2_WHITE ; un autre, R2_COPYPEN) : les quatre bits du ROP2 (le résultat
+/// pour chaque couple stylo, destination), la source ignorée. R2_COPYPEN
+/// donne PATCOPY, R2_XORPEN PATINVERT, R2_NOT DSTINVERT.
+pub fn rop3_of_rop2(rop2: u8) -> u8 {
+    if !(abi::gdi::R2_BLACK..=abi::gdi::R2_WHITE).contains(&rop2) {
+        return PATCOPY;
+    }
+    let table = rop2 - 1;
+    let mut rop3 = 0;
+    for (pen, source, dest) in (0..8).map(|index| ((index >> 2) & 1, (index >> 1) & 1, index & 1)) {
+        if (table >> (pen * 2 + dest)) & 1 != 0 {
+            rop3 |= 1 << (pen * 4 + source * 2 + dest);
+        }
+    }
+    rop3
+}
+
 /// La longueur (en pas, sur l'axe le plus long) au-delà de laquelle
 /// [`Bitmap::draw_line`] ne parcourt que les pas d'un trait qui peuvent
 /// atteindre sa région ; en deçà, il les parcourt tous.
@@ -615,6 +677,50 @@ mod tests {
         Bitmap::new(&mut near, 16, 16, 16, PixelLayout::Bgrx).unwrap().draw_line((0, 0), (15, 15), &white, &all);
         assert_eq!(far, near);
         assert_eq!(cut_steps((-50_000, 40), (50_000, 40), Rect::new(0, 0, 16, 16), 1), None, "below it");
+    }
+
+    #[test]
+    fn the_mix_modes_are_rop3_without_a_source() {
+        use abi::gdi::{R2_BLACK, R2_COPYPEN, R2_NOT, R2_WHITE, R2_XORPEN};
+        assert_eq!(rop3_of_rop2(R2_COPYPEN), 0xF0, "PATCOPY");
+        assert_eq!(rop3_of_rop2(R2_XORPEN), 0x5A, "PATINVERT");
+        assert_eq!(rop3_of_rop2(R2_NOT), 0x55, "DSTINVERT");
+        assert_eq!((rop3_of_rop2(R2_BLACK), rop3_of_rop2(R2_WHITE)), (0x00, 0xFF), "BLACKNESS, WHITENESS");
+        assert_eq!(rop3_of_rop2(11), 0xAA, "R2_NOP: the destination");
+        assert_eq!((rop3_of_rop2(0), rop3_of_rop2(17)), (0xF0, 0xF0), "out of range: R2_COPYPEN");
+    }
+
+    #[test]
+    fn a_segment_stops_before_its_last_pixel_and_mixes_by_its_mode() {
+        let pen = super::super::pen::Pen::BLACK;
+        let all = [Rect::new(0, 0, 16, 16)];
+        let mut pixels = alloc::vec![0x0012_3456u32; 16 * 16];
+        {
+            let mut bitmap = Bitmap::new(&mut pixels, 16, 16, 16, PixelLayout::Bgrx).unwrap();
+            bitmap.draw_segment((2, 3), (8, 3), &pen, abi::gdi::R2_NOT, &all);
+            // A point: nothing (LineTo to where it is).
+            bitmap.draw_segment((5, 9), (5, 9), &pen, abi::gdi::R2_NOT, &all);
+        }
+        let row: alloc::vec::Vec<u32> = pixels[3 * 16..4 * 16].to_vec();
+        assert!(row[2..8].iter().all(|&p| p == 0x00ED_CBA9), "inverted, from 2 to 7");
+        assert_eq!((row[1], row[8]), (0x0012_3456, 0x0012_3456), "not the last pixel");
+        assert_eq!(pixels[9 * 16 + 5], 0x0012_3456, "a point draws nothing");
+    }
+
+    #[test]
+    fn a_line_takes_its_pen_s_colour_in_the_surface_s_order() {
+        // A red pen (COLORREF 0x0000FF): red on both layouts, not blue.
+        let red = super::super::pen::Pen { color: ColorRef::rgb(255, 0, 0), ..super::super::pen::Pen::BLACK };
+        for layout in [PixelLayout::Bgrx, PixelLayout::Rgbx] {
+            let mut pixels = alloc::vec![0u32; 16 * 16];
+            Bitmap::new(&mut pixels, 16, 16, 16, layout).unwrap().draw_line(
+                (0, 0),
+                (4, 0),
+                &red,
+                &[Rect::new(0, 0, 16, 16)],
+            );
+            assert_eq!(layout.color(pixels[2]), ColorRef::rgb(255, 0, 0), "{layout:?}");
+        }
     }
 
     #[test]
