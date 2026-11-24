@@ -1,6 +1,6 @@
 # Notes de passation
 
-- **Une session sans fuite de pool : le second critère du M7** (`claude/pool-measure`, sur la PR de la pile d'un
+- **Une session sans fuite de pool : le second critère du M7** (`claude/pool-measure`, sur la PR 186, la pile d'un
   thread fini ; [`compat/m6-logon.md`](compat/m6-logon.md#une-session-sans-fuite-de-pool-m7-le-2026-11-24) ; demandé
   le 2026-11-23). NtQuerySystemInformation(SystemPoolTagInformation, 22) : ce que chaque étiquette tient dans les
   pools (`mm::pool::Pool::tag_records`, les totaux alloués et rendus ; `mm::pool::merged_tags`). Scénario
