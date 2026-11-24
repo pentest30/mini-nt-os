@@ -77,6 +77,54 @@ pub(super) fn nt_gdi_rectangle(arguments: &[u32]) -> NtStatus {
     }
 }
 
+/// NtGdiDescribePixelFormat(hdc, ipfd, cjpfd, ppfd) : comme ReactOS
+/// (`wingl.c`), le nombre de formats de pixel que décrit le pilote
+/// d'affichage (DrvDescribePixelFormat). Celui de Mino (`gopfb`) n'en décrit
+/// aucun, comme le framebuffer de ReactOS : 0. `opengl32` le demande à chaque
+/// ICD chargé, pour savoir si win32k fait l'OpenGL à sa place (non : l'ICD le
+/// fait). 0 sans erreur pour `ppfd` nul et `cjpfd` non nul, 0 et
+/// `ERROR_INVALID_HANDLE` pour un DC qui n'est pas au processus.
+pub(super) fn nt_gdi_describe_pixel_format(arguments: &[u32]) -> NtStatus {
+    let [hdc, _ipfd, cjpfd, ppfd] = arguments[..4] else { unreachable!("4 arguments") };
+    if ppfd == 0 && cjpfd != 0 {
+        return NtStatus(0);
+    }
+    if win32k::gdi::dc::kind_and_save_depth(hdc).is_none() {
+        return fail(ERROR_INVALID_HANDLE, 0);
+    }
+    NtStatus(0)
+}
+
+/// NtGdiSetPixelFormat(hdc, ipfd) : comme ReactOS, le format `ipfd` posé par
+/// le pilote d'affichage (DrvSetPixelFormat) ; aucun n'est décrit (voir
+/// [`nt_gdi_describe_pixel_format`]), donc FALSE et
+/// `ERROR_INVALID_PARAMETER`, ou `ERROR_INVALID_HANDLE` pour un DC qui n'est
+/// pas au processus. Le format d'une fenêtre que rend GetPixelFormat est
+/// gardé par `opengl32`, pas par win32k.
+pub(super) fn nt_gdi_set_pixel_format(arguments: &[u32]) -> NtStatus {
+    let [hdc, _ipfd] = arguments[..2] else { unreachable!("2 arguments") };
+    if win32k::gdi::dc::kind_and_save_depth(hdc).is_none() {
+        return fail(ERROR_INVALID_HANDLE, 0);
+    }
+    fail(ERROR_INVALID_PARAMETER, 0)
+}
+
+/// NtGdiSwapBuffers(hdc) : comme ReactOS, l'échange fait par le pilote
+/// d'affichage (DrvSwapBuffers) sur le WNDOBJ de la fenêtre, que seul un
+/// pilote OpenGL crée : FALSE, `ERROR_INVALID_WINDOW_STYLE` pour un DC qui
+/// n'est pas d'une fenêtre, `ERROR_INVALID_PIXEL_FORMAT` sinon,
+/// `ERROR_INVALID_HANDLE` pour un DC qui n'est pas au processus.
+pub(super) fn nt_gdi_swap_buffers(arguments: &[u32]) -> NtStatus {
+    let [hdc] = arguments[..1] else { unreachable!("1 argument") };
+    if win32k::gdi::dc::kind_and_save_depth(hdc).is_none() {
+        return fail(ERROR_INVALID_HANDLE, 0);
+    }
+    if win32k::dce::window_from_dc(hdc) == 0 {
+        return fail(abi::winerror::ERROR_INVALID_WINDOW_STYLE, 0);
+    }
+    fail(abi::winerror::ERROR_INVALID_PIXEL_FORMAT, 0)
+}
+
 /// Les index de NtGdiGetDCDword demandés sans être servis.
 static UNSUPPORTED_DC_DWORDS: super::ClassReport = super::ClassReport::new("NtGdiGetDCDword");
 

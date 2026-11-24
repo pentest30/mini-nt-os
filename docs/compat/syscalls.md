@@ -9,7 +9,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | Table | Implémentés | Services |
 |---|---:|---:|
 | ntoskrnl | 137 | 296 |
-| win32k | 225 | 737 |
+| win32k | 228 | 737 |
 
 ## ntoskrnl
 
@@ -439,7 +439,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1078` | `NtGdiDeleteColorSpace` | 1 |  |
 | `0x1079` | `NtGdiDeleteColorTransform` | 2 |  |
 | `0x107a` | `NtGdiDeleteObjectApp` | 1 | ✅ |
-| `0x107b` | `NtGdiDescribePixelFormat` | 4 |  |
+| `0x107b` | `NtGdiDescribePixelFormat` | 4 | ✅ |
 | `0x107c` | `NtGdiGetPerBandInfo` | 2 |  |
 | `0x107d` | `NtGdiDoBanding` | 4 |  |
 | `0x107e` | `NtGdiDoPalette` | 6 |  |
@@ -598,7 +598,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1117` | `NtGdiMirrorWindowOrg` | 1 |  |
 | `0x1118` | `NtGdiSetLayout` | 3 |  |
 | `0x1119` | `NtGdiSetPixel` | 4 |  |
-| `0x111a` | `NtGdiSetPixelFormat` | 2 |  |
+| `0x111a` | `NtGdiSetPixelFormat` | 2 | ✅ |
 | `0x111b` | `NtGdiSetRectRgn` | 5 |  |
 | `0x111c` | `NtGdiSetSystemPaletteUse` | 2 |  |
 | `0x111d` | `NtGdiSetTextJustification` | 3 |  |
@@ -611,7 +611,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1124` | `NtGdiStretchDIBitsInternal` | 16 | ✅ |
 | `0x1125` | `NtGdiStrokeAndFillPath` | 1 |  |
 | `0x1126` | `NtGdiStrokePath` | 1 |  |
-| `0x1127` | `NtGdiSwapBuffers` | 1 |  |
+| `0x1127` | `NtGdiSwapBuffers` | 1 | ✅ |
 | `0x1128` | `NtGdiTransformPoints` | 5 | ✅ |
 | `0x1129` | `NtGdiTransparentBlt` | 11 | ✅ |
 | `0x112a` | `NtGdiUnloadPrinterDriver` | 2 |  |

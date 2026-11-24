@@ -84,6 +84,40 @@ DWORD WINAPI GuiStartup(void)
                          pfd.cColorBits, pfd.cDepthBits);
         }
         DbgPrint(TAG "generic formats: %d of %d\n", generic, count);
+
+        /* What win32k says of pixel formats (gdi32's direct exports, which
+           opengl32 calls after loading an ICD): the display driver describes
+           none, so neither sets nor swaps. */
+        {
+            typedef INT(WINAPI * DescribeFn)(HDC, INT, UINT, PIXELFORMATDESCRIPTOR *);
+            typedef BOOL(WINAPI * SetFn)(HDC, INT);
+            typedef BOOL(WINAPI * SwapFn)(HDC);
+            HMODULE gdi = GetModuleHandleW(L"gdi32.dll");
+            DescribeFn describe = (DescribeFn)(void *)GetProcAddress(gdi, "GdiDescribePixelFormat");
+            SetFn set = (SetFn)(void *)GetProcAddress(gdi, "GdiSetPixelFormat");
+            SwapFn swap = (SwapFn)(void *)GetProcAddress(gdi, "GdiSwapBuffers");
+            int described;
+            BOOL done;
+            SetLastError(0);
+            described = describe(dc, 0, 0, 0);
+            DbgPrint(TAG "GdiDescribePixelFormat: %d, error %lu\n", described, GetLastError());
+            SetLastError(0);
+            done = set(dc, 1);
+            DbgPrint(TAG "GdiSetPixelFormat: %d, error %lu\n", done, GetLastError());
+            SetLastError(0);
+            done = swap(dc);
+            DbgPrint(TAG "GdiSwapBuffers: %d, error %lu\n", done, GetLastError());
+            {
+                HDC memory = CreateCompatibleDC(dc);
+                SetLastError(0);
+                done = swap(memory);
+                DbgPrint(TAG "GdiSwapBuffers of a memory DC: %d, error %lu\n", done, GetLastError());
+                DeleteDC(memory);
+            }
+            SetLastError(0);
+            described = describe((HDC)0x01010101, 0, 0, 0);
+            DbgPrint(TAG "GdiDescribePixelFormat of no DC: %d, error %lu\n", described, GetLastError());
+        }
         ReleaseDC(hwnd, dc);
     }
 
