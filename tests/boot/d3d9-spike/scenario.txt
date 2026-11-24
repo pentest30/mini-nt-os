@@ -1,0 +1,25 @@
+# M8 spike: a Direct3D 9 triangle (tests/native/d3d1.c) through the pinned
+# ReactOS stack: d3d9, Wine's wined3d (d3dwine.dll), opengl32.dll's Mesa
+# software renderer (docs/compat/m8-direct3d.md). What works today, a floor:
+# wined3d makes its hidden window (a class found from a null instance) and a
+# GL context on it (WindowFromDC, NtGdiGetDCDword(GdiGetIsMemDc)), reads the
+# GL renderer, then finds no pixel format it keeps: all 36 formats of the
+# pinned opengl32 are PFD_GENERIC_FORMAT, which wined3d refuses without
+# WGL_ARB_pixel_format, and Direct3DCreate9 returns NULL. The next step needs
+# a decision (an OpenGL ICD; see the doc).
+features = test-smss, interactive
+requires = userland, native
+initial-command = D3D1.EXE
+cpus = default
+timeout = 300
+expect = [d3d] the probe starts
+expect = [d3d] DescribePixelFormat: 36 formats
+expect = [d3d] generic formats: 36 of 36
+expect = using GL_RENDERER "Mesa ReactOS SW Implementation"
+expect = [d3d] the probe ends
+forbid = Failed to create a window.
+forbid = Failed to find a suitable pixel format.
+forbid = NtGdiGetDCDword (0x10a6) is not implemented
+forbid = NtUserCallOneParam class 0x1f is not implemented
+forbid = LdrpMapDll failed
+forbid = *** STOP:
