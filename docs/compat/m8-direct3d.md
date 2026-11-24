@@ -70,19 +70,35 @@ sonde écrivant les clés de `openglcfg.cpl` (`HKCU\SOFTWARE\ReactOS\OpenGL` = `
 - **La voie marche** : `opengl32` lit la clé (« Overriding the default OGL ICD with MesaSW »), charge l'ICD (ses
   `api-ms-win-*` redirigés vers `kernel32` par ApiSetResolveToHost), DescribePixelFormat donne 84 formats dont 48 non
   génériques, et wined3d lit `GL_RENDERER` « Gallium 0.4 on llvmpipe (LLVM 3.9, 128 bits) ».
-- **Puis l'ICD lit un pointeur nul** (0xC0000005 en `opengl32sw+0x336414`, la lecture de `[[ebx+0x10]+4]`) : la
-  structure du format de pixel de la fenêtre est vide. Mesa importe SetPixelFormat et GetPixelFormat de `gdi32`, et
-  chez ReactOS comme chez NT c'est le noyau qui garde le format de pixel d'une fenêtre : **NtGdiSetPixelFormat,
-  NtGdiGetPixelFormat et NtGdiDescribePixelFormat n'ont pas de handler dans Mino** (le dernier est journalisé pendant
-  l'essai). C'est le prochain travail côté Mino, borné : win32k garde le format de chaque fenêtre et le rend.
+- **Puis l'ICD lit un pointeur nul** (0xC0000005 en `opengl32sw+0x336414`, `[[ebx+0x10]+4]`), dans un parcours
+  de l'arbre du compilateur GLSL de Mesa (un nœud dont le type est nul) que wined3d déclenche en préparant ses shaders.
+  **Ce n'est pas un manque de Mino.** La DLL, construite par MSVC pour Vista, a une TLS implicite (section `.tls`,
+  39 accès par `fs:[0x2C]` et `_tls_index`) : l'état de ses statiques locales initialisées une fois (« magic
+  statics » de MSVC, dont les types GLSL) y vit. Le chargeur d'XP — et `ntdll` de ReactOS épinglé
+  (`LdrpAllocateTls` seulement au démarrage du processus) — n'alloue pas de TLS implicite à une DLL chargée par
+  LoadLibrary, ce que fait `opengl32` ; Vista le fait. `_tls_index` vaut 0, l'état lu est celui du bloc TLS de
+  l'exécutable, une statique passe pour initialisée et reste nulle.
+- **Vérifié** : quand la sonde importe l'ICD (chargé au démarrage du processus, sa TLS allouée par le chargeur, et
+  `opengl32` le retrouvant par son nom), tout passe — Direct3DCreate9, GetDeviceCaps (shaders 3.0), CreateDevice(HAL),
+  Clear, DrawPrimitiveUP, Present — et **le triangle rouge sur fond bleu s'affiche** (capture du 2026-11-24). Les
+  seuls services sans handler sur ce chemin étaient NtGdiGetDeviceGammaRamp (wined3d s'en passe) et ceux du
+  format de pixel, faits depuis (ci-dessous).
+- **NtGdiDescribePixelFormat, NtGdiSetPixelFormat et NtGdiSwapBuffers** : `opengl32` demande à chaque ICD chargé
+  (`IntGetIcdData`, `icdload.c`) si win32k fait l'OpenGL à sa place (GdiDescribePixelFormat). Chez ReactOS, ils
+  passent au pilote d'affichage (DrvDescribePixelFormat…), que le framebuffer n'a pas : aucun format, rien à poser
+  ni à échanger. Faits ainsi dans Mino (`sys::gdi`) ; le format de pixel d'une fenêtre est gardé par `opengl32`
+  (`wgl_dc_data`) et par l'ICD, pas par win32k.
 
-Ce que l'essai règle pour l'ADR : la voie du registre suffit (pas de NtGdiExtEscape), et un llvmpipe tient la pile.
-Ce qu'il laisse : un binaire qui importe des fonctions de Vista ne se charge pas sur ReactOS épinglé sans être
-modifié ; l'ICD retenu doit être construit pour XP (depuis les sources de Mesa, version épinglée) ou choisi sans
-ces imports.
+Ce que l'essai règle pour l'ADR : la voie du registre suffit (pas de NtGdiExtEscape), llvmpipe tient la pile jusqu'au
+triangle, et Mino n'a rien d'autre à fournir pour lui. Ce qu'il laisse : l'ICD retenu doit se charger sous un
+chargeur d'XP par LoadLibrary — sans imports de Vista et **sans TLS implicite** (Mesa construit pour XP depuis ses
+sources épinglées : MinGW, dont `__thread` passe par TlsAlloc, ou MSVC avec `/Zc:threadSafeInit-` et sans
+`__declspec(thread)`). Allouer la TLS implicite au chargement dynamique serait changer le `ntdll` épinglé, hors de la
+frontière de l'ADR-002.
 
 ## Vu en chemin
 
+- NtGdiGetDeviceGammaRamp (0x10ab) n'a pas de handler : wined3d le demande à la création du device et s'en passe.
 - NtGdiExtEscape (0x108e) n'a pas de handler : `opengl32` demande QUERYESCSUPPORT pour OPENGL_GETINFO et, sans
   réponse, prend son rendu logiciel. À faire si l'on choisit la voie du pilote d'affichage.
 - Un crochet de type 4 (WH_CALLWNDPROC) est posé par la pile sans être encore appelé par win32k.
@@ -90,5 +106,6 @@ ces imports.
 ## Le scénario
 
 `d3d9-spike` est un plancher : la sonde démarre, voit les 36 formats génériques, et wined3d lit le renderer de Mesa ;
-il interdit les deux échecs corrigés et les deux services sans handler. Retirer WindowFromDC le fait échouer
+il vérifie ce que win32k dit des formats de pixel (aucun décrit, posé ni échangé ; un DC en mémoire et un handle
+faux) et interdit les deux échecs corrigés et les cinq services sans handler. Retirer WindowFromDC le fait échouer
 (vérifié). Quand l'ICD sera là, le plancher montera jusqu'au triangle (`screen` sur ses pixels).
