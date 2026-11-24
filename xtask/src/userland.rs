@@ -288,6 +288,42 @@ pub fn import_closure(
     (added, missing)
 }
 
+/// The DLLs of the userland's system32 that the test programs among `files`
+/// (`HOST:FAT_PATH`, at the root of the disk: `tests/native`) import,
+/// directly or not, and that the disk does not have yet, as `HOST:FAT_PATH`
+/// entries in [`SYSTEM32`]. The userland's own closure (`boot_files`) starts
+/// from its programs only; a probe that imports more (the Direct3D probe of
+/// M8: d3d9, then d3dwine and opengl32) brings its DLLs this way, and the
+/// other scenarios' disks stay as they were.
+pub fn program_imports(ws: &Workspace, files: &[String]) -> Vec<String> {
+    let entries: Vec<(&str, &str)> = files.iter().filter_map(|file| file.rsplit_once(':')).collect();
+    let programs: Vec<(String, PathBuf)> = entries
+        .iter()
+        .filter(|(_, fat)| !fat.contains('/') && fat.to_ascii_lowercase().ends_with(".exe"))
+        .map(|(host, fat)| (fat.to_ascii_lowercase(), PathBuf::from(host)))
+        .collect();
+    let present: Vec<String> =
+        entries.iter().map(|(_, fat)| fat.rsplit('/').next().unwrap_or(fat).to_ascii_lowercase()).collect();
+    let read_imports = |path: &Path| -> Option<Vec<String>> {
+        let bytes = fs::read(path).ok()?;
+        let pe = pe::Pe32::parse(&bytes).ok()?;
+        Some(pe.imports().map(|import| import.dll_name().to_ascii_lowercase()).collect())
+    };
+    let (added, missing) = import_closure(&present, |file| match programs.iter().find(|(name, _)| name == file) {
+        Some((_, host)) => read_imports(host),
+        None => system32_file(ws, file).and_then(|path| read_imports(&path)),
+    });
+    for dll in missing.iter().filter(|dll| !present.contains(dll)) {
+        eprintln!("xtask: {dll}, imported by a test program, is not in the userland's system32");
+    }
+    added
+        .into_iter()
+        .filter_map(|dll| {
+            system32_file(ws, &dll).map(|path| format!("{}:{SYSTEM32}/{}", path.display(), dll.to_ascii_uppercase()))
+        })
+        .collect()
+}
+
 /// The system directory on the boot disk.
 const SYSTEM32: &str = "WINDOWS/SYSTEM32";
 
