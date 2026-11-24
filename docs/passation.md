@@ -1,5 +1,25 @@
 # Notes de passation
 
+- **Le relevé des threads, pour le blocage d'Intel** (`claude/intel-hang`, sur la PR 193 ; demandé le 2026-11-24 :
+  diagnostiquer le blocage vu une fois sous Intel dans `display-desktop`, après la commande de la boîte Exécuter).
+  Le blocage ne s'est pas reproduit : 18 runs Intel de plus, dont 10 avec 8 cœurs de l'hôte occupés, tous réussis
+  (1 blocage sur 19 runs en tout). Les deux journaux, figé et réussi, sont identiques jusqu'à la FIXME
+  d'`UrlIsW` (`shlwapi`, URLIS_APPLIABLE), appelée par ShellExecCmdLine (`shlexec.cpp`) ; ensuite viennent
+  SearchPathW, GetBinaryTypeW (Io, sections) et les crochets de ShellExecute, avant la FIXME « flags ignored »
+  qui n'est jamais venue. Le journal seul ne dit pas si tout est figé ou si un thread d'`explorer` attend.
+  Fait, pour que la prochaine fois le dise : **le relevé des threads** (`ke::report`) : un NMI (`hal::idt`, qui
+  ne fait que compter ; `take_nmi_request`) le demande, le balance set manager le fait à son passage suivant.
+  Une ligne par thread de Ke : état, priorité, propriétaire (PID, TID, image : `ps::ethread::describe_owner`),
+  objets attendus (type, adresse, état, propriétaire d'un mutant), le service système en cours d'après la trame
+  de trap (EAX d'une entrée par `int 2Eh` ou SYSENTER), et la pile noyau symbolisée depuis le contexte de sa
+  dernière commutation (`hal::bugcheck::kernel_backtrace`, `read_mapped_word` : lue par les tables de pages,
+  sans faute possible) ; copié sous le verrou dispatcher, sans allocation (`sched::record`). XP s'arrête sur
+  NMI_HARDWARE_FAILURE : sous une machine virtuelle, le NMI vient de son moniteur. **`xtask`** : un run qui
+  expire relève les registres (`hang.txt` : cinq échantillons, les instructions et la pile) puis envoie un NMI,
+  dont le relevé finit le journal série ; `nmi` dans `keys`. Scénario `thread-report` (`KEYS1.EXE` dans
+  GetMessage quand le NMI vient : sa ligne, NtUserGetMessage, `win32k::queue::get` dans sa pile, puis il va au
+  bout). Tests hôte : `ke::report` (les lignes), `xtask::screen` (les réponses du moniteur). **Suite** : le
+  blocage d'Intel, quand un run le refera — `hang.txt` et le relevé diront où.
 - **Les scénarios `keyboard` et `display-desktop` réparés** (`claude/boot-scenarios`, sur `main` ; ils
   échouaient sur `main` aussi, vus par la suite de démarrage de la PR 191). Rien à corriger dans le noyau.
   `keyboard` figeait le PID de `KEYS1.EXE` à 28 : la table des CID redonne d'abord le dernier ID libéré

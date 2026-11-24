@@ -13,6 +13,8 @@
 //!   - DPC (Deferred Procedure Call) queue, without allocation, and the
 //!     DISPATCH interrupt that drains it
 //!   - `KeBugCheckEx`, the fatal error screen (`bugcheck`)
+//!   - The thread report an NMI asks for: what each thread waits on, where
+//!     (`report`)
 //!
 //! NT reference: ntoskrnl/ke/
 
@@ -33,6 +35,7 @@ pub mod exception;
 pub mod fpu;
 pub mod guarded_mutex;
 pub mod prcb;
+pub mod report;
 pub mod sched;
 pub mod thread;
 pub mod timer;

@@ -1,0 +1,27 @@
+# The thread report (ke::report): an NMI from QEMU's monitor (`nmi`, the
+# token of `keys`) makes the balance set manager print every thread on the
+# serial port: its state and priority, its owner (PID, TID, image), the
+# objects it waits on, the system service it is in (from its trap frame) and
+# its kernel stack, symbolized. KEYS1.EXE (in winlogon's place, see the
+# `keyboard` scenario) waits in GetMessage when the NMI comes; then its keys
+# are typed and it goes to its end: the report changed nothing.
+features = test-smss
+requires = userland, native
+initial-command = KEYS1.EXE
+cpus     = default, intel
+timeout  = 120
+
+keys = [keys] waiting => nmi pause:4000 shift-h i ret
+keys = [keys] unfocused => a
+
+expect = [keys] waiting
+expect = [threads] report (NMI)
+expect = Running (this report) prio 16/16 kernel
+expect = winlogon.exe); waits user on 1: SynchronizationEvent@
+expect = ; in NtUserGetMessage (0x11a4) at eip
+expect = [threads]     win32k::queue::get+
+expect = [threads]     ntoskrnl::input::raw_input_thread+
+expect = [threads]     ps::exit::reaper_main+
+expect = [keys] typed: Hi
+expect = [keys] done
+forbid = *** STOP:

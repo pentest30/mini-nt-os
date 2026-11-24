@@ -5,6 +5,10 @@
 //!   - APIC timer     (vector 0xD0, CLOCK_LEVEL) — drives the scheduler clock
 //!   - User-mode gates (vectors 0x2A–0x2E, `trap`): tick count, callback
 //!     return, assertion, debug service, system service
+//!   - NMI (vector 2): a request for the thread report (`ke::report`), which
+//!     [`take_nmi_request`] hands over. Under a virtual machine an NMI comes
+//!     from its monitor (QEMU's `nmi`), to see what a frozen system does;
+//!     XP stops on NMI_HARDWARE_FAILURE instead.
 //!
 //! # Double-fault stack
 //! The double-fault handler is configured to use IST slot 0 (see `gdt.rs`).
@@ -39,6 +43,8 @@ static PAGE_FAULT_HOOK: AtomicUsize = AtomicUsize::new(0);
 /// End (exclusive) of the user half of an address space.
 const USER_HALF_END: u64 = 1 << 47;
 static IN_PF_OUTER: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+/// NMIs received since the last [`take_nmi_request`].
+static NMI_REQUESTS: AtomicUsize = AtomicUsize::new(0);
 
 // ── Init ─────────────────────────────────────────────────────────────────────
 
@@ -63,6 +69,9 @@ pub unsafe fn init() {
         idt.device_not_available.set_handler_fn(exception_device_not_available);
         idt.x87_floating_point.set_handler_fn(exception_x87_floating_point);
         idt.simd_floating_point.set_handler_fn(exception_simd_floating_point);
+        // The NMI touches nothing but a counter: neither GS, which user mode
+        // may still hold, nor a lock the interrupted code may hold.
+        idt.non_maskable_interrupt.set_handler_fn(exception_nmi);
 
         // The user exceptions (`trap`): a stub sends user mode to a trap
         // frame, kernel mode to the handler above. #BP is DPL 3, so that
@@ -732,6 +741,21 @@ extern "x86-interrupt" fn irq_mouse(_frame: InterruptStackFrame) {
 
 /// A spurious interrupt: nothing to do, and no EOI.
 extern "x86-interrupt" fn irq_spurious(_frame: InterruptStackFrame) {}
+
+/// An NMI: counted, for [`take_nmi_request`]. An NMI interrupts anything,
+/// at any IRQL, even with interrupts disabled: it only counts.
+extern "x86-interrupt" fn exception_nmi(_frame: InterruptStackFrame) {
+    NMI_REQUESTS.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Whether an NMI came since the last call: the thread report it asks for
+/// (`ke::report`) is due. Clears the request.
+///
+/// # IRQL
+/// Any level (an atomic exchange).
+pub fn take_nmi_request() -> bool {
+    NMI_REQUESTS.swap(0, Ordering::Relaxed) != 0
+}
 
 // ── APIC helpers ─────────────────────────────────────────────────────────────
 
