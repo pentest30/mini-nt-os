@@ -1,5 +1,17 @@
 # Notes de passation
 
+- **La barre des tâches : les crochets du shell, les fenêtres réduites, SwitchToThisWindow** (`claude/shell-hooks`,
+  M6/M7, [`compat/m6-fenetres.md`](compat/m6-fenetres.md) étape 48 ; demandé le 2026-11-24, dans la machine
+  VirtualBox). La barre d'`explorer` n'avait aucun bouton et une fenêtre réduite « disparaissait » (sous la barre, en
+  bas à gauche). Comme ReactOS : RegisterShellHookWindow et DeregisterShellHookWindow (NtUserCallHwnd 0x48, 0x45),
+  SetTaskmanWindow et SetProgmanWindow (NtUserCallHwndOpt 0x4B, 0x4A ; NtUserGetThreadState 0x14, 0x13), le message
+  « SHELLHOOK » posté aux fenêtres inscrites quand une fenêtre de premier niveau est montrée, cachée, détruite,
+  renommée ou activée (`win32k::shellhook`) ; SPI_GET/SETMINIMIZEDMETRICS (`explorer` demande `ARW_HIDE` : réduite,
+  la fenêtre sort de l'écran) ; SwitchToThisWindow (NtUserCallTwoParam 0x63 : un clic sur le bouton la rétablit).
+  Scénario `shell-hooks` (`tests/native/shellhk1.c`, AMD et Intel). Vérifié : lint, tests hôte, `shell-hooks`,
+  `minmax`, `window-menu`, `hotkey`, `async-activate` (AMD, Intel), `logon`, `folder-view` ; dans la machine, le bouton
+  d'une fenêtre de dossier, la réduction et le rétablissement par le bouton. **Suite** : les traînées en déplaçant une
+  fenêtre d'OpenOffice (le DC propre de ses fenêtres, CS_OWNDC, pas encore : un DC du cache à la place) ; WH_SHELL.
 - **La fenêtre de PeaZip et sa fermeture** (`claude/peazip-window`, sur la PR 174, M7, le banc,
   [`compat/applications.md`](compat/applications.md#la-fenêtre-de-peazip-et-sa-fermeture-le-2026-11-23) ; demandé le
   2026-11-23). Rien à corriger dans Mino. Le gestionnaire se peint : la capture d'un scénario vient quand tous ses

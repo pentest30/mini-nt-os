@@ -2334,3 +2334,34 @@ qui reste Unicode (étape 3) ; toute fenêtre d'un créateur ANSI faite ANSI (é
 (étape 5). Trois autres après la revue : l'ancienne procédure vue dans le jeu de la procédure donnée (étape 5) ; la
 recherche sans le processus (le second processus reçoit le handle du premier, étape 7), sans le tas (le thread de
 l'autre bureau reçoit celui de l'étape 4).
+
+## Étape 48 : la barre des tâches d'`explorer` (les crochets du shell, les fenêtres réduites, SwitchToThisWindow)
+
+Vu dans la machine VirtualBox (le 2026-11-24) : la barre des tâches d'`explorer` ne montrait aucun bouton, et une
+fenêtre réduite « disparaissait ». Trois manques, tous journalisés au démarrage d'`explorer` :
+
+| Partie | Ce que fait Mino |
+|---|---|
+| Les crochets du shell (`win32k::shellhook` ; ReactOS `desktop.c` : IntRegisterShellHookWindow, co_IntShellHookNotify) | la liste des tâches d'`explorer` s'inscrit (RegisterShellHookWindow : NtUserCallHwnd 0x48 ; DeregisterShellHookWindow : 0x45) sur le bureau de son thread ; le message enregistré « SHELLHOOK » (un atome de USER, celui que rend RegisterWindowMessage) est posté aux fenêtres inscrites du bureau d'entrée, le code HSHELL_* en `wParam`, la fenêtre en `lParam` |
+| Montrée, cachée (`win32k::winpos`, co_WinPosSetWindowPos) | SWP_SHOWWINDOW d'une fenêtre qu'une barre montre (`WS_EX_APPWINDOW`, ou ni `WS_EX_TOOLWINDOW`, ni propriétaire, ni parent que le bureau ; une fille `WS_POPUP` avec `WS_EX_APPWINDOW`) : HSHELL_WINDOWCREATED, puis, sans SWP_NOACTIVATE, UpdateShellHook ; SWP_HIDEWINDOW d'une fenêtre de premier niveau : HSHELL_WINDOWDESTROYED |
+| Détruite, renommée (`win32k::destroy`, `sys::window::nt_user_def_set_text`) | une fenêtre de premier niveau sans propriétaire : HSHELL_WINDOWDESTROYED (aussi pour les fenêtres d'un thread qui se termine), HSHELL_REDRAW ; libérée, elle n'est plus inscrite |
+| Activée (`win32k::input`, UpdateShellHook) | HSHELL_WINDOWACTIVATED pour elle (ou 0 pour une fenêtre qu'une barre ne montre pas), ou HSHELL_RUDEAPPACTIVATED si elle couvre tout le moniteur (IntCheckFullscreen) |
+| SetTaskmanWindow, SetProgmanWindow (NtUserCallHwndOpt 0x4B, 0x4A ; NtUserGetThreadState 0x14, 0x13) | le `hTaskManWindow` et le `hProgmanWindow` du `DESKTOPINFO` (`Desktop::set_shell_helper_window`), que GetTaskmanWindow et GetProgmanWindow relisent |
+| Les fenêtres réduites d'un shell (SPI_GETMINIMIZEDMETRICS 0x2B, SPI_SETMINIMIZEDMETRICS 0x2C ; `win32k::metrics::set_minimized_metrics`) | `explorer` demande `ARW_HIDE` (HideMinimizedWindows) : réduite, une fenêtre de premier niveau va en (−32000, −32000), et sa barre la montre ; sans shell, toujours en bas à gauche (`ARW_BOTTOMLEFT`) ; SM_ARRANGE et les autres métriques suivent |
+| SwitchToThisWindow (NtUserCallTwoParam 0x63 ; `win32k::input::switch_to_this_window`) | un clic sur le bouton d'une fenêtre réduite (HandleTaskItemClick) : elle passe au premier plan et, réduite, reçoit WM_SYSCOMMAND SC_RESTORE, posté |
+
+Le scénario `shell-hooks` (`tests/native/shellhk1.c`, AMD et Intel) : une fenêtre inscrite d'un autre thread reçoit
+HSHELL_WINDOWCREATED et HSHELL_WINDOWACTIVATED pour une fenêtre montrée, HSHELL_REDRAW pour son titre,
+HSHELL_WINDOWDESTROYED cachée et détruite, rien pour une fenêtre outil ni une fenêtre possédée, plus rien une fois
+désinscrite ; GetTaskmanWindow relit SetTaskmanWindow ; avec `ARW_HIDE`, une fenêtre réduite va en (−32000, −32000),
+et SwitchToThisWindow(TRUE) la rétablit à sa place. Sans le changement, il s'arrête aux services manquants. Dans la
+machine, la fenêtre de dossier `C:\WINDOWS` a son bouton ; réduite, elle quitte l'écran et le bouton reste ; un clic
+sur le bouton la rétablit.
+
+Écarts avec ReactOS : pas de crochets WH_SHELL ni de HSHELL_TASKMAN, HSHELL_LANGUAGE, HSHELL_APPCOMMAND,
+HSHELL_GETMINRECT ; SwitchToThisWindow sans Alt+Tab active la fenêtre sans envoyer l'ancienne fenêtre active au fond
+de l'ordre Z (journalisé une fois). SPI_SETMINIMIZEDMETRICS n'écrit pas le registre (SPIF_UPDATEINIFILE).
+
+Vu en route, pas fait : déplacer une fenêtre d'OpenOffice laisse des traînées (ses anciennes positions repeintes par
+elle), celles d'`explorer` non : OpenOffice peint par le DC propre de ses fenêtres (CS_OWNDC), que Mino remplace par
+un DC du cache (« the DC of a window or of its class (a cache DC instead): not yet »).
