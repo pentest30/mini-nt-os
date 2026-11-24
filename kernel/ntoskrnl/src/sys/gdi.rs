@@ -77,6 +77,43 @@ pub(super) fn nt_gdi_rectangle(arguments: &[u32]) -> NtStatus {
     }
 }
 
+/// Les index de NtGdiGetDCDword demandés sans être servis.
+static UNSUPPORTED_DC_DWORDS: super::ClassReport = super::ClassReport::new("NtGdiGetDCDword");
+
+/// NtGdiGetDCDword(hdc, u, *Result) : comme ReactOS (`dcutil.c`),
+/// GdiGetJournal (0), GdiGetEMFRestorDc (la profondeur de SaveDC) et
+/// GdiGetIsMemDc (le type du DC : 0 direct, 1 en mémoire ; `opengl32` le
+/// demande avant de choisir un format de pixel), dans `*Result` ; TRUE.
+/// FALSE et `ERROR_INVALID_PARAMETER` sans `Result` ; `ERROR_INVALID_HANDLE`
+/// pour un DC qui n'est pas au processus. Les autres index (les attributs
+/// du DC_ATTR : mode de projection, extra des caractères…) ne sont pas
+/// servis : FALSE et `ERROR_INVALID_PARAMETER`, journalisés une fois.
+pub(super) fn nt_gdi_get_dc_dword(arguments: &[u32]) -> NtStatus {
+    const GDI_GET_JOURNAL: u32 = 0;
+    const GDI_GET_EMF_RESTOR_DC: u32 = 5;
+    const GDI_GET_IS_MEM_DC: u32 = 7;
+    let [hdc, index, result] = arguments[..3] else { unreachable!("3 arguments") };
+    if result == 0 {
+        return fail(abi::winerror::ERROR_INVALID_PARAMETER, 0);
+    }
+    let Some((kind, depth)) = win32k::gdi::dc::kind_and_save_depth(hdc) else {
+        return fail(abi::winerror::ERROR_INVALID_HANDLE, 0);
+    };
+    let value = match index {
+        GDI_GET_JOURNAL => 0,
+        GDI_GET_EMF_RESTOR_DC => depth,
+        GDI_GET_IS_MEM_DC => kind,
+        _ => {
+            UNSUPPORTED_DC_DWORDS.report(index);
+            return fail(abi::winerror::ERROR_INVALID_PARAMETER, 0);
+        }
+    };
+    match ke::usermem::UserPtr::<u32>::new(result).write(&value) {
+        Ok(()) => NtStatus(1),
+        Err(_) => fail(abi::winerror::ERROR_NOACCESS, 0),
+    }
+}
+
 /// NtGdiSaveDC(hdc) : l'état du DC posé sur sa pile de sauvegardes
 /// (`win32k::gdi::dc::save_dc`) ; 0 et `ERROR_INVALID_HANDLE` pour un DC qui
 /// n'est pas au processus.

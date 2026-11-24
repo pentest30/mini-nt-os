@@ -206,6 +206,7 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtGdiGetPixel, Handler::Status(gdi::nt_gdi_get_pixel)),
     (services::NtGdiRectangle, Handler::Status(gdi::nt_gdi_rectangle)),
     (services::NtGdiRestoreDC, Handler::Status(gdi::nt_gdi_restore_dc)),
+    (services::NtGdiGetDCDword, Handler::Status(gdi::nt_gdi_get_dc_dword)),
     (services::NtGdiSaveDC, Handler::Status(gdi::nt_gdi_save_dc)),
     (services::NtGdiSelectBitmap, Handler::Status(gdi::nt_gdi_select_bitmap)),
     (services::NtGdiSelectFont, Handler::Status(gdi::nt_gdi_select_font)),

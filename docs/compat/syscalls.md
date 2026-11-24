@@ -9,7 +9,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | Table | Implémentés | Services |
 |---|---:|---:|
 | ntoskrnl | 137 | 296 |
-| win32k | 224 | 737 |
+| win32k | 225 | 737 |
 
 ## ntoskrnl
 
@@ -482,7 +482,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x10a3` | `NtGdiGetCharWidthInfo` | 2 |  |
 | `0x10a4` | `NtGdiGetColorAdjustment` | 2 |  |
 | `0x10a5` | `NtGdiGetColorSpaceforBitmap` | 1 |  |
-| `0x10a6` | `NtGdiGetDCDword` | 3 |  |
+| `0x10a6` | `NtGdiGetDCDword` | 3 | ✅ |
 | `0x10a7` | `NtGdiGetDCforBitmap` | 1 |  |
 | `0x10a8` | `NtGdiGetDCObject` | 2 | ✅ |
 | `0x10a9` | `NtGdiGetDCPoint` | 3 |  |
