@@ -1,5 +1,11 @@
 # Notes de passation
 
+- **La pile d'un thread fini** (`claude/thread-stack`, sur la PR 184, M7, Ps ;
+  [`compat/m6-logon.md`](compat/m6-logon.md#la-pile-dun-thread-fini-m7-le-2026-11-24) ; trouvé en mesurant le pool
+  d'une session). PspExitThread rend la pile d'un thread qui l'a demandé (`FreeStackOnTermination` du TEB : ExitThread,
+  RtlExitUserThread), de `DeallocationStack`, avant le TEB (`ps::ethread::delete_teb`). Chaque thread fini d'un
+  processus qui dure laissait sa réservation, ses pages et un nœud de VAD (le thread d'entrée de chaque console chez
+  `csrss`). Scénario `thread-stack` (`tests/native/thrstk1.c`, AMD et Intel ; sans le correctif, il échoue).
 - **La fin de session et l'arrêt** (`claude/session-shutdown`, sur la PR 183, M7, second critère ;
   [`compat/m6-logon.md`](compat/m6-logon.md#la-fin-de-session-et-larrêt-m7-le-2026-11-23) ; demandé le 2026-11-23).
   Un programme de la session arrête le système par ExitWindowsEx. NtUserSetInformationThread a les classes de
