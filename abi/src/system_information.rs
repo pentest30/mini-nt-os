@@ -71,6 +71,41 @@ pub const SYSTEM_HANDLE_INFORMATION: u32 = 16;
 /// SystemFileCacheInformation: the file cache's working sizes.
 pub const SYSTEM_FILECACHE_INFORMATION: u32 = 21;
 
+/// SystemPoolTagInformation: what the kernel's pools hold under each tag
+/// (SYSTEM_POOLTAG_INFORMATION: a ULONG count, then [`SystemPoolTag32`]
+/// entries), what a pool monitor reads.
+pub const SYSTEM_POOL_TAG_INFORMATION: u32 = 22;
+
+/// SYSTEM_POOLTAG on i386: a tag, and in each pool the blocks allocated and
+/// freed under it since the boot, and the bytes it holds.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SystemPoolTag32 {
+    pub tag: u32,
+    pub paged_allocs: u32,
+    pub paged_frees: u32,
+    pub paged_used: u32,
+    pub non_paged_allocs: u32,
+    pub non_paged_frees: u32,
+    pub non_paged_used: u32,
+}
+
+const _: () = {
+    assert!(size_of::<SystemPoolTag32>() == 28);
+    assert!(offset_of!(SystemPoolTag32, paged_used) == 12);
+    assert!(offset_of!(SystemPoolTag32, non_paged_allocs) == 16);
+    assert!(offset_of!(SystemPoolTag32, non_paged_used) == 24);
+};
+
+impl SystemPoolTag32 {
+    /// Its bytes, as they go to the caller.
+    pub fn as_bytes(&self) -> &[u8] {
+        // SAFETY: integer fields without padding (size checked above): every
+        // byte is initialised.
+        unsafe { core::slice::from_raw_parts((self as *const Self).cast::<u8>(), size_of::<Self>()) }
+    }
+}
+
 /// MmSystemRangeStart as an i386 process sees it: 2 GiB.
 pub const SYSTEM_RANGE_START: u32 = 0x8000_0000;
 
