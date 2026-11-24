@@ -7,10 +7,13 @@
   SetTaskmanWindow et SetProgmanWindow (NtUserCallHwndOpt 0x4B, 0x4A ; NtUserGetThreadState 0x14, 0x13), le message
   « SHELLHOOK » posté aux fenêtres inscrites quand une fenêtre de premier niveau est montrée, cachée, détruite,
   renommée ou activée (`win32k::shellhook`) ; SPI_GET/SETMINIMIZEDMETRICS (`explorer` demande `ARW_HIDE` : réduite,
-  la fenêtre sort de l'écran) ; SwitchToThisWindow (NtUserCallTwoParam 0x63 : un clic sur le bouton la rétablit).
+  la fenêtre sort de l'écran) ; SwitchToThisWindow (NtUserCallTwoParam 0x63 : un clic sur le bouton la rétablit) ;
+  ShowWindowAsync d'une fenêtre d'un autre thread (WM_ASYNC_SHOWWINDOW, traité par win32k dans son thread : un clic
+  sur le bouton de la fenêtre active la réduit).
   Scénario `shell-hooks` (`tests/native/shellhk1.c`, AMD et Intel). Vérifié : lint, tests hôte, `shell-hooks`,
   `minmax`, `window-menu`, `hotkey`, `async-activate` (AMD, Intel), `logon`, `folder-view` ; dans la machine, le bouton
-  d'une fenêtre de dossier, la réduction et le rétablissement par le bouton. **Suite** : les traînées en déplaçant une
+  d'une fenêtre de dossier, la réduction et le rétablissement par le bouton, dans les deux sens. **Suite** : les
+  traînées en déplaçant une
   fenêtre d'OpenOffice (le DC propre de ses fenêtres, CS_OWNDC, pas encore : un DC du cache à la place) ; WH_SHELL.
 - **La fenêtre de PeaZip et sa fermeture** (`claude/peazip-window`, sur la PR 174, M7, le banc,
   [`compat/applications.md`](compat/applications.md#la-fenêtre-de-peazip-et-sa-fermeture-le-2026-11-23) ; demandé le

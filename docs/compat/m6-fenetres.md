@@ -2349,14 +2349,16 @@ fenêtre réduite « disparaissait ». Trois manques, tous journalisés au déma
 | SetTaskmanWindow, SetProgmanWindow (NtUserCallHwndOpt 0x4B, 0x4A ; NtUserGetThreadState 0x14, 0x13) | le `hTaskManWindow` et le `hProgmanWindow` du `DESKTOPINFO` (`Desktop::set_shell_helper_window`), que GetTaskmanWindow et GetProgmanWindow relisent |
 | Les fenêtres réduites d'un shell (SPI_GETMINIMIZEDMETRICS 0x2B, SPI_SETMINIMIZEDMETRICS 0x2C ; `win32k::metrics::set_minimized_metrics`) | `explorer` demande `ARW_HIDE` (HideMinimizedWindows) : réduite, une fenêtre de premier niveau va en (−32000, −32000), et sa barre la montre ; sans shell, toujours en bas à gauche (`ARW_BOTTOMLEFT`) ; SM_ARRANGE et les autres métriques suivent |
 | SwitchToThisWindow (NtUserCallTwoParam 0x63 ; `win32k::input::switch_to_this_window`) | un clic sur le bouton d'une fenêtre réduite (HandleTaskItemClick) : elle passe au premier plan et, réduite, reçoit WM_SYSCOMMAND SC_RESTORE, posté |
+| ShowWindowAsync d'une fenêtre d'un autre thread (`sys::window::nt_user_show_window_async`, `win32k::window::send_message`) | un clic sur le bouton de la fenêtre active la réduit par ShowWindowAsync(SW_MINIMIZE), refusé jusque-là : comme ReactOS (co_IntSendMessageNoWait), WM_ASYNC_SHOWWINDOW, un message interne (bit haut), est envoyé sans attendre au thread de la fenêtre, où win32k le traite lui-même (handle_internal_message : ShowWindow) |
 
 Le scénario `shell-hooks` (`tests/native/shellhk1.c`, AMD et Intel) : une fenêtre inscrite d'un autre thread reçoit
 HSHELL_WINDOWCREATED et HSHELL_WINDOWACTIVATED pour une fenêtre montrée, HSHELL_REDRAW pour son titre,
 HSHELL_WINDOWDESTROYED cachée et détruite, rien pour une fenêtre outil ni une fenêtre possédée, plus rien une fois
 désinscrite ; GetTaskmanWindow relit SetTaskmanWindow ; avec `ARW_HIDE`, une fenêtre réduite va en (−32000, −32000),
-et SwitchToThisWindow(TRUE) la rétablit à sa place. Sans le changement, il s'arrête aux services manquants. Dans la
-machine, la fenêtre de dossier `C:\WINDOWS` a son bouton ; réduite, elle quitte l'écran et le bouton reste ; un clic
-sur le bouton la rétablit.
+et SwitchToThisWindow(TRUE) la rétablit à sa place ; ShowWindowAsync réduit puis rétablit la fenêtre d'un autre
+thread. Sans le changement, il s'arrête aux services manquants. Dans la machine, la fenêtre de dossier `C:\WINDOWS`
+a son bouton ; réduite, elle quitte l'écran et le bouton reste ; un clic sur le bouton la rétablit, un autre la
+réduit.
 
 Écarts avec ReactOS : pas de crochets WH_SHELL ni de HSHELL_TASKMAN, HSHELL_LANGUAGE, HSHELL_APPCOMMAND,
 HSHELL_GETMINRECT ; SwitchToThisWindow sans Alt+Tab active la fenêtre sans envoyer l'ancienne fenêtre active au fond
