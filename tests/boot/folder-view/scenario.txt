@@ -8,10 +8,13 @@
 # placed below it, off the window. The Run box and the address bar also ask
 # NtUserGetComboBoxInfo (CB_GETCOMBOBOXINFO to the ComboBox).
 #
-# The window at (0, 0)-(958, 598): the address bar's edit, white (where the
-# window's face was gray), the list of the folder's files, white (it was
-# COLOR_BTNFACE), the status bar's face below it. The window takes a while to
-# open (shell32 and browseui from the ATA disk): `screen-wait`.
+# The window at (0, 0)-(958, 578), its size taken from the work area that
+# explorer's taskbar leaves (SPI_SETWORKAREA; 598 high when the work area was
+# the whole screen): the address bar's edit, white (where the window's face
+# was gray), the list of the folder's files, white (it was COLOR_BTNFACE),
+# the status bar's face below it, and the taskbar under the window (it
+# disappeared when the desktop covered the whole screen). The window takes a
+# while to open (shell32 and browseui from the ATA disk): `screen-wait`.
 #
 # Run starts a second explorer.exe, which hands the path to the shell and
 # ends (0 windows): not forbidden here.
@@ -33,7 +36,8 @@ expect = ReadDirectoryChangesW for 'C:\WINDOWS' failed
 screen = 500 90 FFFFFF
 screen = 500 350 FFFFFF
 screen = 700 300 FFFFFF
-screen = 300 586 D4D0C8
+screen = 300 566 D4D0C8
+screen = 640 790 D4D0C8
 screen-wait = 60
 
 forbid = *** STOP:

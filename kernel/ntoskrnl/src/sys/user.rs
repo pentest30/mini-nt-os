@@ -58,6 +58,18 @@ pub(super) fn nt_user_initialize(arguments: &[u32]) -> NtStatus {
     win32k::csrss::initialize(version, reference).map_or_else(|status| status, |()| STATUS_SUCCESS)
 }
 
+/// SPIF_SENDCHANGE : SystemParametersInfo annonce le changement
+/// (WM_SETTINGCHANGE aux fenêtres de premier niveau).
+const SPIF_SENDCHANGE: u32 = 0x0002;
+
+/// WM_SETTINGCHANGE : un paramètre du système a changé (`wParam` : l'action
+/// de SystemParametersInfo).
+const WM_SETTINGCHANGE: u32 = 0x001A;
+
+/// Ce que WM_SETTINGCHANGE attend de chaque fenêtre (co_IntSendMessageTimeout
+/// de ReactOS : SMTO_NORMAL, 100 ms).
+const SETTING_CHANGE_TIMEOUT_MS: u32 = 100;
+
 /// Les actions de NtUserSystemParametersInfo demandées sans être
 /// implémentées.
 static UNSUPPORTED_SPI_ACTIONS: super::ClassReport = super::ClassReport::new("NtUserSystemParametersInfo");
@@ -132,14 +144,17 @@ fn give_non_client_metrics(pv: u32, size: u32, bytes: &[u8]) -> NtStatus {
 /// - SPI_SETWORKAREA : le RECT en `pvParam` devient la zone de travail du
 ///   moniteur (`win32k::monitor::set_work_area`) ; FALSE pour un RECT
 ///   illisible, vide, ou qui sort du moniteur. La barre des tâches
-///   d'`explorer` y garde sa place. Pas encore : WM_SETTINGCHANGE aux
-///   fenêtres de premier niveau (SPIF_SENDCHANGE), que ReactOS envoie.
+///   d'`explorer` y garde sa place. Avec SPIF_SENDCHANGE, WM_SETTINGCHANGE
+///   (`wParam` SPI_SETWORKAREA) va aux fenêtres de premier niveau, 100 ms
+///   au plus chacune (`win32k::sent::broadcast`), comme ReactOS : le bureau
+///   du shell s'y redimensionne. Son `lParam` est nul (MSDN le permet) ;
+///   ReactOS passe « Control Panel\Desktop ».
 ///
 /// FALSE et `ERROR_INVALID_PARAMETER` pour une taille fausse. Une autre
 /// action est journalisée une fois et rend FALSE
 /// (`ERROR_CALL_NOT_IMPLEMENTED`).
 pub(super) fn nt_user_system_parameters_info(arguments: &[u32]) -> NtStatus {
-    let [action, param, pv, _win_ini] = arguments[..4] else { unreachable!("4 arguments") };
+    let [action, param, pv, win_ini] = arguments[..4] else { unreachable!("4 arguments") };
     match action {
         abi::user::SPI_GETNONCLIENTMETRICS => {
             let metrics = win32k::metrics::non_client_metrics(&win32k::metrics::Parameters::DEFAULT);
@@ -177,7 +192,15 @@ pub(super) fn nt_user_system_parameters_info(arguments: &[u32]) -> NtStatus {
                 i32::from_le_bytes([rect[index * 4], rect[index * 4 + 1], rect[index * 4 + 2], rect[index * 4 + 3]])
             };
             let work = win32k::gdi::dib::Rect::new(side(0), side(1), side(2), side(3));
-            NtStatus(u32::from(win32k::monitor::set_work_area(work)))
+            if !win32k::monitor::set_work_area(work) {
+                return NtStatus(0);
+            }
+            if win_ini & SPIF_SENDCHANGE != 0 {
+                if let Ok(thread) = win32k::convert_current_thread() {
+                    win32k::sent::broadcast(&thread, WM_SETTINGCHANGE, action, 0, SETTING_CHANGE_TIMEOUT_MS);
+                }
+            }
+            NtStatus(1)
         }
         _ => {
             UNSUPPORTED_SPI_ACTIONS.report(action);
