@@ -40,7 +40,7 @@ scénarios.
    format (« No suitable pixel formats found », un WARN) et **Direct3DCreate9 rend NULL**. Ce n'est pas un manque de
    Mino : ReactOS lui-même a besoin d'un pilote OpenGL installable (ICD) pour Direct3D.
 
-## La suite : un ICD Mesa (décision à prendre)
+## La suite : un ICD Mesa (ADR-025, proposée)
 
 L'`opengl32` de ReactOS (`dll/opengl/opengl32/icdload.c`) charge un ICD de deux façons :
 
@@ -50,9 +50,9 @@ L'`opengl32` de ReactOS (`dll/opengl/opengl32/icdload.c`) charge un ICD de deux 
 - par le pilote d'affichage : ExtEscape(QUERYESCSUPPORT, puis OPENGL_GETINFO), NtGdiExtEscape côté noyau (pas fait).
 
 Un ICD Mesa en rendu logiciel (Gallium llvmpipe, licence MIT), i386, donnerait des formats non génériques et
-WGL_ARB_pixel_format : wined3d les retiendrait. C'est un binaire hors de ReactOS épinglé : **une ADR qui complète
-l'ADR-006** doit en décider (d'où il vient — construit depuis les sources de Mesa ou une distribution binaire
-vérifiée —, sa version épinglée, sa licence, sa place sur le disque, les clés de `mino.inf`). Les autres pistes
+WGL_ARB_pixel_format : wined3d les retiendrait. C'est un binaire hors de ReactOS épinglé : l'ADR-025 (proposée,
+elle complète l'ADR-006) en décide — construit pour XP par `xtask` depuis des sources épinglées de Mesa, annoncé par
+le pilote d'affichage (NtGdiExtEscape) et décrit dans `mino.inf`. Les autres pistes
 écartées : remplacer l'`opengl32` de ReactOS (sort de la frontière de l'ADR-002) ; modifier wined3d pour garder les
 formats génériques (binaire épinglé modifié, et GDI est la voie la plus lente) ; DXVK (écarté par l'ADR-006).
 

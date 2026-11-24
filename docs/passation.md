@@ -2680,6 +2680,9 @@ aussi (étape 8). `NtOpenKey`, `NtQueryValueKey`, `NtOpenDirectoryObject`, `NtOp
 
 ## Ensuite (hors jalon)
 
+- M8 préparé en parallèle du M7 : le spike Direct3D 9 (PR 188, [`compat/m8-direct3d.md`](compat/m8-direct3d.md))
+  va jusqu'au triangle avec un ICD Mesa chargé au démarrage. L'ADR-025 (proposée) dit d'où vient l'ICD : à faire
+  accepter par le mainteneur, puis le spike « ICD XP » (construction par `xtask`, NtGdiExtEscape, `mino.inf`).
 - Router #DB, #BR, #NP, #SS, #AC du mode utilisateur vers KiDispatchException (aujourd'hui seuls #DE, #BP, #UD,
   #GP, #PF et `int 2Ch`).
 - KiDispatchException : si la pile utilisateur ne reçoit pas le contexte, le processus se termine avec le code de

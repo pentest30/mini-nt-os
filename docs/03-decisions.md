@@ -35,6 +35,7 @@ Pour changer une décision acceptée, on écrit une nouvelle ADR qui la remplace
 | 022 | FAT32 : crate partagée `fatfs` ; formatage et partitions servis par le noyau | **Proposée** (chantier d'installation) |
 | 023 | Premier démarrage en mode installation : couche Mino des ruches (`mino.inf`) et fin d'installation par un programme Mino | **Proposée** (scénario `logon`) |
 | 024 | Sections de fichiers : les pages d'une section de données lues à la faute, partagées par le segment du fichier | **Proposée** (scénarios `section-cache` et `folder-apps`) |
+| 025 | Direct3D : un ICD OpenGL Mesa llvmpipe construit pour XP depuis des sources épinglées, annoncé par le pilote d'affichage | **Proposée** (spike « ICD XP », scénario `d3d9-spike` jusqu'au triangle) |
 
 ---
 
@@ -490,3 +491,76 @@ vues : il se défera difficilement.
 200 ms, le partage entre sections, la copie sur écriture, l'écriture partagée, un fichier qui finit dans une page)
 et le scénario `folder-apps` (`explorer` ouvre `C:\APPS` et montre l'icône de l'installeur d'OpenOffice) ; les
 scénarios qui chargent des images (`smss`, `logon`, `notepad`, `app-*`) ne régressent pas.
+
+---
+
+## ADR-025 — Direct3D : un ICD OpenGL Mesa llvmpipe construit pour XP depuis des sources épinglées, annoncé par le pilote d'affichage
+
+**Contexte.** L'ADR-006 fait passer Direct3D par la pile de ReactOS épinglé : `d3d8`, `d3d9` et `ddraw` de Wine,
+wined3d (`d3dwine.dll`), puis `opengl32`, dont le Mesa intégré rend en logiciel. Le spike du M8
+([`compat/m8-direct3d.md`](compat/m8-direct3d.md), 2026-11-24) montre que cette pile seule ne suffit pas :
+- les 36 formats de pixel de l'`opengl32` épinglé sont tous `PFD_GENERIC_FORMAT`, que wined3d écarte sans
+  WGL_ARB_pixel_format ; Direct3DCreate9 rend NULL. ReactOS lui-même a besoin d'un pilote OpenGL installable (ICD)
+  pour Direct3D ;
+- avec un ICD Mesa Gallium llvmpipe i386, `opengl32` offre 48 formats non génériques, wined3d crée son device et **le
+  triangle de la sonde s'affiche** : Mino n'a rien d'autre à fournir (WindowFromDC, NtGdiGetDCDword et les services
+  du format de pixel sont faits) ;
+- mais l'ICD essayé, une compilation MSVC publiée pour Vista, ne se charge pas tel quel sous un chargeur d'XP : il
+  importe deux fonctions de Vista (SHGetKnownFolderPath, GetFinalPathNameByHandleW) et il a une TLS implicite, que le
+  `ntdll` épinglé, comme XP, n'alloue pas à une DLL chargée par LoadLibrary (ses statiques locales initialisées une
+  fois restent nulles ; le compilateur GLSL lit un pointeur nul). Importé au démarrage du processus, il marche.
+
+Le premier critère du M8 (un jeu D3D9 libre à 20 images par seconde) passe par cet ICD : il faut décider d'où il
+vient, comment il se construit et comment `opengl32` le trouve.
+
+**Décision.**
+- **Un ICD Mesa, en plus de la pile épinglée.** Mino installe un ICD OpenGL : Mesa, pilote Gallium llvmpipe, i386,
+  `WINDOWS\SYSTEM32\mesaicd.dll`. C'est la seule pièce de la pile 3D qui ne vient pas de ReactOS épinglé ;
+  `opengl32`, wined3d et les DLL de Direct3D restent les siennes, et la 3D reste entièrement en mode utilisateur
+  (ADR-006). Sans ICD, `opengl32` garde son rendu logiciel.
+- **Construit pour XP depuis des sources épinglées.** `cargo xtask` télécharge une version publiée de Mesa (et la
+  version de LLVM dont llvmpipe a besoin), vérifie leur SHA-256 et les construit dans `third_party/` (ignoré par Git),
+  avec la chaîne MinGW-w64 i686 déjà demandée par `requires = native`. Aucun binaire n'est commité.
+- **Vérifié avant d'aller sur le disque.** `xtask` refuse une `mesaicd.dll` qui ne se chargerait pas sous le chargeur
+  épinglé : version de sous-système au plus 5.1, chaque import résolu par les exports de l'espace utilisateur épinglé
+  (`userland::import_closure`), aucune donnée de TLS implicite (une variable par thread passe par TlsAlloc :
+  `__thread` émulé de MinGW, ni `__declspec(thread)` ni statiques locales thread-safe de MSVC).
+- **Annoncé par le pilote d'affichage, comme sous XP.** win32k répond à NtGdiExtEscape : QUERYESCSUPPORT
+  d'OPENGL_GETINFO, puis OPENGL_GETINFO (OPENGL_GETINFO_DRVNAME) rend le nom de l'ICD du pilote d'affichage (`Mesa`,
+  Version 2, DriverVersion 1 ; `Drv_Opengl_Info` dans `abi`). `tools/mkhive/mino.inf` écrit
+  `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\OpenGLDrivers\Mesa` (`Dll`, `Version`, `DriverVersion`,
+  `Flags`). Sans la clé ou sans le fichier, `opengl32` revient à son rendu logiciel.
+- **Licences.** Mesa (MIT) et LLVM (Apache 2.0 avec l'exception LLVM) sont distribués avec l'image ; leurs avis de
+  licence y vont avec eux, quelle que soit l'issue de l'ADR-007.
+
+**Conséquences.**
+- ✅ Direct3D 8 et 9 (et `ddraw` par wined3d) fonctionnent avec la pile épinglée inchangée : le travail des jeux se
+  concentre sur la performance (llvmpipe multithread, blits de Present) et sur ce que wined3d demande à win32k.
+- ✅ Un seul ICD pour toute la machine, quel que soit l'utilisateur : pas de clé par profil.
+- ✅ Le binaire est reproductible et vérifiable : sources et sommes épinglées, contraintes du chargeur vérifiées à la
+  construction.
+- ❌ La construction de Mesa et de LLVM pour i686 est longue (LLVM surtout) et demande Meson, Ninja et Python en plus
+  de MinGW : `xtask` la met en cache, et les scénarios qui en dépendent sont sautés sans elle, comme
+  `requires = native`.
+- ❌ Les versions récentes de Mesa et de LLVM visent des systèmes plus récents qu'XP : la version épinglée est la plus
+  récente qui passe les vérifications de `xtask`, et elle peut rester en arrière.
+- ⚠️ Un nouveau service de win32k (NtGdiExtEscape, deux échappements) ; les autres échappements restent refusés.
+- ⚠️ La mise à jour de Mesa suit celle de ReactOS épinglé : une nouvelle version se décide avec son passage de la CI.
+
+**Alternatives écartées.**
+- *Une distribution binaire de Mesa* (comme la publication 17.0.1 de `mesa-dist-win` essayée) : construite pour
+  Vista (imports, TLS implicite), elle ne se charge pas sans être modifiée, et on ne sait pas la reconstruire.
+- *Allouer la TLS implicite d'une DLL chargée dynamiquement* : c'est le `ntdll` épinglé qui le ferait, hors de la
+  frontière de l'ADR-002 ; et les imports de Vista resteraient.
+- *La clé `HKCU\SOFTWARE\ReactOS\OpenGL`* (ce que règle `openglcfg.cpl`) : propre à ReactOS et à chaque profil,
+  annoncée par un ERR dans chaque processus ; elle reste utile pour essayer un autre ICD.
+- *Remplacer l'`opengl32` épinglé par celui de Mesa* : sort de la frontière de l'ADR-002.
+- *Garder les formats génériques dans wined3d* : un binaire épinglé modifié, et GDI reste la voie la plus lente.
+- *softpipe* (Gallium sans LLVM) : bien plus simple à construire, trop lent pour le critère des 20 images par seconde ;
+  il ne sert que si le spike montre que LLVM ne se construit pas pour cette cible.
+- *DXVK, Vulkan* : écartés par l'ADR-006.
+
+**À valider.** Le spike « ICD XP » : `cargo xtask` construit `mesaicd.dll` depuis les sources épinglées, qui passe
+ses vérifications ; NtGdiExtEscape annonce l'ICD ; le scénario `d3d9-spike` va jusqu'au triangle par le chemin
+ordinaire (`opengl32` charge l'ICD par LoadLibrary, sans import de la sonde), vérifié par `screen` sur un pixel
+rouge et un pixel bleu. Puis le jeu D3D9 de référence du M8 mesure les images par seconde.
