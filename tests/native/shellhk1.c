@@ -23,7 +23,10 @@
  *    with ARW_HIDE, a minimized window goes to (-32000, -32000);
  * 9. SwitchToThisWindow(TRUE), what a taskbar's button calls (ReactOS
  *    explorer: HandleTaskItemClick): the minimized window is restored, on
- *    the screen again.
+ *    the screen again;
+ * 10. ShowWindowAsync of another thread's window, what a taskbar's button
+ *    does to minimize the active window: minimized, then restored
+ *    (WM_ASYNC_SHOWWINDOW, handled by win32k in the window's thread).
  * Each result goes to the debug port (DbgPrint), where the scenario looks
  * for it.
  *
@@ -86,6 +89,7 @@ typedef struct {
 #define SW_HIDE 0
 #define SW_SHOW 5
 #define SW_MINIMIZE 6
+#define SW_RESTORE 9
 #define WM_DESTROY 0x0002
 #define WM_CLOSE 0x0010
 #define WS_OVERLAPPEDWINDOW 0x00CF0000
@@ -138,12 +142,13 @@ __declspec(dllimport) BOOL __stdcall SetTaskmanWindow(HWND window);
 __declspec(dllimport) BOOL __stdcall SetThreadDesktop(HDESK desktop);
 __declspec(dllimport) BOOL __stdcall SetWindowTextW(HWND window, const WCHAR *text);
 __declspec(dllimport) BOOL __stdcall ShowWindow(HWND window, int command);
+__declspec(dllimport) BOOL __stdcall ShowWindowAsync(HWND window, int command);
 __declspec(dllimport) BOOL __stdcall SwitchDesktop(HDESK desktop);
 __declspec(dllimport) BOOL __stdcall SystemParametersInfoW(UINT action, UINT param, void *pv, UINT win_ini);
 
 static HDESK desktop;
 static HANDLE instance, listener_ready;
-static HWND listener;
+static HWND listener, other;
 static UINT shell_message;
 static BOOL registered, taskman_set;
 
@@ -185,6 +190,9 @@ static DWORD __stdcall listener_thread(void *parameter)
         registered = RegisterShellHookWindow(listener);
         taskman_set = SetTaskmanWindow(listener) != 0;
     }
+    other = CreateWindowExW(0, L"ShellHookPlain", L"Other thread", WS_OVERLAPPEDWINDOW, 500, 300, 200, 150, 0, 0,
+                            instance, 0);
+    ShowWindow(other, SW_SHOW);
     SetEvent(listener_ready);
     if (!listener)
         return 1;
@@ -344,6 +352,18 @@ DWORD __stdcall GuiStartup(void)
     GetWindowRect(late, &rect);
     DbgPrint("[shellhook] step 9: SwitchToThisWindow: minimized %d, at (%ld, %ld)\n", IsIconic(late) != 0, rect.left,
              rect.top);
+
+    /* 10. ShowWindowAsync of another thread's window. */
+    {
+        BOOL minimize = ShowWindowAsync(other, SW_MINIMIZE), minimized, restore;
+        settle();
+        minimized = IsIconic(other) != 0;
+        restore = ShowWindowAsync(other, SW_RESTORE);
+        settle();
+        DbgPrint("[shellhook] step 10: ShowWindowAsync of another thread's window: SW_MINIMIZE %d, minimized %d; "
+                 "SW_RESTORE %d, minimized %d\n",
+                 minimize != 0, minimized, restore != 0, IsIconic(other) != 0);
+    }
     metrics.iArrange &= ~ARW_HIDE;
     SystemParametersInfoW(SPI_SETMINIMIZEDMETRICS, sizeof metrics, &metrics, 0);
     DestroyWindow(late);

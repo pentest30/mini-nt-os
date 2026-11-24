@@ -375,13 +375,14 @@ pub(super) fn nt_user_show_window_async(arguments: &[u32]) -> NtStatus {
     if command as i32 > SW_MAX as i32 {
         return fail(abi::winerror::ERROR_INVALID_PARAMETER);
     }
-    let own = win32k::convert_current_thread().is_ok_and(|thread| thread.server == window.pti);
-    if !own {
-        static REPORTED: AtomicBool = AtomicBool::new(false);
-        if !REPORTED.swap(true, Ordering::Relaxed) {
-            log::warn!("sys: ShowWindowAsync of another thread's window (sent messages): not yet");
-        }
-        return fail(abi::winerror::ERROR_CALL_NOT_IMPLEMENTED);
+    let Ok(current) = win32k::convert_current_thread() else {
+        return NtStatus(0);
+    };
+    if current.server != window.pti {
+        // co_IntSendMessageNoWait of WM_ASYNC_SHOWWINDOW: its thread shows
+        // it (`win32k::window::send_message`), the caller does not wait.
+        let sent = win32k::sent::notify_window(&current, &window, abi::user::WM_ASYNC_SHOWWINDOW, command, 0);
+        return NtStatus(u32::from(sent.is_ok()));
     }
     NtStatus(u32::from(win32k::winpos::show_window(&window, command)))
 }

@@ -234,3 +234,4 @@ DeregisterShellHookWindow@4
 SetTaskmanWindow@4
 GetTaskmanWindow@0
 SwitchToThisWindow@8
+ShowWindowAsync@8

@@ -17,7 +17,10 @@
 # 8. SPI_GET/SETMINIMIZEDMETRICS (SM_ARRANGE follows); with ARW_HIDE, a
 #    minimized window at (-32000, -32000);
 # 9. SwitchToThisWindow(TRUE), what a taskbar's button calls: restored, at
-#    its place again (NtUserCallTwoParam 0x63).
+#    its place again (NtUserCallTwoParam 0x63);
+# 10. ShowWindowAsync of another thread's window (what the button does to
+#    minimize the active window): minimized, then restored
+#    (WM_ASYNC_SHOWWINDOW, handled by win32k in the window's thread).
 features = test-smss
 requires = userland, native
 initial-command = SHELLHK1.EXE
@@ -34,6 +37,7 @@ expect = [shellhook] step 6: DestroyWindow: destroyed 1
 expect = [shellhook] step 7: DeregisterShellHookWindow 1, then 0 events
 expect = [shellhook] step 8: GET 1, arrange 0 (SM_ARRANGE 0); SET 1, read back 8 (SM_ARRANGE 8); minimized at (-32000, -32000)
 expect = [shellhook] step 9: SwitchToThisWindow: minimized 0, at (100, 100)
+expect = [shellhook] step 10: ShowWindowAsync of another thread's window: SW_MINIMIZE 1, minimized 1; SW_RESTORE 1, minimized 0
 expect = [shellhook] done
 
 forbid = *** STOP:
@@ -42,3 +46,4 @@ forbid = NtUserCallHwndOpt (0x113c) is not implemented
 forbid = NtUserSystemParametersInfo class 0x2b is not implemented
 forbid = NtUserSystemParametersInfo class 0x2c is not implemented
 forbid = NtUserCallTwoParam class 0x63 is not implemented
+forbid = ShowWindowAsync of another thread's window (sent messages): not yet

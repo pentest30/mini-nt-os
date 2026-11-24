@@ -1245,6 +1245,11 @@ pub const TWOPARAM_ROUTINE_ENABLEWINDOW: u32 = 0x60;
 /// TWOPARAM_ROUTINE_SWITCHTOTHISWINDOW: SwitchToThisWindow, which a
 /// taskbar's button calls.
 pub const TWOPARAM_ROUTINE_SWITCHTOTHISWINDOW: u32 = 0x63;
+/// WM_ASYNC_SHOWWINDOW: win32k's internal message (the high bit) by which
+/// ShowWindowAsync reaches another thread's window; win32k handles it in
+/// the window's thread (ReactOS `handle_internal_message`), `wParam` the
+/// SW_* command.
+pub const WM_ASYNC_SHOWWINDOW: u32 = 0x8000_0000;
 /// WM_ENABLE: a window was enabled (`wParam` TRUE) or disabled.
 pub const WM_ENABLE: u32 = 0x000A;
 /// WM_CANCELMODE: a window gives up its modes (capture, menus) before it is
