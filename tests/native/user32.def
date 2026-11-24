@@ -233,3 +233,4 @@ RegisterShellHookWindow@4
 DeregisterShellHookWindow@4
 SetTaskmanWindow@4
 GetTaskmanWindow@0
+SwitchToThisWindow@8

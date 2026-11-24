@@ -20,7 +20,10 @@
  * 6. destroyed: HSHELL_WINDOWDESTROYED;
  * 7. once deregistered, nothing more;
  * 8. SPI_GETMINIMIZEDMETRICS and SPI_SETMINIMIZEDMETRICS (SM_ARRANGE follows);
- *    with ARW_HIDE, a minimized window goes to (-32000, -32000).
+ *    with ARW_HIDE, a minimized window goes to (-32000, -32000);
+ * 9. SwitchToThisWindow(TRUE), what a taskbar's button calls (ReactOS
+ *    explorer: HandleTaskItemClick): the minimized window is restored, on
+ *    the screen again.
  * Each result goes to the debug port (DbgPrint), where the scenario looks
  * for it.
  *
@@ -91,6 +94,7 @@ typedef struct {
 #define INFINITE 0xFFFFFFFF
 #define MAXIMUM_ALLOWED 0x02000000
 #define EVENTS 64
+#define PM_REMOVE 0x0001
 
 __declspec(dllimport) unsigned long __cdecl DbgPrint(const char *format, ...);
 
@@ -120,6 +124,9 @@ __declspec(dllimport) BOOL __stdcall GetMessageW(MSG *message, HWND window, UINT
 __declspec(dllimport) int __stdcall GetSystemMetrics(int index);
 __declspec(dllimport) HWND __stdcall GetTaskmanWindow(void);
 __declspec(dllimport) BOOL __stdcall GetWindowRect(HWND window, RECT *rect);
+__declspec(dllimport) BOOL __stdcall IsIconic(HWND window);
+__declspec(dllimport) BOOL __stdcall PeekMessageW(MSG *message, HWND window, UINT min, UINT max, UINT remove);
+__declspec(dllimport) void __stdcall SwitchToThisWindow(HWND window, BOOL alt_tab);
 __declspec(dllimport) BOOL __stdcall PostMessageW(HWND window, UINT message, WPARAM w, LPARAM l);
 __declspec(dllimport) void __stdcall PostQuitMessage(int code);
 __declspec(dllimport) unsigned short __stdcall RegisterClassW(const WNDCLASSW *class_info);
@@ -320,6 +327,23 @@ DWORD __stdcall GuiStartup(void)
              "(%ld, %ld)\n",
              got, metrics.iArrange & ~ARW_HIDE, arrange_before, set, read_back.iArrange, GetSystemMetrics(SM_ARRANGE),
              rect.left, rect.top);
+
+    /* 9. A taskbar's button: restored. */
+    SwitchToThisWindow(late, 1);
+    {
+        MSG message;
+        int round;
+        for (round = 0; round < 20; round++) {
+            while (PeekMessageW(&message, 0, 0, 0, PM_REMOVE))
+                DispatchMessageW(&message);
+            if (!IsIconic(late))
+                break;
+            Sleep(50);
+        }
+    }
+    GetWindowRect(late, &rect);
+    DbgPrint("[shellhook] step 9: SwitchToThisWindow: minimized %d, at (%ld, %ld)\n", IsIconic(late) != 0, rect.left,
+             rect.top);
     metrics.iArrange &= ~ARW_HIDE;
     SystemParametersInfoW(SPI_SETMINIMIZEDMETRICS, sizeof metrics, &metrics, 0);
     DestroyWindow(late);

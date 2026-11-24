@@ -199,6 +199,13 @@ pub(super) fn nt_user_call_two_param(arguments: &[u32]) -> NtStatus {
     if routine == TWOPARAM_ROUTINE_REGISTERLOGONPROCESS {
         return NtStatus(u32::from(win32k::logon::register_logon_process(first, second != 0)));
     }
+    if routine == abi::user::TWOPARAM_ROUTINE_SWITCHTOTHISWINDOW {
+        // SwitchToThisWindow(hWnd, fAltTab): no value.
+        if let Some(window) = win32k::window::get(first) {
+            win32k::input::switch_to_this_window(&window, second != 0);
+        }
+        return NtStatus(0);
+    }
     if routine == abi::user::TWOPARAM_ROUTINE_SETCARETPOS {
         return NtStatus(u32::from(win32k::caret::set_pos(first as i32, second as i32)));
     }

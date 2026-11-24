@@ -15,7 +15,9 @@
 # 6. destroyed: HSHELL_WINDOWDESTROYED;
 # 7. deregistered: nothing more;
 # 8. SPI_GET/SETMINIMIZEDMETRICS (SM_ARRANGE follows); with ARW_HIDE, a
-#    minimized window at (-32000, -32000).
+#    minimized window at (-32000, -32000);
+# 9. SwitchToThisWindow(TRUE), what a taskbar's button calls: restored, at
+#    its place again (NtUserCallTwoParam 0x63).
 features = test-smss
 requires = userland, native
 initial-command = SHELLHK1.EXE
@@ -31,6 +33,7 @@ expect = [shellhook] step 5: a tool window 0, an owned window 0
 expect = [shellhook] step 6: DestroyWindow: destroyed 1
 expect = [shellhook] step 7: DeregisterShellHookWindow 1, then 0 events
 expect = [shellhook] step 8: GET 1, arrange 0 (SM_ARRANGE 0); SET 1, read back 8 (SM_ARRANGE 8); minimized at (-32000, -32000)
+expect = [shellhook] step 9: SwitchToThisWindow: minimized 0, at (100, 100)
 expect = [shellhook] done
 
 forbid = *** STOP:
@@ -38,3 +41,4 @@ forbid = NtUserCallHwnd (0x113a) is not implemented
 forbid = NtUserCallHwndOpt (0x113c) is not implemented
 forbid = NtUserSystemParametersInfo class 0x2b is not implemented
 forbid = NtUserSystemParametersInfo class 0x2c is not implemented
+forbid = NtUserCallTwoParam class 0x63 is not implemented

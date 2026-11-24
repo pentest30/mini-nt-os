@@ -1242,6 +1242,9 @@ pub const ONEPARAM_ROUTINE_SETCARETBLINKTIME: u32 = 0x3B;
 pub const TWOPARAM_ROUTINE_SETCARETPOS: u32 = 0x6E;
 /// TWOPARAM_ROUTINE_ENABLEWINDOW: EnableWindow (XP's order of the enum).
 pub const TWOPARAM_ROUTINE_ENABLEWINDOW: u32 = 0x60;
+/// TWOPARAM_ROUTINE_SWITCHTOTHISWINDOW: SwitchToThisWindow, which a
+/// taskbar's button calls.
+pub const TWOPARAM_ROUTINE_SWITCHTOTHISWINDOW: u32 = 0x63;
 /// WM_ENABLE: a window was enabled (`wParam` TRUE) or disabled.
 pub const WM_ENABLE: u32 = 0x000A;
 /// WM_CANCELMODE: a window gives up its modes (capture, menus) before it is
