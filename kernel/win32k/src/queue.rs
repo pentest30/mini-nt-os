@@ -92,6 +92,14 @@ pub fn is_pointer_message(message: u32, wparam: u32) -> bool {
     POINTER_MESSAGES.contains(&message)
 }
 
+/// Le message porte un pointeur à traduire vers un autre processus, ou à
+/// garder après le retour de l'envoyeur : un message à pointeur
+/// ([`is_pointer_message`]) dont le `lParam` n'est pas nul. Nul, il n'y a
+/// rien à traduire (WM_SETTINGCHANGE sans section, que MSDN permet).
+pub fn carries_pointer(message: u32, wparam: u32, lparam: u32) -> bool {
+    lparam != 0 && is_pointer_message(message, wparam)
+}
+
 /// Les messages que demande PeekMessage ou GetMessage.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Filter {
@@ -894,6 +902,14 @@ mod tests {
         assert!(!is_pointer_message(0x0400, 0), "WM_USER");
         assert!(!is_pointer_message(WM_DEVICECHANGE, 0x0007), "WM_DEVICECHANGE without a pointer");
         assert!(is_pointer_message(WM_DEVICECHANGE, 0x8000), "WM_DEVICECHANGE with one");
+    }
+
+    #[test]
+    fn a_pointer_message_with_a_null_lparam_carries_nothing() {
+        const WM_SETTINGCHANGE: u32 = 0x001A;
+        assert!(carries_pointer(WM_SETTINGCHANGE, 0x2F, 0x0012_F000), "a section's name");
+        assert!(!carries_pointer(WM_SETTINGCHANGE, 0x2F, 0), "no section");
+        assert!(!carries_pointer(0x0400, 0, 0x0012_F000), "WM_USER: a value");
     }
 
     #[test]

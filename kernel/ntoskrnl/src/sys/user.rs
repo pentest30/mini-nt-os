@@ -1,20 +1,28 @@
 //! Les services de win32k (la seconde table) : NtUserProcessConnect,
 //! NtUserInitializeClientPfnArrays, NtUserInitialize, NtGdiInit,
 //! NtUserCallTwoParam (RegisterLogonProcess), NtUserSetInformationThread
-//! (le port d'API de `csrss`), NtUserLoadKeyboardLayoutEx,
+//! (le port d'API de `csrss`, la fin d'une session), NtUserLoadKeyboardLayoutEx,
 //! NtUserGetKeyboardLayoutList, NtUserSystemParametersInfo.
 //!
 //! Le thread qui les appelle est déjà un thread GUI (`super::dispatch`).
 
-use abi::ntstatus::{NtStatus, STATUS_ACCESS_DENIED, STATUS_INFO_LENGTH_MISMATCH, STATUS_SUCCESS};
-use abi::user::{TWOPARAM_ROUTINE_REGISTERLOGONPROCESS, USER_THREAD_CSR_API_PORT};
+use abi::ntstatus::{
+    NtStatus, STATUS_ACCESS_DENIED, STATUS_INFO_LENGTH_MISMATCH, STATUS_NOT_IMPLEMENTED, STATUS_SUCCESS,
+};
+use abi::security::{SE_SHUTDOWN_PRIVILEGE, SYSTEM_LUID};
+use abi::user::{
+    TWOPARAM_ROUTINE_REGISTERLOGONPROCESS, USER_THREAD_CSR_API_PORT, USER_THREAD_END_SHUTDOWN,
+    USER_THREAD_INITIATE_SHUTDOWN, USER_THREAD_RESTORE_DESKTOP, USER_THREAD_USE_ACTIVE_DESKTOP,
+};
 use abi::winerror::ERROR_CALL_NOT_IMPLEMENTED;
 use ex::{Event, EVENT_ALL_ACCESS, EVENT_TYPE};
 use ke::usermem::UserPtr;
 use lpc::port::PORT_TYPE;
 use ob::{AccessMask, Handle};
 use ps::eprocess::PROCESS_VM_OPERATION;
-use ps::ethread::THREAD_SET_INFORMATION;
+use ps::ethread::{EThread, THREAD_SET_INFORMATION};
+use se::Luid;
+use win32k::shutdown::{Requester, StationRights};
 
 /// Les routines de NtUserCallTwoParam demandées sans être implémentées.
 static UNSUPPORTED_TWO_PARAM_ROUTINES: super::ClassReport = super::ClassReport::new("NtUserCallTwoParam");
@@ -57,6 +65,18 @@ pub(super) fn nt_user_initialize(arguments: &[u32]) -> NtStatus {
     };
     win32k::csrss::initialize(version, reference).map_or_else(|status| status, |()| STATUS_SUCCESS)
 }
+
+/// SPIF_SENDCHANGE : SystemParametersInfo annonce le changement
+/// (WM_SETTINGCHANGE aux fenêtres de premier niveau).
+const SPIF_SENDCHANGE: u32 = 0x0002;
+
+/// WM_SETTINGCHANGE : un paramètre du système a changé (`wParam` : l'action
+/// de SystemParametersInfo).
+const WM_SETTINGCHANGE: u32 = 0x001A;
+
+/// Ce que WM_SETTINGCHANGE attend de chaque fenêtre (co_IntSendMessageTimeout
+/// de ReactOS : SMTO_NORMAL, 100 ms).
+const SETTING_CHANGE_TIMEOUT_MS: u32 = 100;
 
 /// Les actions de NtUserSystemParametersInfo demandées sans être
 /// implémentées.
@@ -128,13 +148,26 @@ fn give_non_client_metrics(pv: u32, size: u32, bytes: &[u8]) -> NtStatus {
 ///   points, la police par défaut d'une ListView ;
 /// - SPI_GETFOCUSBORDERWIDTH, SPI_GETFOCUSBORDERHEIGHT : l'épaisseur d'un
 ///   rectangle de focus (un UINT en `pvParam`, `uiParam` ignoré), que
-///   DrawFocusRect lit avant ses quatre PatBlt.
+///   DrawFocusRect lit avant ses quatre PatBlt ;
+/// - SPI_GETWORKAREA : la zone de travail du moniteur principal (`rcWork`,
+///   un RECT en `pvParam`, `uiParam` ignoré), comme ReactOS (SpiGet) ;
+///   FALSE sans moniteur. Les programmes y placent et centrent leurs
+///   fenêtres : sans elle, VCL (OpenOffice) prenait un RECT non initialisé
+///   et ouvrait ses fenêtres hors de l'écran ;
+/// - SPI_SETWORKAREA : le RECT en `pvParam` devient la zone de travail du
+///   moniteur (`win32k::monitor::set_work_area`) ; FALSE pour un RECT
+///   illisible, vide, ou qui sort du moniteur. La barre des tâches
+///   d'`explorer` y garde sa place. Avec SPIF_SENDCHANGE, WM_SETTINGCHANGE
+///   (`wParam` SPI_SETWORKAREA) va aux fenêtres de premier niveau, 100 ms
+///   au plus chacune (`win32k::sent::broadcast`), comme ReactOS : le bureau
+///   du shell s'y redimensionne. Son `lParam` est nul (MSDN le permet) ;
+///   ReactOS passe « Control Panel\Desktop ».
 ///
 /// FALSE et `ERROR_INVALID_PARAMETER` pour une taille fausse. Une autre
 /// action est journalisée une fois et rend FALSE
 /// (`ERROR_CALL_NOT_IMPLEMENTED`).
 pub(super) fn nt_user_system_parameters_info(arguments: &[u32]) -> NtStatus {
-    let [action, param, pv, _win_ini] = arguments[..4] else { unreachable!("4 arguments") };
+    let [action, param, pv, win_ini] = arguments[..4] else { unreachable!("4 arguments") };
     match action {
         abi::user::SPI_GETNONCLIENTMETRICS => {
             let metrics = win32k::metrics::non_client_metrics(&win32k::metrics::Parameters::DEFAULT);
@@ -178,6 +211,36 @@ pub(super) fn nt_user_system_parameters_info(arguments: &[u32]) -> NtStatus {
                 parameters.focus_border_height
             };
             give_parameter(pv, 0, &value.to_le_bytes(), false)
+        }
+        abi::user::SPI_GETWORKAREA => {
+            let Some(monitor) = win32k::monitor::primary() else {
+                return NtStatus(0);
+            };
+            let work = monitor.work;
+            let mut rect = [0u8; 16];
+            for (bytes, side) in rect.chunks_exact_mut(4).zip([work.left, work.top, work.right, work.bottom]) {
+                bytes.copy_from_slice(&side.to_le_bytes());
+            }
+            give_parameter(pv, 0, &rect, false)
+        }
+        abi::user::SPI_SETWORKAREA => {
+            let mut rect = [0u8; 16];
+            if ke::usermem::copy_from_user(&mut rect, u64::from(pv)).is_err() {
+                return NtStatus(0);
+            }
+            let side = |index: usize| {
+                i32::from_le_bytes([rect[index * 4], rect[index * 4 + 1], rect[index * 4 + 2], rect[index * 4 + 3]])
+            };
+            let work = win32k::gdi::dib::Rect::new(side(0), side(1), side(2), side(3));
+            if !win32k::monitor::set_work_area(work) {
+                return NtStatus(0);
+            }
+            if win_ini & SPIF_SENDCHANGE != 0 {
+                if let Ok(thread) = win32k::convert_current_thread() {
+                    win32k::sent::broadcast(&thread, WM_SETTINGCHANGE, action, 0, SETTING_CHANGE_TIMEOUT_MS);
+                }
+            }
+            NtStatus(1)
         }
         _ => {
             UNSUPPORTED_SPI_ACTIONS.report(action);
@@ -226,10 +289,19 @@ pub(super) fn nt_user_call_two_param(arguments: &[u32]) -> NtStatus {
 /// NtUserSetInformationThread(ThreadHandle, ThreadInformationClass,
 /// ThreadInformation, ThreadInformationLength), pour `csrss` seul
 /// (`STATUS_ACCESS_DENIED` sinon), sur un thread ouvert avec
-/// `THREAD_SET_INFORMATION`. `UserThreadCsrApiPort` : le handle d'un port
-/// LPC (4 octets) devient le port d'API de `csrss` pour win32k
-/// (`win32k::csrss::set_api_port`). Les autres classes rendent
-/// `STATUS_NOT_IMPLEMENTED`, journalisées une fois.
+/// `THREAD_SET_INFORMATION` :
+///
+/// | Classe | Ce qu'elle fait |
+/// |---|---|
+/// | `UserThreadCsrApiPort` (10) | le handle d'un port LPC (4 octets) devient le port d'API de `csrss` (`win32k::csrss::set_api_port`) |
+/// | `UserThreadInitiateShutdown` (5) | les drapeaux EWX_* (4 octets, réécrits) d'une fin de session demandée par ce thread client (`win32k::shutdown::initiate`) |
+/// | `UserThreadEndShutdown` (6) | le statut (4 octets) de la fin des processus de la session (`win32k::shutdown::end`) |
+/// | `UserThreadUseActiveDesktop` (7) | le thread courant va sur le bureau d'entrée (`win32k::shutdown::use_active_desktop`) |
+/// | `UserThreadRestoreDesktop` (9) | il le quitte |
+///
+/// Les deux dernières ne valent que pour le thread courant
+/// (`STATUS_NOT_IMPLEMENTED` sinon, comme ReactOS). Les autres classes
+/// rendent `STATUS_NOT_IMPLEMENTED`, journalisées une fois.
 pub(super) fn nt_user_set_information_thread(arguments: &[u32]) -> NtStatus {
     let [handle, class, information, length] = arguments[..4] else { unreachable!("4 arguments") };
     let set = || {
@@ -237,19 +309,69 @@ pub(super) fn nt_user_set_information_thread(arguments: &[u32]) -> NtStatus {
         if process.pid() != win32k::csrss::csrss() {
             return Err(STATUS_ACCESS_DENIED);
         }
-        super::reference_thread(handle, THREAD_SET_INFORMATION)?;
-        if class != USER_THREAD_CSR_API_PORT {
-            return Err(UNSUPPORTED_USER_THREAD_CLASSES.report(class));
+        let thread = super::reference_thread(handle, THREAD_SET_INFORMATION)?;
+        let current = ps::ethread::current_thread().is_some_and(|current| current.tid() == thread.tid());
+        match class {
+            USER_THREAD_CSR_API_PORT => {
+                if length != 4 {
+                    return Err(STATUS_INFO_LENGTH_MISMATCH);
+                }
+                let port = UserPtr::<u32>::new(information).read()?;
+                let port = process.handle_table.reference(Handle(port), Some(&PORT_TYPE), AccessMask(0))?;
+                win32k::csrss::set_api_port(port);
+                Ok(STATUS_SUCCESS)
+            }
+            USER_THREAD_INITIATE_SHUTDOWN => {
+                if length != 4 {
+                    return Err(STATUS_INFO_LENGTH_MISMATCH);
+                }
+                let pointer = UserPtr::<u32>::new(information);
+                let (status, flags) = win32k::shutdown::initiate(pointer.read()?, &requester(&thread));
+                pointer.write(&flags)?;
+                Ok(status)
+            }
+            USER_THREAD_END_SHUTDOWN => {
+                if length != 4 {
+                    return Err(STATUS_INFO_LENGTH_MISMATCH);
+                }
+                win32k::shutdown::end(NtStatus(UserPtr::<u32>::new(information).read()?));
+                Ok(STATUS_SUCCESS)
+            }
+            USER_THREAD_USE_ACTIVE_DESKTOP if current => {
+                win32k::shutdown::use_active_desktop(&process).map(|()| STATUS_SUCCESS)
+            }
+            USER_THREAD_RESTORE_DESKTOP if current => win32k::shutdown::restore_desktop().map(|()| STATUS_SUCCESS),
+            USER_THREAD_USE_ACTIVE_DESKTOP | USER_THREAD_RESTORE_DESKTOP => Err(STATUS_NOT_IMPLEMENTED),
+            _ => Err(UNSUPPORTED_USER_THREAD_CLASSES.report(class)),
         }
-        if length != 4 {
-            return Err(STATUS_INFO_LENGTH_MISMATCH);
-        }
-        let port = UserPtr::<u32>::new(information).read()?;
-        let port = process.handle_table.reference(Handle(port), Some(&PORT_TYPE), AccessMask(0))?;
-        win32k::csrss::set_api_port(port);
-        Ok(())
     };
-    set().map_or_else(|status| status, |()| STATUS_SUCCESS)
+    set().unwrap_or_else(|status| status)
+}
+
+/// Qui demande la fin d'une session : le thread client `thread` de `csrss`
+/// (son processus, sa session d'ouverture : celle du jeton qu'il emprunte,
+/// sinon de son processus, GetProcessLuid), et `csrss` lui-même, qui
+/// emprunte son identité (le privilège d'arrêt du sujet courant,
+/// HasPrivilege).
+fn requester(thread: &EThread) -> Requester {
+    let process = thread.process();
+    let token = thread.impersonation().map_or_else(|| process.primary_token(), |impersonation| impersonation.token);
+    let system = token.authentication_id() == Luid::from_abi(SYSTEM_LUID);
+    let process_info = win32k::gui::existing_process_info(process);
+    let station = process_info.as_ref().and_then(|info| info.window_station()).map(|station| StationRights {
+        exit_windows: station.access.0 & win32k::winsta::WINSTA_EXITWINDOWS != 0,
+        no_io: station.station.no_io(),
+    });
+    let subject = ps::ethread::current_thread()
+        .and_then(|current| current.impersonation())
+        .map_or_else(|| super::current_process().primary_token(), |impersonation| impersonation.token);
+    Requester {
+        gui: process_info.is_some(),
+        logon: process.pid() == win32k::logon::logon_process(),
+        system,
+        station,
+        shutdown_privilege: subject.is_privilege_enabled(Luid(u64::from(SE_SHUTDOWN_PRIVILEGE))),
+    }
 }
 
 /// Les drapeaux qu'accepte NtUserLoadKeyboardLayoutEx.

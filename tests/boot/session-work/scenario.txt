@@ -1,0 +1,33 @@
+# M7, the second criterion: a whole session, opened, worked in and shut down,
+# with no fatal error nor measurable pool leak (tests/native/work1.c as the
+# shell of Administrator). Four rounds of work: a file written, copied by
+# cmd.exe (a console process), opened in notepad.exe and closed (WM_CLOSE).
+# After each round, once they hold still, the program reads the kernel's pools
+# (NtQuerySystemInformation, SystemPoolTagInformation); the first round warms
+# the caches, and the pools may grow by at most 256 bytes from round 2 to
+# round 4 ("[work] PASS"). Then ExitWindowsEx shuts the system down
+# (session-shutdown). The leaks this found, about 49 KB a round, are gone:
+# the kernel's probe (smss's, `interactive`) kept every process created in
+# the session, with its token (it keeps only its own children now); each
+# client of csrss left its shared section mapped in csrss (the server's port
+# undoes the view when it goes, LpcpDeletePort); a finished thread left its
+# stack (thread-stack). See docs/compat/m6-logon.md.
+features = test-smss, interactive
+requires = userland, native
+session = WORK1.EXE
+disk = system
+boots = 2
+cpus = default, intel
+timeout = 900
+
+expect = We are logged on
+expect = [work] pools after the logon:
+expect = [work] round 4 done:
+expect = [work] PASS: the pools grew by
+expect = [work] work done
+expect = [work] WM_ENDSESSION 1
+expect = We are logged off
+expect = [power] NtShutdownSystem: power off requested
+forbid = [work] FAIL
+forbid = [minoinit] stopped:
+forbid = *** STOP:

@@ -22,7 +22,10 @@
 //! l'étiquette du bloc ; chaque pool compte les blocs vivants et leurs octets
 //! par étiquette ([`Pool::tag_stats`]), les allocations de Rust (`Box`, `Vec`…)
 //! sous [`TAG_RUST`]. Un processus terminé doit les ramener à leur valeur
-//! initiale (critère de sortie de M2).
+//! initiale (critère de sortie de M2). Chaque étiquette compte aussi ce qui a
+//! été alloué et rendu sous elle depuis le démarrage, comme le PoolTrackTable
+//! de NT ; [`Pool::tag_records`] les donne toutes, ce que
+//! NtQuerySystemInformation(SystemPoolTagInformation) rend.
 //!
 //! Rien n'est paginé (ADR-010) : le pool paginé reste en mémoire, mais ne se
 //! prend qu'à APC_LEVEL au plus ; le non paginé, jusqu'à DISPATCH_LEVEL.
@@ -49,7 +52,7 @@ pub const GROW_PAGES: usize = 64;
 
 /// Étiquettes suivies au plus par pool ; les suivantes comptent sous
 /// [`TAG_OVERFLOW`].
-const MAX_TAGS: usize = 64;
+pub const MAX_TAGS: usize = 64;
 
 /// Une étiquette de pool : quatre caractères, le premier dans l'octet de poids
 /// faible (`tag(b"Proc")`).
@@ -107,6 +110,23 @@ pub struct TagStats {
 struct TagEntry {
     tag: PoolTag,
     stats: TagStats,
+    /// Blocs alloués sous elle depuis le démarrage.
+    allocs: usize,
+    /// Blocs rendus.
+    frees: usize,
+}
+
+/// Ce qu'un pool sait d'une étiquette (une entrée du PoolTrackTable de NT).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TagRecord {
+    /// L'étiquette ; 0 pour une entrée vide.
+    pub tag: PoolTag,
+    /// Ses blocs vivants.
+    pub live: TagStats,
+    /// Blocs alloués sous elle depuis le démarrage.
+    pub allocs: usize,
+    /// Blocs rendus.
+    pub frees: usize,
 }
 
 /// État d'un pool.
@@ -186,7 +206,8 @@ impl<B: Backing> Pool<B> {
                 floor: 0,
                 limit: 0,
                 used: 0,
-                tags: [TagEntry { tag: 0, stats: TagStats { allocations: 0, bytes: 0 } }; MAX_TAGS],
+                tags: [TagEntry { tag: 0, stats: TagStats { allocations: 0, bytes: 0 }, allocs: 0, frees: 0 };
+                    MAX_TAGS],
             }),
         }
     }
@@ -244,6 +265,22 @@ impl<B: Backing> Pool<B> {
     /// <= DISPATCH_LEVEL.
     pub fn tag_stats(&self, tag: PoolTag) -> TagStats {
         self.with_lock(|inner| inner.tags.iter().find(|e| e.tag == tag).map(|e| e.stats).unwrap_or_default())
+    }
+
+    /// Toutes ses étiquettes (les entrées vides ont l'étiquette 0), copiées
+    /// sous son verrou, sans allouer : le pool non paginé est l'allocateur de
+    /// Rust.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn tag_records(&self) -> [TagRecord; MAX_TAGS] {
+        self.with_lock(|inner| {
+            let mut records = [TagRecord::default(); MAX_TAGS];
+            for (record, entry) in records.iter_mut().zip(&inner.tags) {
+                *record = TagRecord { tag: entry.tag, live: entry.stats, allocs: entry.allocs, frees: entry.frees };
+            }
+            records
+        })
     }
 
     /// Alloue `size` octets étiquetés `tag`, alignés sur 16 ; nul si la
@@ -390,13 +427,15 @@ impl Inner {
                 }
             },
         };
-        let stats = &mut self.tags[slot].stats;
+        let entry = &mut self.tags[slot];
         if allocated {
-            stats.allocations += 1;
-            stats.bytes += bytes;
+            entry.stats.allocations += 1;
+            entry.stats.bytes += bytes;
+            entry.allocs = entry.allocs.wrapping_add(1);
         } else {
-            stats.allocations -= 1;
-            stats.bytes -= bytes;
+            entry.stats.allocations -= 1;
+            entry.stats.bytes -= bytes;
+            entry.frees = entry.frees.wrapping_add(1);
         }
     }
 
@@ -741,6 +780,24 @@ unsafe impl GlobalAlloc for GlobalPool {
         // SAFETY: forwarded.
         unsafe { NONPAGED_POOL.dealloc(ptr, layout) }
     }
+}
+
+/// Les étiquettes des deux pools, réunies par étiquette dans l'ordre où
+/// elles paraissent (le pool non paginé d'abord) : chacune avec ce que le pool
+/// paginé et le non paginé savent d'elle ([`TagRecord`] vide où elle
+/// n'est pas). Ce que rend SystemPoolTagInformation (ExGetPoolTagInfo).
+pub fn merged_tags(non_paged: &[TagRecord], paged: &[TagRecord]) -> alloc::vec::Vec<(TagRecord, TagRecord)> {
+    let mut merged: alloc::vec::Vec<(TagRecord, TagRecord)> = alloc::vec::Vec::new();
+    for record in non_paged.iter().filter(|record| record.tag != 0) {
+        merged.push((TagRecord { tag: record.tag, ..TagRecord::default() }, *record));
+    }
+    for record in paged.iter().filter(|record| record.tag != 0) {
+        match merged.iter_mut().find(|(_, non_paged)| non_paged.tag == record.tag) {
+            Some((slot, _)) => *slot = *record,
+            None => merged.push((*record, TagRecord { tag: record.tag, ..TagRecord::default() })),
+        }
+    }
+    merged
 }
 
 #[cfg(test)]
@@ -1113,6 +1170,42 @@ mod tests {
         assert_eq!(t.pool.tag_stats(T1), TagStats::default());
         assert_eq!(t.pool.tag_stats(T2), TagStats::default());
         assert_eq!(t.pool.used(), 0);
+    }
+
+    #[test]
+    fn the_tags_of_both_pools_are_merged_by_tag() {
+        let record = |tag, bytes, allocs| TagRecord { tag, live: TagStats { allocations: 1, bytes }, allocs, frees: 0 };
+        let non_paged = [record(T1, 10, 3), TagRecord::default(), record(T2, 20, 1)];
+        let paged = [record(T2, 30, 2), record(TAG_RUST, 40, 5)];
+        let merged = merged_tags(&non_paged, &paged);
+        let empty = |tag| TagRecord { tag, ..TagRecord::default() };
+        assert_eq!(merged.len(), 3, "T1, T2, Rust: the empty entry left out");
+        assert_eq!(merged[0], (empty(T1), record(T1, 10, 3)), "non-paged only");
+        assert_eq!(merged[1], (record(T2, 30, 2), record(T2, 20, 1)), "in both pools");
+        assert_eq!(merged[2], (record(TAG_RUST, 40, 5), empty(TAG_RUST)), "paged only");
+    }
+
+    #[test]
+    fn each_tag_counts_what_was_allocated_and_freed_under_it() {
+        let t = TestPool::new(64 * 1024);
+        let a = t.pool.allocate_with_tag(100, T1);
+        let b = t.pool.allocate_with_tag(200, T1);
+        let c = t.pool.allocate_with_tag(40, T2);
+        // SAFETY: live blocks of this pool, with their tags.
+        unsafe { t.pool.free_with_tag(a, T1) };
+        let records = t.pool.tag_records();
+        let find = |tag| *records.iter().find(|record| record.tag == tag).expect("a record");
+        let one = TagRecord { tag: T1, live: TagStats { allocations: 1, bytes: 200 }, allocs: 2, frees: 1 };
+        assert_eq!(find(T1), one, "two allocated, one freed, one left");
+        assert_eq!(find(T2), TagRecord { tag: T2, live: TagStats { allocations: 1, bytes: 40 }, allocs: 1, frees: 0 });
+        assert_eq!(records.iter().filter(|record| record.tag != 0).count(), 2, "the others are empty");
+        // SAFETY: as above.
+        unsafe {
+            t.pool.free_with_tag(b, T1);
+            t.pool.free_with_tag(c, T2);
+        }
+        let records = t.pool.tag_records();
+        assert_eq!(records[0], TagRecord { tag: T1, live: TagStats::default(), allocs: 2, frees: 2 }, "kept, empty");
     }
 
     #[test]

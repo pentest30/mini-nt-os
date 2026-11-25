@@ -33,9 +33,16 @@
 //! (`ERROR_MESSAGE_SYNC_ONLY`), l'envoyeur pouvant rendre sa mémoire avant
 //! que le destinataire la lise.
 //!
+//! Un message à pointeur dont le `lParam` est nul n'a rien à traduire : il
+//! va à un autre processus, et SendNotifyMessage l'accepte
+//! ([`crate::queue::carries_pointer`]). La diffusion du noyau aux fenêtres
+//! de premier niveau ([`broadcast`]) : co_IntSendMessageTimeout de
+//! HWND_BROADCAST.
+//!
 //! Pas encore : InSendMessage(Ex), ReplyMessage, SendMessageCallback,
 //! SMTO_ABORTIFHUNG et SMTO_BLOCK, les crochets (WH_CALLWNDPROC), la
-//! diffusion (HWND_BROADCAST).
+//! diffusion demandée par le mode utilisateur (HWND_BROADCAST de
+//! SendMessage).
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -250,6 +257,32 @@ pub fn notify_window(
     notify(&target, window.handle, message, wparam, lparam)
 }
 
+/// co_IntSendMessageTimeout de HWND_BROADCAST, depuis le noyau : `message`
+/// à chaque fenêtre de premier niveau du bureau du thread courant
+/// `current`, `timeout_ms` au plus chacune. Une fenêtre dont le thread n'a
+/// pas répondu à temps le reçoit plus tard, sans attente
+/// ([`notify_window`]) : comme Windows, qui livre le message d'un
+/// SendMessageTimeout dépassé ; ReactOS le retire (la barre des tâches
+/// d'`explorer`, occupée, restait en bas de l'ancien écran après un
+/// WM_DISPLAYCHANGE).
+///
+/// # IRQL
+/// PASSIVE_LEVEL, dans un service système, sans rien tenir. Rappelle le
+/// mode utilisateur.
+pub fn broadcast(current: &ThreadInfo, message: u32, wparam: u32, lparam: u32, timeout_ms: u32) {
+    let Some(desktop) = current.desktop() else { return };
+    let top_level = crate::window::children(&desktop.desktop.window, false);
+    for window in top_level.into_iter().filter_map(crate::window::get) {
+        if send_to_window(current, &window, message, wparam, lparam, Some(timeout_ms)) == Err(SendError::Timeout) {
+            log::info!(
+                "win32k: message {message:#x} to {:#x}: no answer within {timeout_ms} ms, sent later",
+                window.handle
+            );
+            let _ = notify_window(current, &window, message, wparam, lparam);
+        }
+    }
+}
+
 /// Met `sent` parmi les messages envoyés de `target`, qui est réveillé.
 fn queue_to(target: &ThreadInfo, sent: Arc<SentMessage>) {
     let ((), wake, change) = target.queue.with(|queue| queue.push_sent(sent));
@@ -266,8 +299,8 @@ fn withdraw(target: &ThreadInfo, sent: &Arc<SentMessage>) {
 
 /// Le message vers un autre processus que `current` porte un pointeur
 /// qu'il faudrait traduire.
-fn unmarshalled(current: &ThreadInfo, target: &ThreadInfo, message: u32, wparam: u32) -> bool {
-    if !crate::queue::is_pointer_message(message, wparam) {
+fn unmarshalled(current: &ThreadInfo, target: &ThreadInfo, message: u32, wparam: u32, lparam: u32) -> bool {
+    if !crate::queue::carries_pointer(message, wparam, lparam) {
         return false;
     }
     let process = |thread: &ThreadInfo| crate::gui::process_id_of(thread.server);
@@ -300,7 +333,7 @@ pub fn send(
     lparam: u32,
     timeout_ms: Option<u32>,
 ) -> Result<u32, SendError> {
-    if unmarshalled(current, target, message, wparam) {
+    if unmarshalled(current, target, message, wparam, lparam) {
         return Err(SendError::Unmarshalled);
     }
     wait_reply(current, target, SentMessage::new(hwnd, message, wparam, lparam, true), timeout_ms)
@@ -399,13 +432,14 @@ fn wait_reply(
 /// est mis parmi ses messages envoyés, sans attendre sa réponse.
 ///
 /// # Errors
-/// [`SendError::SyncOnly`] pour un message qui porte un pointeur : rien ne
-/// le garde après le retour de l'envoyeur.
+/// [`SendError::SyncOnly`] pour un message qui porte un pointeur
+/// ([`crate::queue::carries_pointer`]) : rien ne le garde après le retour
+/// de l'envoyeur.
 ///
 /// # IRQL
 /// PASSIVE_LEVEL.
 pub fn notify(target: &Arc<ThreadInfo>, hwnd: u32, message: u32, wparam: u32, lparam: u32) -> Result<(), SendError> {
-    if crate::queue::is_pointer_message(message, wparam) {
+    if crate::queue::carries_pointer(message, wparam, lparam) {
         return Err(SendError::SyncOnly);
     }
     queue_to(target, SentMessage::new(hwnd, message, wparam, lparam, false));

@@ -90,6 +90,11 @@ pub const ERROR_CLASS_ALREADY_EXISTS: u32 = 1410;
 pub const ERROR_CLASS_DOES_NOT_EXIST: u32 = 1411;
 /// ERROR_NOACCESS.
 pub const ERROR_NOACCESS: u32 = 998;
+/// ERROR_INVALID_PIXEL_FORMAT.
+pub const ERROR_INVALID_PIXEL_FORMAT: u32 = 2000;
+/// ERROR_INVALID_WINDOW_STYLE: what GDI's SwapBuffers gives for a DC that is
+/// not a window's.
+pub const ERROR_INVALID_WINDOW_STYLE: u32 = 2002;
 
 /// RtlNtStatusToDosError, for the statuses the kernel gives win32k's
 /// callers; the others are `ERROR_MR_MID_NOT_FOUND`.
