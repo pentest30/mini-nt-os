@@ -1,0 +1,28 @@
+# The privileges of the logged-on user (tests/native/priv1.c as the shell of
+# Administrator). lsasrv gives a logon token the privileges of the LSA
+# accounts of its groups (LsapSetPrivileges); minoinit gives them at setup,
+# as syssetup's InstallPrivileges does, from the [Privilege Rights] of
+# %SystemRoot%\inf\defltwk.inf (on the boot disk, WINDOWS\INF). Before,
+# the LSA's database had no accounts and Administrator's token no privilege
+# at all: RtlAdjustPrivilege(SeShutdownPrivilege) gave STATUS_PRIVILEGE_NOT_HELD
+# (c0000061), and a session could not shut the system down. See
+# docs/compat/m6-logon.md.
+features = test-smss, interactive
+requires = userland, native
+session = PRIV1.EXE
+disk = system
+boots = 2
+cpus = default, intel
+timeout = 600
+
+expect = [minoinit] rights of the accounts:
+expect = [minoinit] done; rebooting
+expect = We are logged on
+expect = [priv] 20 privileges
+expect = [priv] SeChangeNotifyPrivilege (23): attributes 3
+expect = [priv] SeShutdownPrivilege (19): attributes 0
+expect = [priv] RtlAdjustPrivilege SeShutdownPrivilege: 00000000 (it was 0)
+expect = [priv] done
+forbid = [minoinit] stopped:
+forbid = [priv] FAIL
+forbid = *** STOP:

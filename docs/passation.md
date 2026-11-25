@@ -1,5 +1,15 @@
 # Notes de passation
 
+- **Les droits des comptes** (`claude/account-privileges`, sur la PR 180, M7, second critère ;
+  [`compat/m6-logon.md`](compat/m6-logon.md#les-droits-des-comptes-m7-le-2026-11-23) ; demandé le 2026-11-23 : une
+  session qui s'arrête). Le jeton d'`Administrator` n'avait aucun privilège, donc pas `SeShutdownPrivilege`
+  qu'ExitWindowsEx demande : la base de la LSA n'avait aucun compte, que `syssetup` crée à l'installation
+  (InstallPrivileges). `minoinit` donne maintenant les droits de `[Privilege Rights]` de `defltwk.inf` (sur le disque
+  dans `WINDOWS\INF`) par LsaAddAccountRights : 51 droits, 20 privilèges pour les Administrateurs. Scénario
+  `session-privileges` (`tests/native/priv1.c`). **Suite**, mesurée : csrss s'arrête ensuite à
+  NtUserSetInformationThread classe 7 (`UserThreadUseActiveDesktop`) ; puis `UserThreadInitiateShutdown`,
+  `UserThreadEndShutdown`, WM_LOGONNOTIFY à `winlogon`, la fin des processus de la session, NtShutdownSystem
+  (le travail en cours est gardé hors de la branche : `tests/native/shutdn1.c`, scénario `session-shutdown`).
 - **Plus de 64 threads : la limite de Ke levée** (`claude/ke-thread-limit`, M7,
   [`compat/applications.md`](compat/applications.md#plus-de-64-threads-les-runtimes-de-visual-c-dopenoffice-le-2026-11-23) ;
   demandé le 2026-11-23, le blocage d'OpenOffice après la PR 181). Dans l'image VirtualBox, `install.exe` (les

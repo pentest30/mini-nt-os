@@ -8,6 +8,7 @@ CheckRemoteDebuggerPresent@8
 OpenProcess@12
 CancelIo@4
 CloseHandle@4
+LocalFree@4
 ConnectNamedPipe@8
 CopyFileW@12
 CreateDirectoryW@8
