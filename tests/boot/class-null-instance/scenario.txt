@@ -1,0 +1,21 @@
+# A window class registered and a window created with a NULL instance
+# (tests/native/nullinst1.c, MinGW, linked to ReactOS's kernel32 and user32):
+# NULLINST1.EXE takes the place of winlogon.exe. msi.dll makes its dialogs
+# this way: user32 registers the class under the program's module, and
+# IntFindClass matches a NULL instance with any (win32k::class::ClassLists::
+# find). Mino looked for a class of the instance 0: the full UI of msiexec
+# (the 7-Zip MSI opened from explorer) failed every dialog ("Failed to create
+# dialog") and showed nothing.
+# 1. a NULL instance: the window, of the class, WM_CREATE received;
+# 2. another program's instance does not find the class.
+features = test-smss
+requires = userland, native
+initial-command = NULLINST1.EXE
+cpus     = default, intel
+timeout  = 120
+
+expect = [nullinst] step 1: a NULL instance: the window 1 (error 0), of the class 1, WM_CREATE 1
+expect = [nullinst] step 2: another instance: the window 0, error 1407
+expect = [nullinst] done
+
+forbid = *** STOP:
