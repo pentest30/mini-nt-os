@@ -1,0 +1,28 @@
+# DIB sections of 16 bits per pixel (tests/native/bmp16.c, MinGW, linked to
+# ReactOS's kernel32 and gdi32): BMP16.EXE takes the place of winlogon.exe.
+# CreateDIBSection of 16 bits, BI_RGB (5-5-5: its DIBSECTION, lines of 32
+# bits), a pixel written by the process and read by the kernel, pixels
+# painted by the kernel and read by the process (gray 128 is 16 of 31, read
+# back as 132, as ReactOS's table), GetDIBits (the description: 16 bits,
+# BI_BITFIELDS; lines of 16 and of 32 bits); CreateDIBSection of 16 bits,
+# BI_BITFIELDS 5-6-5 (its masks in the DIBSECTION and from GetDIBits); BitBlt
+# from 5-5-5 into 5-6-5. Before, CreateDIBSection of 16 bits gave NULL.
+# See docs/compat/applications.md.
+features = test-smss
+requires = userland, native
+initial-command = BMP16.EXE
+cpus     = default, intel
+timeout  = 120
+
+expect = [bmp16] on WinSta0\Default
+expect = [bmp16] step 1: CreateDIBSection of 16 bits 1, bits 1: GetObject 84, 16 bits, 8 bytes a line, compression 0, masks 7c00 03e0 001f, size 16
+expect = [bmp16] step 2: written by the process, read by the kernel: 0000ff
+expect = [bmp16] step 3: PatBlt 1: (1,0) 03e0, (2,0) 4210 read back 848484, (0,0) 7c00, padding eeee
+expect = [bmp16] step 4: described 2: 16 bits, compression 3; 2 lines, top line 7c00 03e0 4210; 2 lines in 32 bits: ff0000 00ff00 848484
+expect = [bmp16] step 5: 5-6-5: GetObject 84, compression 3, masks f800 07e0 001f; (1,0) 00ff00; PatBlt 1: 001f; GetDIBits 1: masks f800 07e0 001f, 001f 07e0
+expect = [bmp16] step 6: BitBlt 1: f800 07e0
+expect = [bmp16] done
+
+forbid = *** STOP:
+forbid = a DIB section of 16 bits per pixel
+forbid = GetDIBits of 16 bits per pixel: not yet

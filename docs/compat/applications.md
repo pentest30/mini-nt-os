@@ -884,6 +884,36 @@ Scénario `many-threads` (`tests/native/manythr1.c`, AMD et Intel) : 200 threads
 vivants et prêts ensemble derrière leur créateur, puis libérés. Sans le changement : « thread 41 not created (error
 1450) ». Tests hôte : une file de 300 threads, 200 threads prêts de même priorité à tour de rôle, une table qui grandit
 trois fois. L'effet sur OpenOffice reste à mesurer (l'image VirtualBox, ou le scénario `app-openoffice`).
+### Les DIB sections de 16 bits, le 2026-11-23
+
+C'est la dette que laissaient les bitmaps de 24 bits. Aucune application du banc ne les a encore demandées (aucun
+« a DIB section of 16 bits » dans les journaux gardés) : c'est un format que ReactOS fait et que Mino refusait.
+
+- **Le format.** `win32k::gdi::surface::Format::Rgb16` : 16 bits par pixel sous trois masques. C'est 5-5-5 en
+  BI_RGB, et les masques de BI_BITFIELDS sinon : 5-6-5, ou tout masque de bits consécutifs, disjoints, dans les
+  16 bits (`masks_fit_16`).
+- **Le dessin.** Le moteur dessine sur les pixels décodés en 32 bits, puis réécrit ceux qui ont changé. Au décodage,
+  une composante de n bits est étendue à 8 bits par arrondi : ce sont les tables 5 → 8 de ReactOS, et sa table
+  6 → 8 à une unité près sur quelques valeurs. À l'encodage, une composante garde ses bits hauts, comme
+  EXLATEOBJ_iXlateRGBto555 et RGBto565. Les trois formats convertis (indexé, 16 et 24 bits) passent maintenant par le
+  même chemin (`Format::decode`, `Format::encode`).
+- **GetObject.** Le DIBSECTION dit BI_RGB pour 5-5-5, BI_BITFIELDS sinon, et donne ses masques, comme
+  BITMAP_GetObject de ReactOS.
+- **GetDIBits.** La description dit 16 bits et BI_BITFIELDS, comme ReactOS. Les lignes de 16 bits sont en 5-5-5 pour
+  BI_RGB. En BI_BITFIELDS, elles prennent les masques de la DIB section de 16 bits, ou 5-6-5 pour un autre bitmap.
+  ReactOS donne les masques de la palette de toute DIB section, ce qui n'a pas de sens pour une de 32 bits.
+- **La copie.** Une copie (GetIconInfo) garde ses 16 bits et ses masques.
+
+Scénario `bitmap-16` (`tests/native/bmp16.c`, AMD et Intel) :
+- une DIB section de 5-5-5 : son DIBSECTION, un pixel écrit par le processus et lu par le noyau, d'autres peints par
+  le noyau et lus par le processus (le gris 128 devient 16 sur 31, relu 132) ;
+- GetDIBits : la description, les lignes de 16 et de 32 bits ;
+- une DIB section de 5-6-5 : ses masques par GetObject et par GetDIBits ;
+- un BitBlt de 5-5-5 vers 5-6-5.
+
+Sans la modification (une mutation : 16 bits refusés), il échoue à l'étape 1.
+
+Pas encore : CreateBitmap de 16 bits ; en 32 bits, d'autres masques que ceux de BI_RGB.
 
 ### La suite
 

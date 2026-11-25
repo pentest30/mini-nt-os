@@ -56,6 +56,15 @@ HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList","ProfilesDirecto
 HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion","ProgramFilesDir",0x00000000,"C:\Program Files"
 HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion","CommonFilesDir",0x00000000,"C:\Program Files\Common Files"
 
+; Le répertoire de msi.dll, que syssetup écrit à l'installation de ReactOS
+; ([Classes] de syssetup.inf, AddReg de RegistrationPhase2 : %11%, le
+; répertoire système) : l'installeur d'OpenOffice ne charge msi.dll que de
+; là (aoo_msi_load), et disait sans lui « You have Windows Installer
+; '0.1244568.1244716' » (une DLLVERSIONINFO jamais remplie). L'autre valeur
+; de la section, InstallRoot du .NET Framework, n'a pas de répertoire à
+; nommer.
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Installer","InstallerLocation",0x00000000,"C:\WINDOWS\system32"
+
 ; Les paramètres régionaux de l'utilisateur, que la page des paramètres
 ; régionaux de l'installation de ReactOS écrit (la clé du LiveCD est vide) :
 ; winlogon les lit à l'ouverture de session (SetDefaultLanguage), et la

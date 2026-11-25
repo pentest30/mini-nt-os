@@ -176,6 +176,9 @@ fn the_mino_layer_installs_a_system_that_logs_on() {
     assert_eq!((program_files.data_type, program_files.data.clone()), (REG_SZ, sz("C:\\Program Files")));
     let common = value(software, "Microsoft\\Windows\\CurrentVersion", "CommonFilesDir").unwrap();
     assert_eq!(common.data, sz("C:\\Program Files\\Common Files"));
+    // The setup loader of OpenOffice loads msi.dll from there only.
+    let installer = value(software, "Microsoft\\Windows\\CurrentVersion\\Installer", "InstallerLocation").unwrap();
+    assert_eq!((installer.data_type, installer.data.clone()), (REG_SZ, sz("C:\\WINDOWS\\system32")));
 }
 
 /// The pinned ReactOS hives (`cargo xtask fetch-userland`), layered as

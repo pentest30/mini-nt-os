@@ -25,6 +25,15 @@
 //! ([`encode_bgr`]). C'est la profondeur des images de la LCL de Lazarus
 //! (PeaZip), qui n'avait sinon que des bitmaps nuls.
 //!
+//! Une DIB section de 16 bits par pixel ([`Format::Rgb16`]) garde ses pixels
+//! sous trois masques : 5-5-5 en BI_RGB ([`RGB555_MASKS`]), ceux de
+//! BI_BITFIELDS sinon (5-6-5, ou tout masque de bits consécutifs qui ne se
+//! chevauchent pas : [`masks_fit_16`]). Le moteur dessine de même sur ses
+//! pixels décodés en 32 bits ([`decode_rgb16`] : une composante de `n` bits
+//! étendue à 8 bits par arrondi, comme les tables 5 → 8 de ReactOS), puis
+//! réécrit ceux qui ont changé ([`encode_rgb16`] : les bits hauts de chaque
+//! composante, comme EXLATEOBJ_iXlateRGBto555 et RGBto565).
+//!
 //! Un bitmap n'est choisi que dans un DC à la fois (`hdc` du SURFACE) ; on
 //! ne le supprime pas tant qu'il y est choisi (ce que dit la documentation
 //! de DeleteObject ; ReactOS en diffère la suppression). Supprimé, une DIB
@@ -34,8 +43,8 @@
 //! donne ainsi les bitmaps d'une icône à son appelant ; GetDIBits les lit
 //! (`super::dibits`).
 //!
-//! Pas encore : les DIB sections de 16 bits, les masques autres que ceux de
-//! BI_RGB, la section d'une application (`hSection`), une table
+//! Pas encore : en 32 bits, d'autres masques que ceux de BI_RGB ; CreateBitmap
+//! de 16 bits ; la section d'une application (`hSection`), une table
 //! DIB_PAL_COLORS, SetDIBits ; les bitmaps d'un processus rendus à sa fin.
 
 use alloc::sync::Arc;
@@ -73,12 +82,154 @@ pub enum Format {
     Indexed { bit_count: u16, palette: Vec<ColorRef> },
     /// 24 bits par pixel, BGR, les lignes alignées sur 32 bits.
     Bgr,
+    /// 16 bits par pixel sous les masques du rouge, du vert et du bleu
+    /// (`masks`), les lignes alignées sur 32 bits.
+    Rgb16 { masks: [u32; 3] },
+}
+
+impl Format {
+    /// Les bits d'un de ses pixels.
+    pub fn bit_count(&self) -> u16 {
+        match self {
+            Format::Bgrx => 32,
+            Format::Indexed { bit_count, .. } => *bit_count,
+            Format::Bgr => 24,
+            Format::Rgb16 { .. } => 16,
+        }
+    }
+
+    /// Les pixels BGRX (l'octet haut à zéro, sauf en 32 bits), la ligne du
+    /// haut d'abord, de `bytes`, une DIB de `width` × `height` pixels de ce
+    /// format.
+    fn decode(&self, bytes: &[u8], size: (u32, u32), bottom_up: bool) -> Vec<u32> {
+        match self {
+            Format::Indexed { bit_count, palette } => decode_indexed(bytes, size, *bit_count, palette, bottom_up),
+            Format::Bgr => decode_bgr(bytes, size, bottom_up),
+            Format::Rgb16 { masks } => decode_rgb16(bytes, size, *masks, bottom_up),
+            Format::Bgrx => {
+                let (w, h) = (size.0 as usize, size.1 as usize);
+                let mut pixels = Vec::with_capacity(w * h);
+                for y in 0..h {
+                    let line = &bytes[memory_line(y, h, bottom_up) * w * 4..][..w * 4];
+                    pixels.extend(line.chunks_exact(4).map(|p| u32::from_le_bytes([p[0], p[1], p[2], p[3]])));
+                }
+                pixels
+            }
+        }
+    }
+
+    /// Réécrit dans `bytes`, une DIB de `width` × `height` pixels de ce
+    /// format, les pixels de `after` (BGRX, la ligne du haut d'abord) qui
+    /// diffèrent de `before`.
+    fn encode(&self, bytes: &mut [u8], size: (u32, u32), bottom_up: bool, before: &[u32], after: &[u32]) {
+        match self {
+            Format::Indexed { bit_count, palette } => {
+                encode_indexed(bytes, size, (*bit_count, palette), bottom_up, before, after);
+            }
+            Format::Bgr => encode_bgr(bytes, size, bottom_up, before, after),
+            Format::Rgb16 { masks } => encode_rgb16(bytes, size, *masks, bottom_up, before, after),
+            Format::Bgrx => {
+                let (w, h) = (size.0 as usize, size.1 as usize);
+                for y in 0..h {
+                    let base = memory_line(y, h, bottom_up) * w * 4;
+                    for x in 0..w {
+                        let at = y * w + x;
+                        if before[at] != after[at] {
+                            bytes[base + 4 * x..][..4].copy_from_slice(&after[at].to_le_bytes());
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Les octets d'une ligne de `width` pixels de `bit_count` bits, alignée sur
 /// 32 bits.
 pub fn stride(width: u32, bit_count: u16) -> usize {
     (width as usize * usize::from(bit_count)).div_ceil(32) * 4
+}
+
+/// 5-5-5 : les masques d'une DIB de 16 bits en BI_RGB.
+pub const RGB555_MASKS: [u32; 3] = [0x7C00, 0x03E0, 0x001F];
+/// 5-6-5 : les masques que GetDIBits donne en BI_BITFIELDS de 16 bits pour un
+/// bitmap qui n'est pas une DIB section de 16 bits.
+pub const RGB565_MASKS: [u32; 3] = [0xF800, 0x07E0, 0x001F];
+
+/// Des masques que tient une DIB de 16 bits : chacun non nul, de bits
+/// consécutifs, dans les 16 bits du bas, sans bit commun à deux masques.
+pub fn masks_fit_16(masks: [u32; 3]) -> bool {
+    let contiguous = |mask: u32| {
+        let run = mask.checked_shr(mask.trailing_zeros()).unwrap_or(0);
+        mask != 0 && mask <= 0xFFFF && run & run.wrapping_add(1) == 0
+    };
+    let [red, green, blue] = masks;
+    masks.iter().all(|&mask| contiguous(mask)) && red & green == 0 && red & blue == 0 && green & blue == 0
+}
+
+/// La composante de `word` sous `mask` (de bits consécutifs), étendue à
+/// 8 bits par arrondi : 31 sur 5 bits donne 255, 16 donne 132.
+fn expand(word: u32, mask: u32) -> u8 {
+    let shift = mask.trailing_zeros();
+    let max = mask >> shift;
+    let value = (word & mask) >> shift;
+    ((value * 255 + max / 2) / max) as u8
+}
+
+/// La composante `level` (8 bits) placée sous `mask` : ses bits hauts, ou,
+/// pour plus de 8 bits, décalée vers le haut.
+fn narrow(level: u8, mask: u32) -> u32 {
+    let shift = mask.trailing_zeros();
+    let width = (mask >> shift).count_ones();
+    let value = if width <= 8 { u32::from(level) >> (8 - width) } else { u32::from(level) << (width - 8) };
+    value << shift
+}
+
+/// Le pixel BGRX `pixel` en 16 bits sous `masks` (rouge, vert, bleu) : les
+/// bits hauts de chaque composante ; les bits hors des masques à zéro.
+pub fn pack_rgb16(pixel: u32, [red, green, blue]: [u32; 3]) -> u16 {
+    let [b, g, r, _] = pixel.to_le_bytes();
+    (narrow(r, red) | narrow(g, green) | narrow(b, blue)) as u16
+}
+
+/// Les pixels BGRX (l'octet haut à zéro), la ligne du haut d'abord, de la
+/// DIB de 16 bits `bytes` de `width` × `height` pixels sous `masks` (rouge,
+/// vert, bleu).
+pub fn decode_rgb16(bytes: &[u8], (width, height): (u32, u32), masks: [u32; 3], bottom_up: bool) -> Vec<u32> {
+    let (w, h, line_bytes) = (width as usize, height as usize, stride(width, 16));
+    let [red, green, blue] = masks;
+    let mut pixels = Vec::with_capacity(w * h);
+    for y in 0..h {
+        let line = &bytes[memory_line(y, h, bottom_up) * line_bytes..][..line_bytes];
+        for x in 0..w {
+            let word = u32::from(u16::from_le_bytes([line[2 * x], line[2 * x + 1]]));
+            pixels.push(u32::from_le_bytes([expand(word, blue), expand(word, green), expand(word, red), 0]));
+        }
+    }
+    pixels
+}
+
+/// Réécrit dans la DIB de 16 bits `bytes` (sous `masks`) les pixels de
+/// `after` (BGRX, la ligne du haut d'abord) qui diffèrent de `before`
+/// ([`pack_rgb16`]).
+pub fn encode_rgb16(
+    bytes: &mut [u8],
+    (width, height): (u32, u32),
+    masks: [u32; 3],
+    bottom_up: bool,
+    before: &[u32],
+    after: &[u32],
+) {
+    let (w, h, line_bytes) = (width as usize, height as usize, stride(width, 16));
+    for y in 0..h {
+        let base = memory_line(y, h, bottom_up) * line_bytes;
+        for x in 0..w {
+            let at = y * w + x;
+            if before[at] != after[at] {
+                bytes[base + 2 * x..][..2].copy_from_slice(&pack_rgb16(after[at], masks).to_le_bytes());
+            }
+        }
+    }
 }
 
 /// L'index de `palette` dont la couleur est `color`, sinon la plus proche
@@ -274,13 +425,12 @@ impl Surface {
     }
 
     /// Ses bits par pixel : 1 (monochrome), 1, 4 ou 8 (une DIB section
-    /// indexée), 24, 32.
+    /// indexée), 16, 24, 32.
     pub fn bit_count(&self) -> u16 {
-        match &self.format {
-            _ if self.monochrome => 1,
-            Format::Indexed { bit_count, .. } => *bit_count,
-            Format::Bgr => 24,
-            Format::Bgrx => 32,
+        if self.monochrome {
+            1
+        } else {
+            self.format.bit_count()
         }
     }
 
@@ -349,32 +499,17 @@ impl Surface {
     pub fn draw(&self, mut draw: impl FnMut(&mut Bitmap<'_>)) -> bool {
         let Pixels::Section { view, .. } = &self.pixels else { return false };
         let _one = self.drawing.lock();
-        if let Format::Indexed { bit_count, palette } = &self.format {
-            let size = stride(self.width, *bit_count) * self.height as usize;
-            // SAFETY: the system view maps at least `size` bytes, the DIB's
-            // lines (`create_dib_section`), resident while `self` lives;
-            // `drawing` keeps the kernel to one slice at a time, as above.
-            let bytes = unsafe { core::slice::from_raw_parts_mut(view.base() as *mut u8, size) };
-            let size = (self.width, self.height);
-            let mut pixels = decode_indexed(bytes, size, *bit_count, palette, self.bottom_up);
-            let before = pixels.clone();
-            {
-                let Some(mut bitmap) = Bitmap::new(&mut pixels, self.width, self.height, self.width, PixelLayout::Bgrx)
-                else {
-                    return false;
-                };
-                draw(&mut bitmap);
-            }
-            encode_indexed(bytes, size, (*bit_count, palette), self.bottom_up, &before, &pixels);
-            return true;
-        }
-        if self.format == Format::Bgr {
-            let length = stride(self.width, 24) * self.height as usize;
-            // SAFETY: as above, the system view maps at least the DIB's
-            // `length` bytes (`create_dib_section`, `insert_kernel_bitmap`).
+        if self.format != Format::Bgrx {
+            // Indexed, 16 or 24 bits: drawn on their pixels decoded in 32
+            // bits, then the changed ones written back.
+            let length = stride(self.width, self.format.bit_count()) * self.height as usize;
+            // SAFETY: the system view maps at least the DIB's `length` bytes
+            // (`create_dib_section`, `insert_kernel_bitmap`), resident while
+            // `self` lives; `drawing` keeps the kernel to one slice at a
+            // time, as below.
             let bytes = unsafe { core::slice::from_raw_parts_mut(view.base() as *mut u8, length) };
             let size = (self.width, self.height);
-            let mut pixels = decode_bgr(bytes, size, self.bottom_up);
+            let mut pixels = self.format.decode(bytes, size, self.bottom_up);
             let before = pixels.clone();
             {
                 let Some(mut bitmap) = Bitmap::new(&mut pixels, self.width, self.height, self.width, PixelLayout::Bgrx)
@@ -383,7 +518,7 @@ impl Surface {
                 };
                 draw(&mut bitmap);
             }
-            encode_bgr(bytes, size, self.bottom_up, &before, &pixels);
+            self.format.encode(bytes, size, self.bottom_up, &before, &pixels);
             return true;
         }
         let count = self.width as usize * self.height as usize;
@@ -426,10 +561,13 @@ pub struct DibGeometry {
     pub height: u32,
     /// `biHeight` positif : les lignes montent depuis celle du bas.
     pub bottom_up: bool,
-    /// 1, 4, 8, 24 ou 32.
+    /// 1, 4, 8, 16, 24 ou 32.
     pub bit_count: u16,
     /// Ses octets.
     pub size: u32,
+    /// En 16 bits, les masques du rouge, du vert et du bleu (5-5-5 en
+    /// BI_RGB) ; `None` aux autres profondeurs.
+    pub masks: Option<[u32; 3]>,
 }
 
 /// Les octets au plus d'une DIB section (256 Mio).
@@ -441,8 +579,9 @@ pub const RGB_MASKS: [u32; 3] = [0x00FF_0000, 0x0000_FF00, 0x0000_00FF];
 /// (ses masques `masks` pour BI_BITFIELDS). `Err` : l'erreur de Win32,
 /// `ERROR_INVALID_PARAMETER` (un en-tête trop court, une compression RLE,
 /// une taille nulle, négative ou trop grande, plus d'un plan) ou
-/// `ERROR_CALL_NOT_IMPLEMENTED` (une autre profondeur que 1, 4, 8, 24 ou
-/// 32 bits, BI_BITFIELDS hors de 32 bits, d'autres masques).
+/// `ERROR_CALL_NOT_IMPLEMENTED` (une autre profondeur que 1, 4, 8, 16, 24 ou
+/// 32 bits, BI_BITFIELDS hors de 16 et 32 bits, des masques de 16 bits que
+/// [`masks_fit_16`] refuse, en 32 bits d'autres masques que ceux de BI_RGB).
 pub fn dib_geometry(header: &BitmapInfoHeader32, masks: Option<[u32; 3]>) -> Result<DibGeometry, u32> {
     let valid = header.size as usize >= core::mem::size_of::<BitmapInfoHeader32>()
         && header.width > 0
@@ -452,9 +591,11 @@ pub fn dib_geometry(header: &BitmapInfoHeader32, masks: Option<[u32; 3]>) -> Res
     if !valid || !matches!(header.compression, BI_RGB | BI_BITFIELDS) {
         return Err(ERROR_INVALID_PARAMETER);
     }
+    let bitfields = header.compression == BI_BITFIELDS;
     let supported = match header.bit_count {
-        1 | 4 | 8 | 24 => header.compression == BI_RGB,
-        32 => header.compression == BI_RGB || masks == Some(RGB_MASKS),
+        1 | 4 | 8 | 24 => !bitfields,
+        16 => !bitfields || masks.is_some_and(masks_fit_16),
+        32 => !bitfields || masks == Some(RGB_MASKS),
         _ => false,
     };
     if !supported {
@@ -473,7 +614,12 @@ pub fn dib_geometry(header: &BitmapInfoHeader32, masks: Option<[u32; 3]>) -> Res
     let line = u64::from(width) * u64::from(header.bit_count);
     let size = line.div_ceil(32) * 4 * u64::from(height);
     let size = u32::try_from(size).ok().filter(|&size| size <= MAX_DIB_SIZE).ok_or(ERROR_INVALID_PARAMETER)?;
-    Ok(DibGeometry { width, height, bottom_up: header.height > 0, bit_count: header.bit_count, size })
+    let masks = match header.bit_count {
+        16 if bitfields => masks,
+        16 => Some(RGB555_MASKS),
+        _ => None,
+    };
+    Ok(DibGeometry { width, height, bottom_up: header.height > 0, bit_count: header.bit_count, size, masks })
 }
 
 /// DIB_CreateDIBSection, sans section d'application : une DIB section de
@@ -502,6 +648,7 @@ pub fn create_dib_section(geometry: DibGeometry, palette: Vec<ColorRef>) -> Resu
         monochrome: false,
         format: match geometry.bit_count {
             1 | 4 | 8 => Format::Indexed { bit_count: geometry.bit_count, palette },
+            16 => Format::Rgb16 { masks: geometry.masks.unwrap_or(RGB555_MASKS) },
             24 => Format::Bgr,
             _ => Format::Bgrx,
         },
@@ -613,14 +760,17 @@ pub fn copy_bitmap(handle: u32) -> Option<u32> {
     let surface = lock(handle, super::dc::current_pid())?;
     let (width, height) = surface.size();
     let pixels = surface.raw_pixels()?;
-    // A copy keeps 24 bits; the others become 32 bits.
-    let format = if *surface.format() == Format::Bgr { Format::Bgr } else { Format::Bgrx };
+    // A copy keeps 16 and 24 bits (and its masks); the others become 32 bits.
+    let format = match surface.format() {
+        format @ (Format::Bgr | Format::Rgb16 { .. }) => format.clone(),
+        Format::Indexed { .. } | Format::Bgrx => Format::Bgrx,
+    };
     insert_kernel_bitmap(width, height, surface.is_monochrome(), format, &pixels).ok()
 }
 
 /// Un bitmap de `pixels` (32 bits, la ligne du haut d'abord) dans une section
-/// vue du noyau seul, au processus courant, rangés en `format` (Bgrx, ou
-/// Bgr : trois octets, les lignes alignées sur 32 bits).
+/// vue du noyau seul, au processus courant, rangés en `format` (Bgrx, Bgr ou
+/// Rgb16 : les lignes alignées sur 32 bits).
 fn insert_kernel_bitmap(
     width: u32,
     height: u32,
@@ -630,14 +780,10 @@ fn insert_kernel_bitmap(
 ) -> Result<u32, NtStatus> {
     let thread = ps::ethread::current_thread().ok_or(STATUS_INVALID_PARAMETER)?;
     let process = thread.process().clone();
-    let bytes: Vec<u8> = if format == Format::Bgr {
-        let mut bytes = alloc::vec![0u8; stride(width, 24) * height as usize];
-        let zeros = alloc::vec![0u32; pixels.len()];
-        encode_bgr(&mut bytes, (width, height), false, &zeros, pixels);
-        bytes
-    } else {
-        pixels.iter().flat_map(|pixel| pixel.to_le_bytes()).collect()
-    };
+    let mut bytes = alloc::vec![0u8; stride(width, format.bit_count()) * height as usize];
+    // Written as changes from black: a black pixel is zeros in every format.
+    let zeros = alloc::vec![0u32; pixels.len()];
+    format.encode(&mut bytes, (width, height), false, &zeros, pixels);
     let size = (bytes.len() as u64).next_multiple_of(0x1000);
     let section = Section::create_pagefile(size, PageProtect::READWRITE)?;
     let view = system_view::map(&section, 0, size)?;
@@ -692,7 +838,8 @@ mod tests {
     #[test]
     fn a_dib_of_32_bits_per_pixel() {
         let geometry = dib_geometry(&header(656, 400, 32, BI_RGB), None);
-        let expected = DibGeometry { width: 656, height: 400, bottom_up: true, bit_count: 32, size: 656 * 400 * 4 };
+        let expected =
+            DibGeometry { width: 656, height: 400, bottom_up: true, bit_count: 32, size: 656 * 400 * 4, masks: None };
         assert_eq!(geometry, Ok(expected));
         let top_down = dib_geometry(&header(3, -2, 32, BI_RGB), None).unwrap();
         assert_eq!((top_down.height, top_down.bottom_up, top_down.size), (2, false, 24));
@@ -719,7 +866,7 @@ mod tests {
         assert_eq!(refused(header(1, 1, 8, 1)), Some(ERROR_INVALID_PARAMETER), "BI_RLE8");
         assert_eq!(refused(header(65536, 65536, 32, BI_RGB)), Some(ERROR_INVALID_PARAMETER), "too big");
         assert_eq!(refused(header(8192, 8193, 32, BI_RGB)), Some(ERROR_INVALID_PARAMETER), "past 256 MiB");
-        assert_eq!(refused(header(1, 1, 16, BI_RGB)), Some(ERROR_CALL_NOT_IMPLEMENTED), "16 bits: not yet");
+        assert_eq!(refused(header(1, 1, 15, BI_RGB)), Some(ERROR_CALL_NOT_IMPLEMENTED), "15 bits");
         assert_eq!(refused(header(1, 1, 24, BI_BITFIELDS)), Some(ERROR_CALL_NOT_IMPLEMENTED), "masks of 24 bits");
         assert_eq!(refused(header(1, 1, 8, BI_BITFIELDS)), Some(ERROR_CALL_NOT_IMPLEMENTED), "masks of 8 bits");
         let other_masks = Some([0xFF, 0xFF00, 0x00FF_0000]);
@@ -744,6 +891,80 @@ mod tests {
         let geometry = dib_geometry(&header(3, 2, 24, BI_RGB), None).unwrap();
         assert_eq!((geometry.bit_count, geometry.size, geometry.bottom_up), (24, 24, true));
         assert_eq!(stride(4, 24), 12, "4 pixels: 12 bytes, nothing to pad");
+    }
+
+    #[test]
+    fn dib_sections_of_sixteen_bits() {
+        // A line of 3 pixels takes 6 bytes, aligned on 8; BI_RGB is 5-5-5.
+        let rgb = dib_geometry(&header(3, 2, 16, BI_RGB), None).unwrap();
+        assert_eq!((rgb.bit_count, rgb.size, rgb.masks), (16, 16, Some(RGB555_MASKS)));
+        let fields = dib_geometry(&header(2, -1, 16, BI_BITFIELDS), Some(RGB565_MASKS)).unwrap();
+        assert_eq!((fields.size, fields.bottom_up, fields.masks), (4, false, Some(RGB565_MASKS)));
+        let four = Some([0x0F00, 0x00F0, 0x000F]);
+        assert_eq!(dib_geometry(&header(1, 1, 16, BI_BITFIELDS), four).map(|g| g.masks), Ok(four), "4-4-4");
+        let refused = |masks: [u32; 3]| dib_geometry(&header(1, 1, 16, BI_BITFIELDS), Some(masks)).err();
+        assert_eq!(refused([0xF00F, 0x07E0, 0x0010]), Some(ERROR_CALL_NOT_IMPLEMENTED), "not contiguous");
+        assert_eq!(refused([0xF800, 0x0FE0, 0x001F]), Some(ERROR_CALL_NOT_IMPLEMENTED), "red and green overlap");
+        assert_eq!(refused([0xF800, 0, 0x001F]), Some(ERROR_CALL_NOT_IMPLEMENTED), "no green");
+        assert_eq!(refused([0x1F_0000, 0x07E0, 0x001F]), Some(ERROR_CALL_NOT_IMPLEMENTED), "past 16 bits");
+        assert_eq!(dib_geometry(&header(1, 1, 32, BI_RGB), None).map(|g| g.masks), Ok(None), "16 bits only");
+    }
+
+    #[test]
+    fn pixels_of_sixteen_bits_decode_and_encode_back() {
+        // 3 x 2 in 5-5-5, from the bottom line up, each line padded from 6
+        // to 8 bytes: bottom red, green, blue; top white, black, 16 of 31.
+        let mut bytes = [0x00, 0x7C, 0xE0, 0x03, 0x1F, 0x00, 0xEE, 0xEE, 0xFF, 0x7F, 0, 0, 0x10, 0x42, 0xEE, 0xEE];
+        let pixels = decode_rgb16(&bytes, (3, 2), RGB555_MASKS, true);
+        let expected = [0x00FF_FFFF, 0, 0x0084_8484, 0x00FF_0000, 0x0000_FF00, 0x0000_00FF];
+        assert_eq!(pixels, expected, "the top line first; 16 of 31 is 132, as ReactOS's table");
+        let mut after = pixels.clone();
+        after[0] = 0xFF08_10F8; // red 8, green 16, blue 248: their high bits, the alpha dropped
+        after[5] = 0;
+        encode_rgb16(&mut bytes, (3, 2), RGB555_MASKS, true, &pixels, &after);
+        let word = (1u16 << 10) | (2 << 5) | 31;
+        let [low, high] = word.to_le_bytes();
+        let written = [0x00, 0x7C, 0xE0, 0x03, 0, 0, 0xEE, 0xEE, low, high, 0, 0, 0x10, 0x42, 0xEE, 0xEE];
+        assert_eq!(bytes, written, "two pixels changed, the others and the padding kept");
+        // 5-6-5, from the top line down: green has 6 bits.
+        let mut wide = [0x00, 0xF8, 0x00, 0x04];
+        let decoded = decode_rgb16(&wide, (2, 1), RGB565_MASKS, false);
+        assert_eq!(decoded, [0x00FF_0000, 0x0000_8200], "red; green 32 of 63 is 130");
+        let changed = [0x00FF_8200, 0x0000_8200];
+        encode_rgb16(&mut wide, (2, 1), RGB565_MASKS, false, &decoded, &changed);
+        assert_eq!(wide, [0x00, 0xFC, 0x00, 0x04], "red 31 and green 32");
+        // Masks of 4 bits each.
+        let masks = [0x0F00, 0x00F0, 0x000F];
+        assert_eq!(decode_rgb16(&[0x0F, 0x0F, 0, 0], (1, 1), masks, false), [0x00FF_00FF]);
+        let mut four = [0u8; 4];
+        encode_rgb16(&mut four, (1, 1), masks, false, &[0], &[0x0080_4020]);
+        assert_eq!(four, [0x42, 0x08, 0, 0], "the high 4 bits: red 8, green 4, blue 2");
+    }
+
+    #[test]
+    fn masks_of_sixteen_bits() {
+        assert!(masks_fit_16(RGB555_MASKS) && masks_fit_16(RGB565_MASKS));
+        assert!(masks_fit_16([0x001F, 0x07E0, 0xF800]), "blue high, red low");
+        assert!(!masks_fit_16([0, 0x07E0, 0x001F]), "an empty mask");
+        assert!(!masks_fit_16([0x1_0000, 0x07E0, 0x001F]), "a mask past 16 bits");
+        assert!(!masks_fit_16([0xF800, 0x07E0, 0x003F]), "green and blue share a bit");
+        assert!(!masks_fit_16([0xA000, 0x07E0, 0x001F]), "holes in red");
+    }
+
+    #[test]
+    fn a_format_writes_its_pixels_whatever_its_depth() {
+        // What insert_kernel_bitmap does: from black, each format's bytes.
+        let pixels = [0x00FF_0000, 0, 0x0000_00FF];
+        let zeros = [0u32; 3];
+        let mut sixteen = alloc::vec![0u8; stride(3, 16)];
+        Format::Rgb16 { masks: RGB565_MASKS }.encode(&mut sixteen, (3, 1), false, &zeros, &pixels);
+        assert_eq!(sixteen, [0x00, 0xF8, 0, 0, 0x1F, 0, 0, 0]);
+        let mut thirty_two = alloc::vec![0u8; stride(3, 32)];
+        Format::Bgrx.encode(&mut thirty_two, (3, 1), false, &zeros, &[0x80FF_0000, 0, 0x0000_00FF]);
+        assert_eq!(thirty_two, [0, 0, 0xFF, 0x80, 0, 0, 0, 0, 0xFF, 0, 0, 0], "the high byte kept");
+        let back = Format::Bgrx.decode(&thirty_two, (3, 1), false);
+        assert_eq!(back, [0x80FF_0000, 0, 0x0000_00FF]);
+        assert_eq!(Format::Rgb16 { masks: RGB555_MASKS }.bit_count(), 16);
     }
 
     #[test]

@@ -609,6 +609,8 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   prêtes chaînées par des liens dans chaque thread, `ReadyLink`, comme le `WaitListEntry` de ReactOS ; table des
   threads qui grandit hors du verrou dispatcher, `register_locked`) : les runtimes de Visual C++ d'OpenOffice
   manquaient de threads (`rpcrt4`, error 1450) ; scénario `many-threads` (`tests/native/manythr1.c`).
+  de ReactOS que le banc contourne en terminant PeaZip. Les DIB sections de 16 bits (`gdi::surface::Format::Rgb16` :
+  5-5-5, ou les masques de BI_BITFIELDS ; GetObject, GetDIBits de 16 bits) ; scénario `bitmap-16`.
   Suite : [`docs/passation.md`](docs/passation.md).
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.
