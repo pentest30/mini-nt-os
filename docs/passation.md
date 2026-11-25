@@ -11,6 +11,13 @@
   régression `bitmap-24`, `bitmap`, `icons`, `cursor`, `notepad-saveas` (AMD et Intel), `folder-view` et
   `app-peazip` (AMD).
   **Pas encore** : CreateBitmap de 16 bits ; en 32 bits, d'autres masques que ceux de BI_RGB.
+- **Les revues des bots des PR 173 à 178** (`claude/reviews-173-178`, sur `main` ; demandé le 2026-11-23 ;
+  [`revues/mergestorm-vortex.md`](revues/mergestorm-vortex.md)). Six remarques sur les PR 174, 176 et 177 ; rien à
+  corriger sur les PR 173, 175 et 178. Corrigé sur la PR 174 (`0179f84`, fusionné dans la PR 176 par `22d4048`) :
+  GetDIBits de 1 bit prend l'index de la table rendue (`dibits::encode_lines`, test hôte
+  `a_one_bit_dib_takes_the_index_of_its_table`), et les temps du parcours de PeaZip viennent d'un même run. Sans
+  suite, comme ReactOS : le DC du parent n'est pas coupé au rectangle de la fenêtre (PR 177). Faux : le test de
+  RestoreDC existe, le scénario `save-restore-dc` (PR 176).
 - **Les images des boîtes de msiexec** (`claude/msi-picture`, sur `main` ; trouvé le 2026-11-23 en cherchant
   pourquoi la page d'accueil du MSI de 7-Zip restait vide, qui était le DC du parent, PR 177 : ce MSI n'a pas
   d'image, et « Failed to load bitmap "WixUI_Bmp_Dialog" » y reste).
