@@ -211,6 +211,7 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtGdiDescribePixelFormat, Handler::Status(gdi::nt_gdi_describe_pixel_format)),
     (services::NtGdiSetPixelFormat, Handler::Status(gdi::nt_gdi_set_pixel_format)),
     (services::NtGdiSwapBuffers, Handler::Status(gdi::nt_gdi_swap_buffers)),
+    (services::NtGdiExtEscape, Handler::Status(gdi::nt_gdi_ext_escape)),
     (services::NtGdiSaveDC, Handler::Status(gdi::nt_gdi_save_dc)),
     (services::NtGdiSelectBitmap, Handler::Status(gdi::nt_gdi_select_bitmap)),
     (services::NtGdiSelectFont, Handler::Status(gdi::nt_gdi_select_font)),

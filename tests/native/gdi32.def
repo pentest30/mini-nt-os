@@ -17,6 +17,7 @@ CreateRectRgn@16
 CreateSolidBrush@4
 DeleteDC@4
 DeleteObject@4
+ExtEscape@24
 ExtSelectClipRgn@12
 ExtTextOutW@32
 GdiAlphaBlend@44

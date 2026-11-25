@@ -125,6 +125,50 @@ pub(super) fn nt_gdi_swap_buffers(arguments: &[u32]) -> NtStatus {
     fail(abi::winerror::ERROR_INVALID_PIXEL_FORMAT, 0)
 }
 
+/// NtGdiExtEscape(hdc, pDriver, nDriver, iEsc, cjIn, pjIn, cjOut, pjOut) :
+/// comme ReactOS (`print.c`), l'échappement passé au pilote d'affichage du
+/// DC (`win32k::gdi::escape`, qui répond à ce que demande `opengl32` pour
+/// trouver l'ICD, ADR-025) : son résultat, 0 pour un échappement qu'il ne
+/// fait pas. -1 et `ERROR_INVALID_PARAMETER` sans DC (le DC d'un pilote
+/// nommé n'est pas fait, pas plus que chez ReactOS) ou pour une taille
+/// négative ; -1 et `ERROR_INVALID_HANDLE` pour un DC qui n'est pas au
+/// processus ; -1 et `ERROR_NOACCESS` pour une entrée qu'on ne peut lire ou
+/// une sortie qu'on ne peut écrire. Écart : ReactOS copie toute la sortie
+/// (remise à zéro), Mino seulement les octets que le pilote écrit.
+pub(super) fn nt_gdi_ext_escape(arguments: &[u32]) -> NtStatus {
+    use abi::gdi::escape::DRV_OPENGL_INFO_SIZE;
+    /// Ce que lit le pilote de l'entrée : un ULONG, pour les deux
+    /// échappements qu'il fait.
+    const INPUT_BYTES: usize = 4;
+    const FAILED: u32 = -1i32 as u32;
+    let [hdc, _driver, _driver_chars, code, in_size, input, out_size, output] = arguments[..8] else {
+        unreachable!("8 arguments")
+    };
+    if hdc == 0 || (in_size as i32) < 0 || (out_size as i32) < 0 {
+        return fail(ERROR_INVALID_PARAMETER, FAILED);
+    }
+    if win32k::gdi::dc::kind_and_save_depth(hdc).is_none() {
+        return fail(ERROR_INVALID_HANDLE, FAILED);
+    }
+    let mut in_bytes = [0u8; INPUT_BYTES];
+    let in_len = if input == 0 { 0 } else { (in_size as usize).min(INPUT_BYTES) };
+    if copy_from_user(&mut in_bytes[..in_len], u64::from(input)).is_err() {
+        return fail(abi::winerror::ERROR_NOACCESS, FAILED);
+    }
+    let mut out_bytes = [0u8; DRV_OPENGL_INFO_SIZE];
+    let out_len = if output == 0 { 0 } else { (out_size as usize).min(DRV_OPENGL_INFO_SIZE) };
+    let (result, written) = win32k::gdi::escape::escape(
+        win32k::display::opengl_icd(),
+        code,
+        &in_bytes[..in_len],
+        &mut out_bytes[..out_len],
+    );
+    if written > 0 && copy_to_user(u64::from(output), &out_bytes[..written]).is_err() {
+        return fail(abi::winerror::ERROR_NOACCESS, FAILED);
+    }
+    NtStatus(result as u32)
+}
+
 /// Les index de NtGdiGetDCDword demandés sans être servis.
 static UNSUPPORTED_DC_DWORDS: super::ClassReport = super::ClassReport::new("NtGdiGetDCDword");
 

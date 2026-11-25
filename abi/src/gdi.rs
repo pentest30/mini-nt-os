@@ -797,6 +797,70 @@ pub struct DibSection32 {
     pub offset: u32,
 }
 
+/// The escapes of ExtEscape (NtGdiExtEscape) that a display driver answers
+/// (DrvEscape): those by which `opengl32` finds the display driver's OpenGL
+/// ICD (ADR-025). Values of the pinned `wingdi.h` and `winddi.h`; the
+/// protocol is that of the pinned `opengl32` (`icdload.c`, IntGetIcdData).
+pub mod escape {
+    use core::mem::{offset_of, size_of};
+
+    /// QUERYESCSUPPORT: is the escape whose code is the input ULONG
+    /// supported? Non-zero if it is.
+    pub const QUERYESCSUPPORT: u32 = 8;
+    /// OPENGL_GETINFO: the input ULONG says what; the output is a
+    /// [`DrvOpenglInfo32`] for [`OPENGL_GETINFO_DRVNAME`].
+    pub const OPENGL_GETINFO: u32 = 4353;
+    /// OPENGL_GETINFO_DRVNAME: the name of the ICD and its versions.
+    pub const OPENGL_GETINFO_DRVNAME: u32 = 0;
+    /// MAX_PATH + 1: the characters of an ICD name, its NUL included.
+    pub const DRIVER_NAME_CHARS: usize = 261;
+
+    /// Drv_Opengl_Info: what OPENGL_GETINFO_DRVNAME returns. `opengl32`
+    /// opens `OpenGLDrivers\<DriverName>` and refuses the ICD when the key's
+    /// `Version` or `DriverVersion` differ from these.
+    #[repr(C)]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub struct DrvOpenglInfo32 {
+        /// The driver interface's version.
+        pub version: u32,
+        /// The driver's version, also given to the ICD's DrvValidateVersion.
+        pub driver_version: u32,
+        pub driver_name: [u16; DRIVER_NAME_CHARS],
+    }
+
+    /// Its bytes in user memory: `sizeof(Drv_Opengl_Info)`, padding included.
+    pub const DRV_OPENGL_INFO_SIZE: usize = size_of::<DrvOpenglInfo32>();
+
+    const _: () = {
+        // 2 + 261 WCHARs, rounded to the ULONGs' alignment.
+        assert!(DRV_OPENGL_INFO_SIZE == 532);
+        assert!(offset_of!(DrvOpenglInfo32, driver_version) == 4);
+        assert!(offset_of!(DrvOpenglInfo32, driver_name) == 8);
+    };
+
+    impl DrvOpenglInfo32 {
+        /// The info of the ICD `name` (cut to leave its NUL).
+        pub fn new(name: &str, version: u32, driver_version: u32) -> Self {
+            let mut driver_name = [0u16; DRIVER_NAME_CHARS];
+            for (slot, unit) in driver_name[..DRIVER_NAME_CHARS - 1].iter_mut().zip(name.encode_utf16()) {
+                *slot = unit;
+            }
+            Self { version, driver_version, driver_name }
+        }
+
+        /// Its bytes, as they go to user mode (the padding at 0 bytes).
+        pub fn to_bytes(&self) -> [u8; DRV_OPENGL_INFO_SIZE] {
+            let mut bytes = [0u8; DRV_OPENGL_INFO_SIZE];
+            bytes[..4].copy_from_slice(&self.version.to_le_bytes());
+            bytes[4..8].copy_from_slice(&self.driver_version.to_le_bytes());
+            for (slot, unit) in bytes[8..].chunks_exact_mut(2).zip(self.driver_name) {
+                slot.copy_from_slice(&unit.to_le_bytes());
+            }
+            bytes
+        }
+    }
+}
+
 /// `as_bytes` for records of integers whose sizes, checked above, leave no
 /// padding.
 macro_rules! as_bytes {
@@ -1350,6 +1414,19 @@ mod tests {
         assert_eq!((attr.cr_background_clr, attr.cr_foreground_clr), (0x00FF_FFFF, 0));
         assert_eq!((attr.map_mode, attr.bk_mode, attr.rop2), (MM_TEXT, OPAQUE, R2_COPYPEN));
         assert_eq!((attr.window_ext, attr.viewport_ext), (PointL32 { x: 1, y: 1 }, PointL32 { x: 1, y: 1 }));
+    }
+
+    #[test]
+    fn the_opengl_info_puts_its_name_after_the_versions() {
+        use super::escape::{DrvOpenglInfo32, DRIVER_NAME_CHARS};
+        let bytes = DrvOpenglInfo32::new("Mesa", 2, 1).to_bytes();
+        assert_eq!(&bytes[..8], &[2, 0, 0, 0, 1, 0, 0, 0]);
+        assert_eq!(&bytes[8..18], &[b'M', 0, b'e', 0, b's', 0, b'a', 0, 0, 0]);
+        assert!(bytes[18..].iter().all(|&byte| byte == 0));
+        let long = "x".repeat(400);
+        let info = DrvOpenglInfo32::new(&long, 2, 1);
+        assert_eq!(info.driver_name[DRIVER_NAME_CHARS - 1], 0, "the NUL stays");
+        assert_eq!(info.driver_name[DRIVER_NAME_CHARS - 2], u16::from(b'x'));
     }
 
     #[test]
