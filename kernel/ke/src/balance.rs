@@ -1,7 +1,8 @@
 //! Balance set manager : un thread système, à la première priorité temps réel,
 //! qui se réveille chaque seconde. Il relève pour l'instant les threads
 //! affamés (`sched::ki_scan_ready_queues`) ; Mm y ajoutera la gestion des
-//! working sets.
+//! working sets. Après un NMI, il fait le relevé des threads
+//! (`report::report_threads`).
 //!
 //! Ke n'alloue pas de pile : l'exécutif le crée sur une pile de Mm, une fois
 //! l'ordonnanceur prêt.
@@ -45,5 +46,8 @@ pub fn ke_balance_set_manager(_context: *mut c_void) {
             );
         }
         ki_scan_ready_queues();
+        if hal::idt::take_nmi_request() {
+            crate::report::report_threads();
+        }
     }
 }

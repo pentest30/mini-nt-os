@@ -82,7 +82,8 @@
 //!   QEMU's key names: `a`, `shift-a`, `ret`, `spc`…), once
 //!   (`xtask/src/screen.rs`). A KEY can be a quoted text, `"dir C:\"`: the
 //!   keys that type its characters on a US keyboard. The `keys` lines fire
-//!   in their order.
+//!   in their order. `nmi` sends an NMI instead: the kernel then reports
+//!   its threads (`[threads]` lines, `ke::report`).
 //! - `initial-command = PROGRAM.EXE`: this Win32 test program of
 //!   `tests/native/` (or of the rostests) takes the place of `winlogon.exe` on the ramdisk, so
 //!   that `smss` starts it as its initial command (with `requires =

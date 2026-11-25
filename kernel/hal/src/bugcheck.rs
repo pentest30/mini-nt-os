@@ -215,6 +215,30 @@ impl Collapse {
     }
 }
 
+/// La pile d'appels qui commence au cadre `rbp` (pointeurs de cadre) : chaque
+/// adresse de retour, à `visit`, tant que la chaîne remonte une mémoire
+/// projetée du noyau ([`walk`]) ; `true` si elle continue au-delà de
+/// [`MAX_FRAMES`] cadres. Pour la pile d'un autre thread (`ke::report`).
+///
+/// # IRQL
+/// Tout niveau (des lectures de mémoire projetée).
+pub fn kernel_backtrace(rbp: u64, visit: impl FnMut(u64)) -> bool {
+    walk(rbp, read_stack_word, visit)
+}
+
+/// Le mot de 64 bits à `addr` (aligné sur 8), s'il est projeté dans l'espace
+/// actif ; `None` sinon. Pour lire, sans risquer de faute, la pile ou la
+/// trame de trap d'un autre thread (`ke::report`).
+///
+/// # IRQL
+/// Tout niveau.
+pub fn read_mapped_word(addr: u64) -> Option<u64> {
+    if !addr.is_multiple_of(8) {
+        return None;
+    }
+    read_stack_word(addr)
+}
+
 /// Le mot de 64 bits à `addr` (aligné sur 8), s'il est projeté.
 fn read_stack_word(addr: u64) -> Option<u64> {
     if !mapped(addr) {

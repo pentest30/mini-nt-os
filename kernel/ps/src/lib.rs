@@ -136,12 +136,14 @@ impl Drop for DispatcherEvent {
     }
 }
 
-/// Crée le processus System (PID 4) et lance le reaper.
+/// Crée le processus System (PID 4) et lance le reaper ; le relevé des
+/// threads de Ke nomme ensuite les threads de Ps (`ke::report`).
 ///
 /// # IRQL
 /// PASSIVE_LEVEL, une fois, après `ke::init` et `ob::init`.
 pub fn init() {
     eprocess::init_system_process();
     exit::start_reaper();
+    ke::report::set_owner_describer(ethread::describe_owner);
     log::info!("Ps: System process created (PID {}), reaper started", system_process().pid());
 }
