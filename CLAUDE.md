@@ -605,6 +605,16 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   GetDIBits de 24 bits) et les DIB sections de 1 bit : PeaZip ouvre son gestionnaire et une archive ; scénario
   `bitmap-24`. Il ne se ferme pas seul : il attend un `cmd.exe` détaché sans handles standard, que le `cmd` de
   ReactOS fige à son premier message (`conutils` : le verrou d'un flux au handle nul n'est pas initialisé), un défaut
+  de ReactOS que le banc contourne en terminant PeaZip. SystemParametersInfo(SPI_GETWORKAREA) rend la zone de
+  travail du moniteur principal et SPI_SETWORKAREA la change (`sys::user`, `win32k::monitor::set_work_area`), puis
+  l'annonce (SPIF_SENDCHANGE : WM_SETTINGCHANGE aux fenêtres de premier niveau, `win32k::sent::broadcast`) : VCL y
+  centre ses fenêtres (OpenOffice ouvrait son assistant du premier démarrage hors de l'écran), la barre des tâches
+  d'`explorer` y garde sa place et son bureau s'y redimensionne ; scénario `work-area` (`tests/native/workarea1.c`).
+  OpenOffice ouvre son Start Center.
+  de ReactOS que le banc contourne en terminant PeaZip. Ke n'a plus de limite de 64 threads (`ke::sched` : files
+  prêtes chaînées par des liens dans chaque thread, `ReadyLink`, comme le `WaitListEntry` de ReactOS ; table des
+  threads qui grandit hors du verrou dispatcher, `register_locked`) : les runtimes de Visual C++ d'OpenOffice
+  manquaient de threads (`rpcrt4`, error 1450) ; scénario `many-threads` (`tests/native/manythr1.c`).
   de ReactOS que le banc contourne en terminant PeaZip. Les DIB sections de 16 bits (`gdi::surface::Format::Rgb16` :
   5-5-5, ou les masques de BI_BITFIELDS ; GetObject, GetDIBits de 16 bits) ; scénario `bitmap-16`. Le second
   critère (une session qui s'arrête) commencé : `minoinit` donne les droits des comptes de `defltwk.inf` (dans

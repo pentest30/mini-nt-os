@@ -66,6 +66,18 @@ pub(super) fn nt_user_initialize(arguments: &[u32]) -> NtStatus {
     win32k::csrss::initialize(version, reference).map_or_else(|status| status, |()| STATUS_SUCCESS)
 }
 
+/// SPIF_SENDCHANGE : SystemParametersInfo annonce le changement
+/// (WM_SETTINGCHANGE aux fenêtres de premier niveau).
+const SPIF_SENDCHANGE: u32 = 0x0002;
+
+/// WM_SETTINGCHANGE : un paramètre du système a changé (`wParam` : l'action
+/// de SystemParametersInfo).
+const WM_SETTINGCHANGE: u32 = 0x001A;
+
+/// Ce que WM_SETTINGCHANGE attend de chaque fenêtre (co_IntSendMessageTimeout
+/// de ReactOS : SMTO_NORMAL, 100 ms).
+const SETTING_CHANGE_TIMEOUT_MS: u32 = 100;
+
 /// Les actions de NtUserSystemParametersInfo demandées sans être
 /// implémentées.
 static UNSUPPORTED_SPI_ACTIONS: super::ClassReport = super::ClassReport::new("NtUserSystemParametersInfo");
@@ -131,13 +143,26 @@ fn give_non_client_metrics(pv: u32, size: u32, bytes: &[u8]) -> NtStatus {
 ///   points, la police par défaut d'une ListView ;
 /// - SPI_GETFOCUSBORDERWIDTH, SPI_GETFOCUSBORDERHEIGHT : l'épaisseur d'un
 ///   rectangle de focus (un UINT en `pvParam`, `uiParam` ignoré), que
-///   DrawFocusRect lit avant ses quatre PatBlt.
+///   DrawFocusRect lit avant ses quatre PatBlt ;
+/// - SPI_GETWORKAREA : la zone de travail du moniteur principal (`rcWork`,
+///   un RECT en `pvParam`, `uiParam` ignoré), comme ReactOS (SpiGet) ;
+///   FALSE sans moniteur. Les programmes y placent et centrent leurs
+///   fenêtres : sans elle, VCL (OpenOffice) prenait un RECT non initialisé
+///   et ouvrait ses fenêtres hors de l'écran ;
+/// - SPI_SETWORKAREA : le RECT en `pvParam` devient la zone de travail du
+///   moniteur (`win32k::monitor::set_work_area`) ; FALSE pour un RECT
+///   illisible, vide, ou qui sort du moniteur. La barre des tâches
+///   d'`explorer` y garde sa place. Avec SPIF_SENDCHANGE, WM_SETTINGCHANGE
+///   (`wParam` SPI_SETWORKAREA) va aux fenêtres de premier niveau, 100 ms
+///   au plus chacune (`win32k::sent::broadcast`), comme ReactOS : le bureau
+///   du shell s'y redimensionne. Son `lParam` est nul (MSDN le permet) ;
+///   ReactOS passe « Control Panel\Desktop ».
 ///
 /// FALSE et `ERROR_INVALID_PARAMETER` pour une taille fausse. Une autre
 /// action est journalisée une fois et rend FALSE
 /// (`ERROR_CALL_NOT_IMPLEMENTED`).
 pub(super) fn nt_user_system_parameters_info(arguments: &[u32]) -> NtStatus {
-    let [action, param, pv, _win_ini] = arguments[..4] else { unreachable!("4 arguments") };
+    let [action, param, pv, win_ini] = arguments[..4] else { unreachable!("4 arguments") };
     match action {
         abi::user::SPI_GETNONCLIENTMETRICS => {
             let metrics = win32k::metrics::non_client_metrics(&win32k::metrics::Parameters::DEFAULT);
@@ -154,6 +179,36 @@ pub(super) fn nt_user_system_parameters_info(arguments: &[u32]) -> NtStatus {
                 parameters.focus_border_height
             };
             give_parameter(pv, 0, &value.to_le_bytes(), false)
+        }
+        abi::user::SPI_GETWORKAREA => {
+            let Some(monitor) = win32k::monitor::primary() else {
+                return NtStatus(0);
+            };
+            let work = monitor.work;
+            let mut rect = [0u8; 16];
+            for (bytes, side) in rect.chunks_exact_mut(4).zip([work.left, work.top, work.right, work.bottom]) {
+                bytes.copy_from_slice(&side.to_le_bytes());
+            }
+            give_parameter(pv, 0, &rect, false)
+        }
+        abi::user::SPI_SETWORKAREA => {
+            let mut rect = [0u8; 16];
+            if ke::usermem::copy_from_user(&mut rect, u64::from(pv)).is_err() {
+                return NtStatus(0);
+            }
+            let side = |index: usize| {
+                i32::from_le_bytes([rect[index * 4], rect[index * 4 + 1], rect[index * 4 + 2], rect[index * 4 + 3]])
+            };
+            let work = win32k::gdi::dib::Rect::new(side(0), side(1), side(2), side(3));
+            if !win32k::monitor::set_work_area(work) {
+                return NtStatus(0);
+            }
+            if win_ini & SPIF_SENDCHANGE != 0 {
+                if let Ok(thread) = win32k::convert_current_thread() {
+                    win32k::sent::broadcast(&thread, WM_SETTINGCHANGE, action, 0, SETTING_CHANGE_TIMEOUT_MS);
+                }
+            }
+            NtStatus(1)
         }
         _ => {
             UNSUPPORTED_SPI_ACTIONS.report(action);

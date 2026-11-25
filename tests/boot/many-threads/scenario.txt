@@ -1,0 +1,26 @@
+# Many threads alive at once (tests/native/manythr1.c, MinGW, linked to
+# ReactOS's kernel32): MANYTHR1.EXE takes the place of winlogon.exe. The
+# installer of Apache OpenOffice 4.1.17 stopped on "Insufficient system
+# resources exist to complete the requested service": the Visual C++ runtime
+# installer's rpcrt4 could not queue a work item (QueueUserWorkItem, error
+# 1450, RtlCreateUserThread failing with STATUS_INSUFFICIENT_RESOURCES).
+# Ke had a table of 64 threads for the whole system, kernel threads
+# included, and ready queues of 64 (ke::sched::MAX_THREADS).
+# 1. 200 threads created, each waiting on a manual-reset event, all alive
+#    at once, and all ready together behind their creator;
+# 2. each one runs up to its wait;
+# 3. the event set, each one ends.
+features = test-smss
+requires = userland, native
+initial-command = MANYTHR1.EXE
+cpus     = default, intel
+timeout  = 180
+
+expect = [threads] ready: 200 threads to create
+expect = [threads] step 1: 200 of 200 threads created
+expect = [threads] step 2: 200 of 200 threads waiting
+expect = [threads] step 3: 200 released, 200 of 200 ended
+expect = [threads] done
+
+forbid = *** STOP:
+forbid = not created (error
