@@ -22,6 +22,7 @@
 
 mod apps;
 mod fat32;
+mod icd;
 mod inflate;
 mod install;
 mod iso9660;
@@ -35,6 +36,7 @@ mod rostests;
 mod scenario;
 mod screen;
 mod sha256;
+mod tar;
 mod userland;
 mod zip;
 
@@ -107,6 +109,12 @@ commands:
   rostests-build
           compile the ntdll and kernel32 apitests with MinGW into
           target/xtask/rostests/ (NTAPITST, K32APITST and their runners)
+  icd-build
+          build the OpenGL ICD of Direct3D (ADR-025): Mesa llvmpipe for the
+          XP loader, from pinned sources, into third_party/mesa-icd/, and
+          check it; needs an i686 MinGW-w64 GCC with emulated TLS, CMake,
+          Ninja, Meson, Python with Mako, bison, flex, xz (Windows host)
+          --toolchain DIR     that GCC's bin directory (or MINO_ICD_TOOLCHAIN)
 
 firmware and emulator (run, test):
   --ovmf FILE | --ovmf-code FILE [--ovmf-vars FILE] | --qemu FILE
@@ -158,6 +166,7 @@ fn dispatch(mut args: Args) -> Result<()> {
                 None => Err(format!("rostests needs {}", rostests::missing(&ws).unwrap_or_default())),
             }
         }
+        Some("icd-build") => icd::build(&ws, args),
         Some("help") | Some("-h") | Some("--help") | None => {
             print!("{USAGE}");
             Ok(())

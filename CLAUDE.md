@@ -625,6 +625,7 @@ cargo xtask image [--output F] [--initial-command P] # image GPT (ESP + système
 cargo xtask image --apps [--app ID]                  # avec les installeurs du banc du M7 dans C:\APPS, logon, explorer
 cargo xtask syscall-gen                              # régénère abi/src/services.rs (listes de ReactOS épinglé)
 cargo xtask fetch-userland [--archive FICHIER]       # ReactOS épinglé : archive vérifiée, arborescence dans third_party/
+cargo xtask icd-build [--toolchain DIR]              # ICD Mesa pour XP (ADR-025), construit et vérifié dans third_party/
 cargo xtask fetch-apps [--app ID]                    # installeurs du banc du M7, vérifiés, dans third_party/apps/
 cargo xtask help
 ```
