@@ -193,7 +193,7 @@ impl Record {
 pub fn report_threads() {
     log::info!("[threads] report (NMI): {} context switches", crate::sched::context_switches());
     let mut count = 0;
-    for tid in 0..crate::sched::MAX_THREADS {
+    for tid in 0..crate::sched::tid_bound() {
         let Some(record) = crate::sched::record(tid) else { continue };
         count += 1;
         let mut line = [0u8; 320];

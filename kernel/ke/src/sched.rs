@@ -1550,6 +1550,21 @@ pub fn thread_object(tid: usize) -> Option<*mut DispatcherHeader> {
     }
 }
 
+/// Une borne des TID donnés à cet instant : chacun est en dessous. La table
+/// peut grandir ensuite ; [`record`] rend `None` pour un TID sans thread.
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub(crate) fn tid_bound() -> usize {
+    // SAFETY: verrou tenu de acquire à release.
+    unsafe {
+        let old_irql = DISPATCHER_LOCK.acquire::<KePlatform>();
+        let bound = (*threads()).tid_bound();
+        DISPATCHER_LOCK.release::<KePlatform>(old_irql);
+        bound
+    }
+}
+
 /// Le relevé du thread `tid` ([`crate::report`]), copié sous le verrou
 /// dispatcher : son état, son attente, son propriétaire, la trame de sa
 /// dernière entrée depuis le mode utilisateur et sa pile noyau ; `None` s'il
