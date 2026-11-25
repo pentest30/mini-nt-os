@@ -367,11 +367,14 @@ fn class_brush(brush: u32) -> u32 {
 
 impl ClassLists {
     /// IntGetClassAtom : la classe que CreateWindowEx nomme par `name` pour
-    /// l'instance `instance` : privée de l'instance, publique, privée puis
+    /// l'instance `instance` : privée de l'instance (de toute instance pour
+    /// une instance nulle, comme IntFindClass), publique, privée puis
     /// publique de `user32` (`client_module`).
     pub fn find(&self, name: &ClassName, instance: u32, client_module: u32) -> Option<Arc<Class>> {
         let atom = name.atom()?;
-        find_in(&self.private, atom, Some(instance))
+        // IntFindClass: a NULL instance matches the private classes of every
+        // instance (msi.dll creates its dialogs with one).
+        find_in(&self.private, atom, (instance != 0).then_some(instance))
             .or_else(|| find_in(&self.public, atom, None))
             .or_else(|| find_in(&self.private, atom, Some(client_module)))
             .or_else(|| find_in(&self.public, atom, Some(client_module)))
@@ -545,6 +548,23 @@ mod tests {
         assert!(found.global);
         lists.register(&name("TestBoth"), &name("TestBoth"), info(0, 0x60_0000), MenuName::default(), 0, 0).unwrap();
         assert!(!lists.find(&name("TestBoth"), 0x60_0000, 0).unwrap().global, "the private one of the instance first");
+    }
+
+    /// IntFindClass: a NULL instance matches a private class of any
+    /// instance. msi.dll registers its dialog class with a NULL instance,
+    /// which user32 makes the program's (RegisterClassExWOWW:
+    /// GetModuleHandleW(NULL)), and creates its dialogs with a NULL instance:
+    /// msiexec's full UI found no class and showed nothing.
+    #[test]
+    fn a_null_instance_finds_a_private_class_of_any_instance() {
+        let mut lists = ClassLists::default();
+        let msiexec = 0x0100_0000;
+        lists
+            .register(&name("TestMsiDialog"), &name("TestMsiDialog"), info(0, msiexec), MenuName::default(), 0, 0)
+            .unwrap();
+        let found = lists.find(&name("TestMsiDialog"), 0, 0x77A0_0000).expect("a NULL instance: any instance's");
+        assert_eq!(found.info.instance, msiexec);
+        assert!(lists.find(&name("TestMsiDialog"), 0x50_0000, 0x77A0_0000).is_none(), "another instance: not it");
     }
 
     #[test]
