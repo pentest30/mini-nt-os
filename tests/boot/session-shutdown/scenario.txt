@@ -1,0 +1,42 @@
+# M7, the second criterion: a session that ends by shutting the system
+# down (tests/native/shutdn1.c as the shell of Administrator). The program
+# shows a window, enables SeShutdownPrivilege (which minoinit's rights give
+# Administrators) and calls ExitWindowsEx(EWX_SHUTDOWN | EWX_POWEROFF).
+# csrss (winsrv's SrvExitWindowsEx) goes on the input desktop and asks
+# win32k (NtUserSetInformationThread: UserThreadUseActiveDesktop,
+# UserThreadInitiateShutdown): the caller is not winlogon, so win32k posts
+# WM_LOGONNOTIFY (LN_LOGOFF) to winlogon's SAS window and answers
+# STATUS_PENDING; ExitWindowsEx returns TRUE. winlogon logs the user off
+# (its logoff thread's security attributes need advapi32's ntmarta.dll on
+# the disk): its ExitWindowsEx (EWX_CALLER_WINLOGON) has winsrv send
+# WM_CLIENTSHUTDOWN to the program's window, which win32k's DefWindowProc
+# turns into WM_QUERYENDSESSION, then WM_ENDSESSION (IntClientShutdown);
+# csrss ends the user's processes, win32k tells winlogon
+# (UserThreadEndShutdown), « We are logged off ». Then winlogon's shutdown
+# (EWX_SHUTDOWN | EWX_FORCE | EWX_POWEROFF) ends the other processes, and
+# NtShutdownSystem(ShutdownPowerOff) writes everything back. Before:
+# csrss stopped on « Failed to set thread desktop! » (no handler for class
+# 7), then winlogon on « Failed to create Logoff security descriptor » (no
+# ntmarta.dll). See docs/compat/m6-logon.md.
+features = test-smss, interactive
+requires = userland, native
+session = SHUTDN1.EXE
+disk = system
+boots = 2
+cpus = default, intel
+timeout = 600
+
+expect = We are logged on
+expect = [shutdown] in the session, a window: 1
+expect = [shutdown] SeShutdownPrivilege enabled: 00000000 (it was 0)
+expect = [shutdown] ExitWindowsEx: 1
+expect = [shutdown] WM_QUERYENDSESSION, lParam 0
+expect = [shutdown] WM_ENDSESSION 1, lParam 0
+expect = We are logged off
+expect = Shutting down NT...
+expect = [power] NtShutdownSystem: power off requested
+expect = [power] the hives and the volumes written back
+forbid = [minoinit] stopped:
+forbid = Failed to set thread desktop!
+forbid = Failed to create Logoff security descriptor
+forbid = *** STOP:

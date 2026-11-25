@@ -649,6 +649,64 @@ pub fn key_menu(keys: &mut MenuKeys, message: u32, wparam: u32, lparam: u32, sty
     }
 }
 
+/// IntClientShutdown : WM_CLIENTSHUTDOWN, que `winsrv` envoie à chaque fenêtre
+/// de premier niveau des threads d'un processus quand la session se ferme
+/// (NotifyUserProcessForShutdown), devient WM_QUERYENDSESSION
+/// (`MCS_QUERYENDSESSION`) ou WM_ENDSESSION, envoyés à ses enfants puis à
+/// elle ([`end_session_messages`]) ; les minuteries de chacune partent quand
+/// la session se ferme vraiment.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, dans le thread de la fenêtre.
+fn client_shutdown(window: &Arc<Window>, wparam: u32, lparam: u32) -> u32 {
+    let mut targets = crate::window::children(window, false);
+    targets.push(window.handle);
+    let send = |handle: u32, message: u32, wparam: u32, lparam: u32| {
+        crate::window::get(handle)
+            .and_then(|target| crate::window::send_message(&target, message, wparam, LParam::Value(lparam)).ok())
+            .unwrap_or(0)
+    };
+    end_session_messages(&targets, wparam, lparam, send, crate::timer::destroy_window_timers)
+}
+
+/// IntClientShutdown, sans les fenêtres : pour les fenêtres `targets` (les
+/// enfants, puis la fenêtre), le wParam (`MCS_*`) et le lParam
+/// (`ENDSESSION_*`) de WM_CLIENTSHUTDOWN, `send` envoie WM_QUERYENDSESSION
+/// (0, les drapeaux ENDSESSION_*) avec `MCS_QUERYENDSESSION` — la première
+/// qui répond 0 arrête tout, `MCSR_DONOTSHUTDOWN` —, WM_ENDSESSION sinon
+/// (TRUE avec `MCS_ENDSESSION`, et `kill_timers` pour chacune ; FALSE quand la
+/// fin est annulée), `MCSR_SHUTDOWNFINISHED`. Sans fenêtre,
+/// `MCSR_GOODFORSHUTDOWN`.
+pub fn end_session_messages(
+    targets: &[u32],
+    wparam: u32,
+    lparam: u32,
+    mut send: impl FnMut(u32, u32, u32, u32) -> u32,
+    mut kill_timers: impl FnMut(u32),
+) -> u32 {
+    use abi::user::{
+        ENDSESSION_CLOSEAPP, ENDSESSION_CRITICAL, ENDSESSION_LOGOFF, MCSR_DONOTSHUTDOWN, MCSR_GOODFORSHUTDOWN,
+        MCSR_SHUTDOWNFINISHED, MCS_ENDSESSION, MCS_QUERYENDSESSION, WM_ENDSESSION, WM_QUERYENDSESSION,
+    };
+    let ends = wparam & MCS_ENDSESSION != 0;
+    let flags = lparam & (ENDSESSION_LOGOFF | ENDSESSION_CRITICAL | ENDSESSION_CLOSEAPP);
+    let mut result = MCSR_GOODFORSHUTDOWN;
+    for &target in targets {
+        if wparam & MCS_QUERYENDSESSION != 0 {
+            if send(target, WM_QUERYENDSESSION, 0, flags) == 0 {
+                return MCSR_DONOTSHUTDOWN;
+            }
+        } else {
+            send(target, WM_ENDSESSION, u32::from(ends), flags);
+            if ends {
+                kill_timers(target);
+            }
+            result = MCSR_SHUTDOWNFINISHED;
+        }
+    }
+    result
+}
+
 /// UserPostMessage(WM_SYSCOMMAND, `command`) : la commande est postée à la
 /// file du thread de `window`.
 ///
@@ -850,6 +908,7 @@ pub fn def_window_proc(window: Option<&Arc<Window>>, message: u32, wparam: u32, 
         }
         // A minimized window may be restored (user32 answers it first).
         (abi::user::WM_QUERYOPEN, _) => Ok(1),
+        (abi::user::WM_CLIENTSHUTDOWN, Some(window)) => Ok(client_shutdown(window, wparam, lparam)),
         (WM_SYSCOMMAND, Some(window)) => {
             crate::sizemove::sys_command(window, wparam, lparam);
             Ok(0)
@@ -967,6 +1026,54 @@ pub fn def_window_proc(window: Option<&Arc<Window>>, message: u32, wparam: u32, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_end_of_a_session_asks_then_tells_the_windows() {
+        use abi::user::{
+            ENDSESSION_LOGOFF, MCSR_DONOTSHUTDOWN, MCSR_GOODFORSHUTDOWN, MCSR_SHUTDOWNFINISHED, MCS_ENDSESSION,
+            MCS_QUERYENDSESSION, WM_ENDSESSION, WM_QUERYENDSESSION,
+        };
+        use alloc::vec::Vec;
+        // A child, then the window; the lParam keeps the ENDSESSION_* flags only.
+        let mut sent = Vec::new();
+        let record = |hwnd, message, wparam, lparam| {
+            sent.push((hwnd, message, wparam, lparam));
+            1
+        };
+        let flags = ENDSESSION_LOGOFF | 0x10;
+        assert_eq!(
+            end_session_messages(&[0x20, 0x10], MCS_QUERYENDSESSION, flags, record, |_| {}),
+            MCSR_GOODFORSHUTDOWN
+        );
+        let asked =
+            [(0x20, WM_QUERYENDSESSION, 0, ENDSESSION_LOGOFF), (0x10, WM_QUERYENDSESSION, 0, ENDSESSION_LOGOFF)];
+        assert_eq!(sent, asked);
+        let (mut sent, mut killed) = (Vec::new(), Vec::new());
+        let record = |hwnd, message, wparam, lparam| {
+            sent.push((hwnd, message, wparam, lparam));
+            1
+        };
+        let result = end_session_messages(&[0x20, 0x10], MCS_ENDSESSION, 0, record, |hwnd| killed.push(hwnd));
+        assert_eq!(result, MCSR_SHUTDOWNFINISHED);
+        assert_eq!(sent, [(0x20, WM_ENDSESSION, 1, 0), (0x10, WM_ENDSESSION, 1, 0)]);
+        assert_eq!(killed, [0x20, 0x10], "their timers go");
+        // A refusal stops the query at once.
+        let mut asked = Vec::new();
+        let refuse = |hwnd, _, _, _| {
+            asked.push(hwnd);
+            u32::from(hwnd != 0x20)
+        };
+        assert_eq!(end_session_messages(&[0x20, 0x10], MCS_QUERYENDSESSION, 0, refuse, |_| {}), MCSR_DONOTSHUTDOWN);
+        assert_eq!(asked, [0x20], "the window itself is not asked");
+        // A canceled end: WM_ENDSESSION FALSE, the timers kept.
+        let (mut sent, mut killed) = (Vec::new(), Vec::new());
+        let record = |hwnd, message, wparam, _| {
+            sent.push((hwnd, message, wparam));
+            1
+        };
+        end_session_messages(&[0x10], 0, 0, record, |hwnd| killed.push(hwnd));
+        assert_eq!((sent, killed.len()), (alloc::vec![(0x10, WM_ENDSESSION, 0)], 0));
+    }
 
     /// No menu bar.
     fn no_bar(_: Rect) -> Option<i32> {

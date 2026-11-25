@@ -343,6 +343,56 @@ Scénario `session-privileges` (`tests/native/priv1.c` comme shell d'`Administra
 du jeton par leur nom et leurs attributs, puis RtlAdjustPrivilege(SeShutdownPrivilege). Sans l'étape de `minoinit`
 (une mutation), le jeton n'a aucun privilège et le scénario échoue.
 
+## La fin de session et l'arrêt (M7, le 2026-11-23)
+
+Un programme de la session demande l'arrêt par ExitWindowsEx(EWX_SHUTDOWN | EWX_POWEROFF). Le chemin suit
+ReactOS (`user32/misc/exit.c`, `winsrv/usersrv/shutdown.c`, `ntuser/shutdown.c`, `winlogon/sas.c`, comme
+spécification) :
+
+1. `user32` passe la demande à `csrss` (SrvExitWindowsEx de `winsrv`). Son thread va sur le bureau d'entrée
+   (NtUserSetInformationThread, `UserThreadUseActiveDesktop`), puis demande à win32k d'ouvrir la fin
+   (`UserThreadInitiateShutdown`).
+2. win32k (`win32k::shutdown`, UserInitiateShutdown). Ce n'est pas le processus de logon qui demande : il lui faut
+   une station avec WINSTA_EXITWINDOWS, et `SeShutdownPrivilege` actif chez `csrss`, qui emprunte son identité (sinon
+   `STATUS_PRIVILEGE_NOT_HELD`). win32k poste alors WM_LOGONNOTIFY (LN_LOGOFF, les drapeaux) à la fenêtre SAS de
+   `winlogon`, et répond `STATUS_PENDING`. ExitWindowsEx rend TRUE.
+3. `winlogon` ferme la session (HandleLogoff). Son thread de fin prend des attributs de sécurité faits par
+   SetEntriesInAcl, qui charge `ntmarta.dll` par son nom. Ce thread emprunte l'identité de l'utilisateur et appelle
+   ExitWindowsEx(EWX_CALLER_WINLOGON | EWX_LOGOFF). Cette fois, win32k garde les drapeaux et répond
+   `STATUS_SUCCESS`.
+4. `csrss` ferme les processus de la session (CsrShutdownProcesses). Pour chaque thread d'un processus GUI, `winsrv`
+   envoie WM_CLIENTSHUTDOWN à sa fenêtre de premier niveau, avec `MCS_QUERYENDSESSION`, puis `MCS_ENDSESSION`.
+   Le DefWindowProc de win32k (`defwnd::end_session_messages`, IntClientShutdown) en fait WM_QUERYENDSESSION, puis
+   WM_ENDSESSION, envoyés aux enfants puis à la fenêtre ; les minuteries partent avec la fin. Puis `csrss` termine le
+   processus.
+5. `csrss` dit la fin à win32k (`UserThreadEndShutdown`), qui la redit à `winlogon` (LN_LOGOFF, ou
+   LN_LOGOFF_CANCELED et le statut) ; « We are logged off ».
+6. `winlogon` arrête le système (HandleShutdown). Son ExitWindowsEx(EWX_SHUTDOWN | EWX_FORCE | EWX_POWEROFF) ferme
+   les autres processus, puis NtShutdownSystem(ShutdownPowerOff) réécrit ruches et volumes et éteint la machine.
+
+Ce qui manquait, mesuré par le scénario `session-shutdown` à chaque étape :
+- `csrss` s'arrêtait sur « Failed to set thread desktop! ». NtUserSetInformationThread n'avait que la classe 10 (le
+  port d'API) ; il a maintenant les classes 5, 6, 7 et 9 (`sys::user`). Le bureau d'entrée passe par un handle de
+  `csrss` : le premier qu'il a sur l'objet (`ob::HandleTable::find_object`, ObFindHandleForObject), ou un handle
+  ouvert sans droit (IntGetDesktopObjectHandle).
+- `winlogon` s'arrêtait sur « Failed to create Logoff security descriptor » : `ntmarta.dll` n'était pas sur le
+  disque (`xtask/src/userland.rs`).
+- WM_CLIENTSHUTDOWN n'avait pas de traitement : la fenêtre ne recevait ni WM_QUERYENDSESSION ni WM_ENDSESSION avant
+  d'être terminée.
+
+Scénario `session-shutdown` (`tests/native/shutdn1.c` comme shell d'`Administrator`, AMD et Intel) : une fenêtre,
+SeShutdownPrivilege activé, ExitWindowsEx ; la fenêtre reçoit WM_QUERYENDSESSION, puis WM_ENDSESSION ; « We are
+logged off », « Shutting down NT... », NtShutdownSystem(power off) et la réécriture des ruches et des volumes. Sans
+le traitement de WM_CLIENTSHUTDOWN (une mutation), la fenêtre ne reçoit rien et le scénario échoue. Les deux
+autres manques ont été vus faire échouer le scénario avant leur correctif. Hôte : `win32k::shutdown` (la décision
+d'UserInitiateShutdown, le message à `winlogon`), `defwnd::end_session_messages`, `ob::HandleTable::find_object`.
+
+Vu en chemin, sans effet sur l'arrêt : NtQueryInformationProcess(ProcessImageFileName, 0x1b), que `winsrv`
+demande pour journaliser le nom d'un processus terminé ; NtUserUnregisterClass (la classe SAS de `winlogon`) ; les
+routines `0xFFFF0001` de NtUserCallNoParam et `0xFFFE000E` de NtUserCallOneParam ; NotifyGenericProcessForShutdown de
+`consrv`, que ReactOS n'implémente pas (« UNIMPLEMENTED »). `winlogon` charge en vain `beepmidi.dll`, `msacm32.drv`,
+`midimap.dll` pour le son de fin de session.
+
 ## La suite
 
 Le premier critère du M6 est atteint ; restent le changement de résolution (troisième critère : `bochs-dispi`,
