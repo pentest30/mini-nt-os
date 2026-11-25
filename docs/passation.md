@@ -11,6 +11,24 @@
   `the_mino_layer_installs_a_system_that_logs_on` ; scénario `installer-location` (`tests/native/msiver1.c`, en
   session sur le disque de 7-Zip, qui a `msi.dll` : la recherche de `setup.exe`, DllGetVersion rend 4.5.6001), qui
   échoue sans la valeur (vérifié).
+- **Les DIB sections de 16 bits** (`claude/surface-16bit`, sur la PR 176, M7, GDI,
+  [`compat/applications.md`](compat/applications.md#les-dib-sections-de-16-bits-le-2026-11-23) ; demandé le
+  2026-11-23). `surface::Format::Rgb16` (5-5-5 en BI_RGB, les masques de BI_BITFIELDS sinon : `masks_fit_16`,
+  `decode_rgb16`, `encode_rgb16`, `pack_rgb16`) ; les formats convertis par un même chemin (`Format::decode`,
+  `Format::encode`, aussi pour les bitmaps du noyau) ; le DIBSECTION de GetObject (BI_BITFIELDS hors de 5-5-5, ses
+  masques) ; GetDIBits de 16 bits (5-5-5, ou en BI_BITFIELDS les masques de la DIB section de 16 bits, 5-6-5
+  sinon). Aucune application du banc ne les demandait encore. Scénario `bitmap-16` (`tests/native/bmp16.c`, AMD et
+  Intel ; sans la modification, il échoue à l'étape 1). Vérifié : lint, 1 294 tests hôte, `bitmap-16`, et sans
+  régression `bitmap-24`, `bitmap`, `icons`, `cursor`, `notepad-saveas` (AMD et Intel), `folder-view` et
+  `app-peazip` (AMD).
+  **Pas encore** : CreateBitmap de 16 bits ; en 32 bits, d'autres masques que ceux de BI_RGB.
+- **Les revues des bots des PR 173 à 178** (`claude/reviews-173-178`, sur `main` ; demandé le 2026-11-23 ;
+  [`revues/mergestorm-vortex.md`](revues/mergestorm-vortex.md)). Six remarques sur les PR 174, 176 et 177 ; rien à
+  corriger sur les PR 173, 175 et 178. Corrigé sur la PR 174 (`0179f84`, fusionné dans la PR 176 par `22d4048`) :
+  GetDIBits de 1 bit prend l'index de la table rendue (`dibits::encode_lines`, test hôte
+  `a_one_bit_dib_takes_the_index_of_its_table`), et les temps du parcours de PeaZip viennent d'un même run. Sans
+  suite, comme ReactOS : le DC du parent n'est pas coupé au rectangle de la fenêtre (PR 177). Faux : le test de
+  RestoreDC existe, le scénario `save-restore-dc` (PR 176).
 - **Les images des boîtes de msiexec** (`claude/msi-picture`, sur `main` ; trouvé le 2026-11-23 en cherchant
   pourquoi la page d'accueil du MSI de 7-Zip restait vide, qui était le DC du parent, PR 177 : ce MSI n'a pas
   d'image, et « Failed to load bitmap "WixUI_Bmp_Dialog" » y reste).
