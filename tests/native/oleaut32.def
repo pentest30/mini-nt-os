@@ -1,0 +1,6 @@
+; The exports of oleaut32.dll (ReactOS 0.4.16, i386) that the native test
+; programs call, for their import library (`cargo xtask` builds it with
+; dlltool --kill-at).
+LIBRARY oleaut32.dll
+EXPORTS
+OleLoadPicture@20

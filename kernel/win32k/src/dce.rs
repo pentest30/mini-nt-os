@@ -30,10 +30,13 @@
 //! cadre et filles comprises : XP n'invalide que ce qu'on a tenté d'y peindre,
 //! un rectangle que Mino ne tient pas encore. ReactOS n'a qu'un stub.
 //!
+//! Le DC du parent (`CS_PARENTDC`, `DCX_PARENTCLIP`) est un DC du cache à
+//! l'origine de la fenêtre dont la région est ce qu'on voit du parent
+//! ([`parent_clip_flags`]).
+//!
 //! Pas encore, journalisé une fois : les DC d'une fenêtre ou d'une classe
-//! (`CS_OWNDC`, `CS_CLASSDC` : un DC du cache à la place), le DC du parent
-//! (`CS_PARENTDC`, `DCX_PARENTCLIP` : la fenêtre seule), `DCX_INTERSECTUPDATE`
-//! (ignoré).
+//! (`CS_OWNDC`, `CS_CLASSDC` : un DC du cache à la place),
+//! `DCX_INTERSECTUPDATE` (ignoré).
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -205,13 +208,49 @@ fn visible(window: Option<&Window>, flags: u32, clip: Option<&Region>) -> (Regio
     let region = if flags & DCX_LOCKWINDOWUPDATE == 0 && is_locked(window) {
         Region::default()
     } else {
-        let region =
-            crate::paint::visible_region(window, client, flags & DCX_CLIPCHILDREN != 0, flags & DCX_CLIPSIBLINGS != 0);
-        cut(region, flags, clip)
+        cut(visible_of(window, flags), flags, clip)
     };
     let state = window.state();
     let corner = if client { state.client } else { state.window };
     (region, (corner.left, corner.top))
+}
+
+/// DceUpdateVisRgn de `DCX_PARENTCLIP` : les `DCX_*` de la région du parent
+/// (de `parent_style`), sa zone cliente sans couper ses enfants, coupée de
+/// ses sœurs s'il a `WS_CLIPSIBLINGS`. Le `DCX_CLIPSIBLINGS` qu'UserGetDCEx
+/// ajoute à `flags` pour ce parent ne coupe pas les sœurs de la fenêtre.
+pub fn parent_clip_flags(flags: u32, parent_style: u32) -> u32 {
+    let flags = flags & !(DCX_CLIPCHILDREN | DCX_WINDOW);
+    if parent_style & WS_CLIPSIBLINGS != 0 {
+        flags | DCX_CLIPSIBLINGS
+    } else {
+        flags & !DCX_CLIPSIBLINGS
+    }
+}
+
+/// DceGetVisRgn : ce qu'on voit de `window` pour un DC pris avec `flags`
+/// (`DCX_*` effectifs). Avec `DCX_PARENTCLIP` (le DC du parent,
+/// `CS_PARENTDC`), ce qu'on voit du parent ([`parent_clip_flags`]) : les
+/// textes transparents d'une page de MSI sous l'image d'un Static au-dessus
+/// d'eux dans l'ordre Z. Une fenêtre cachée n'en voit rien, comme dans Wine
+/// (`get_visible_region`) ; ReactOS lui donnerait celle du parent.
+fn visible_of(window: &Window, flags: u32) -> Region {
+    let state = window.state();
+    let parent = if flags & DCX_PARENTCLIP != 0 { crate::window::get(state.parent) } else { None };
+    let Some(parent) = parent else {
+        let client = flags & DCX_WINDOW == 0;
+        return crate::paint::visible_region(
+            window,
+            client,
+            flags & DCX_CLIPCHILDREN != 0,
+            flags & DCX_CLIPSIBLINGS != 0,
+        );
+    };
+    if state.style & WS_VISIBLE == 0 {
+        return Region::default();
+    }
+    let flags = parent_clip_flags(flags, parent.state().style);
+    crate::paint::visible_region(&parent, true, flags & DCX_CLIPCHILDREN != 0, flags & DCX_CLIPSIBLINGS != 0)
 }
 
 /// La fenêtre que LockWindowUpdate verrouille, 0 sans elle.
@@ -305,10 +344,6 @@ pub fn get_dc(window: Option<&Window>, clip: Clip<'_>, flags: u32) -> Result<u32
     if flags & DCX_CACHE == 0 && own_dc {
         static REPORTED: AtomicBool = AtomicBool::new(false);
         report_missing("the DC of a window or of its class (a cache DC instead)", &REPORTED);
-    }
-    if flags & DCX_PARENTCLIP != 0 {
-        static REPORTED: AtomicBool = AtomicBool::new(false);
-        report_missing("the parent's DC (CS_PARENTDC)", &REPORTED);
     }
     if flags & DCX_INTERSECTUPDATE != 0 && matches!(clip, Clip::None) {
         static REPORTED: AtomicBool = AtomicBool::new(false);
@@ -637,5 +672,18 @@ mod tests {
         let clipping = child(WS_CLIPSIBLINGS, CS_PARENTDC, 0);
         assert_eq!(effective_flags(flags, Some(&clipping)), flags | DCX_CACHE | DCX_CLIPSIBLINGS, "not the parent's");
         assert_eq!(effective_flags(flags, Some(&top(0, CS_PARENTDC))), flags | DCX_CACHE | DCX_CLIPSIBLINGS);
+    }
+
+    #[test]
+    fn the_parent_dc_sees_what_the_parent_sees() {
+        let taken = DCX_USESTYLE | DCX_PARENTCLIP | DCX_CACHE | DCX_INTERSECTRGN;
+        let dialog = WS_VISIBLE | WS_CLIPSIBLINGS;
+        let shown = child(WS_VISIBLE, CS_PARENTDC, dialog);
+        let flags = effective_flags(DCX_USESTYLE | DCX_INTERSECTRGN, Some(&shown));
+        assert_eq!(flags, taken | DCX_CLIPSIBLINGS, "UserGetDCEx: the parent's siblings");
+        assert_eq!(parent_clip_flags(flags, dialog), taken | DCX_CLIPSIBLINGS, "those of the parent, at its level");
+        let plain = parent_clip_flags(taken | DCX_CLIPSIBLINGS | DCX_CLIPCHILDREN, WS_VISIBLE);
+        assert_eq!(plain, taken, "a parent without WS_CLIPSIBLINGS: no sibling cut, nor its children");
+        assert_eq!(parent_clip_flags(taken | DCX_WINDOW, 0) & DCX_WINDOW, 0, "the parent's client area");
     }
 }

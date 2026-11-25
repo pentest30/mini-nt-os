@@ -1,0 +1,7 @@
+; The exports of ole32.dll (ReactOS 0.4.16, i386) that the native test
+; programs call, for their import library (`cargo xtask` builds it with
+; dlltool --kill-at).
+LIBRARY ole32.dll
+EXPORTS
+CoInitialize@4
+CreateStreamOnHGlobal@12
