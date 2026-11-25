@@ -13,12 +13,12 @@ use core::mem::size_of;
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use abi::gdi::{
-    Bitmap32, BitmapInfoHeader32, DibSection32, LogFontW32, BI_RGB, ENUM_LOG_FONT_EX_DV_NO_AXES_SIZE,
+    Bitmap32, BitmapInfoHeader32, DibSection32, LogFontW32, BI_BITFIELDS, BI_RGB, ENUM_LOG_FONT_EX_DV_NO_AXES_SIZE,
     ENUM_LOG_FONT_EX_DV_SIZE,
 };
 
 use super::handles::{self, Object};
-use super::surface::RGB_MASKS;
+use super::surface::{RGB555_MASKS, RGB_MASKS};
 
 /// Le plus que NtGdiExtGetObjectW rend : la plus grande des descriptions,
 /// un ENUMLOGFONTEXDVW.
@@ -39,11 +39,13 @@ pub fn get_object(handle: u32, pid: u32, count: u32, data: bool) -> (u32, Vec<u8
             // (CreateBitmap's are in a section too, seen by the kernel only).
             let (width, height) = surface.size();
             let dib = surface.user_bits(pid);
-            let colors = match surface.format() {
-                super::surface::Format::Indexed { palette, .. } => palette.len() as u32,
-                super::surface::Format::Bgr | super::surface::Format::Bgrx => 0,
+            let (colors, masks) = match surface.format() {
+                super::surface::Format::Indexed { palette, .. } => (palette.len() as u32, [0; 3]),
+                super::surface::Format::Rgb16 { masks } => (0, *masks),
+                super::surface::Format::Bgr => (0, [0; 3]),
+                super::surface::Format::Bgrx => (0, if surface.bit_count() == 32 { RGB_MASKS } else { [0; 3] }),
             };
-            bitmap_description((width, height), (surface.bit_count(), colors), dib, count, data)
+            bitmap_description((width, height), (surface.bit_count(), colors, masks), dib, count, data)
         }
         Some(_) => {
             static REPORTED: AtomicBool = AtomicBool::new(false);
@@ -70,15 +72,18 @@ pub fn font_description(logfont: &LogFontW32, count: u32, data: bool) -> (u32, V
 }
 
 /// BITMAP_GetObject : un bitmap de `width` × `height` de `bits_pixel` bits
-/// par pixel (1, 4, 8, 24 ou 32 ; `colors` dans la table d'une DIB section
-/// indexée) ; `dib`, pour une DIB section, l'adresse de ses pixels chez
-/// l'appelant. Le BITMAP (ses lignes alignées sur 16 bits, sur 32 pour une
-/// DIB section), ou le DIBSECTION d'une DIB section si `count` le tient (les
-/// masques de BI_RGB en 32 bits, aucun pour une table) ; 0 si `count` ne
-/// tient pas un BITMAP. Sans `data`, la taille d'un BITMAP.
+/// par pixel (1, 4, 8, 16, 24 ou 32 ; `colors` dans la table d'une DIB
+/// section indexée ; `masks`, ses `dsBitfields` : ceux de BI_RGB en 32 bits,
+/// ceux d'une DIB section de 16 bits, aucun pour une table) ; `dib`, pour une
+/// DIB section, l'adresse de ses pixels chez l'appelant. Le BITMAP (ses
+/// lignes alignées sur 16 bits, sur 32 pour une DIB section), ou le
+/// DIBSECTION d'une DIB section si `count` le tient : sa compression est
+/// BI_BITFIELDS en 16 bits hors de 5-5-5, BI_RGB sinon, comme ReactOS (la
+/// palette PAL_RGB16_555) ; 0 si `count` ne tient pas un BITMAP. Sans
+/// `data`, la taille d'un BITMAP.
 pub fn bitmap_description(
     (width, height): (u32, u32),
-    (bits_pixel, colors): (u16, u32),
+    (bits_pixel, colors, masks): (u16, u32, [u32; 3]),
     dib: Option<u32>,
     count: u32,
     data: bool,
@@ -110,12 +115,12 @@ pub fn bitmap_description(
                     height: height as i32,
                     planes: 1,
                     bit_count: bits_pixel,
-                    compression: BI_RGB,
+                    compression: if bits_pixel == 16 && masks != RGB555_MASKS { BI_BITFIELDS } else { BI_RGB },
                     size_image: width_bytes * height,
                     clr_used: colors,
                     ..BitmapInfoHeader32::default()
                 },
-                bitfields: if bits_pixel == 32 { RGB_MASKS } else { [0; 3] },
+                bitfields: masks,
                 section: 0,
                 offset: 0,
             };
@@ -152,19 +157,23 @@ mod tests {
 
     #[test]
     fn a_bitmap_gives_its_bitmap_or_its_dibsection() {
-        assert_eq!(bitmap_description((43, 13), (1, 0), None, 0, false).0, 24, "no buffer: a BITMAP's size");
-        assert_eq!(bitmap_description((43, 13), (1, 0), None, 23, true), (0, Vec::new()), "no room for a BITMAP");
+        assert_eq!(bitmap_description((43, 13), (1, 0, [0; 3]), None, 0, false).0, 24, "no buffer: a BITMAP's size");
+        assert_eq!(
+            bitmap_description((43, 13), (1, 0, [0; 3]), None, 23, true),
+            (0, Vec::new()),
+            "no room for a BITMAP"
+        );
         // A monochrome DDB: rows of 16-bit words, no bits.
-        let (size, bytes) = bitmap_description((43, 13), (1, 0), None, 84, true);
+        let (size, bytes) = bitmap_description((43, 13), (1, 0, [0; 3]), None, 84, true);
         let mono = Bitmap32 { width: 43, height: 13, width_bytes: 6, planes: 1, bits_pixel: 1, ..Bitmap32::default() };
         assert_eq!((size, &bytes[..]), (24, mono.as_bytes()));
         // A DIB section: rows of 32-bit words, its bits; the DIBSECTION with
         // room for it.
-        let (size, bytes) = bitmap_description((3, 2), (32, 0), Some(0x0050_0000), 24, true);
+        let (size, bytes) = bitmap_description((3, 2), (32, 0, RGB_MASKS), Some(0x0050_0000), 24, true);
         let bitmap =
             Bitmap32 { width: 3, height: 2, width_bytes: 12, planes: 1, bits_pixel: 32, bits: 0x0050_0000, bm_type: 0 };
         assert_eq!((size, &bytes[..]), (24, bitmap.as_bytes()), "a BITMAP when only it fits");
-        let (size, bytes) = bitmap_description((3, 2), (32, 0), Some(0x0050_0000), MAX_OBJECT_SIZE, true);
+        let (size, bytes) = bitmap_description((3, 2), (32, 0, RGB_MASKS), Some(0x0050_0000), MAX_OBJECT_SIZE, true);
         let header = BitmapInfoHeader32 {
             size: 40,
             width: 3,
@@ -181,7 +190,7 @@ mod tests {
     #[test]
     fn a_dib_section_of_four_bits_tells_its_table() {
         // 33 pixels of 4 bits: 17 bytes, a line of 20.
-        let (size, bytes) = bitmap_description((33, 2), (4, 16), Some(0x0060_0000), MAX_OBJECT_SIZE, true);
+        let (size, bytes) = bitmap_description((33, 2), (4, 16, [0; 3]), Some(0x0060_0000), MAX_OBJECT_SIZE, true);
         assert_eq!(size, 84);
         let section = DibSection32 {
             bitmap: Bitmap32 {
@@ -208,5 +217,30 @@ mod tests {
             offset: 0,
         };
         assert_eq!(&bytes[..], section.as_bytes(), "its 16 colours, no masks");
+    }
+
+    #[test]
+    fn a_dib_section_of_sixteen_bits_tells_its_masks() {
+        use super::super::surface::RGB565_MASKS;
+        // 3 pixels of 16 bits: 6 bytes, a line of 8.
+        let bitmap =
+            Bitmap32 { width: 3, height: 2, width_bytes: 8, planes: 1, bits_pixel: 16, bits: 0x0070_0000, bm_type: 0 };
+        let header = BitmapInfoHeader32 {
+            size: 40,
+            width: 3,
+            height: 2,
+            planes: 1,
+            bit_count: 16,
+            compression: BI_BITFIELDS,
+            size_image: 16,
+            ..BitmapInfoHeader32::default()
+        };
+        let (size, bytes) = bitmap_description((3, 2), (16, 0, RGB565_MASKS), Some(0x0070_0000), MAX_OBJECT_SIZE, true);
+        let section = DibSection32 { bitmap, header, bitfields: RGB565_MASKS, section: 0, offset: 0 };
+        assert_eq!((size, &bytes[..]), (84, section.as_bytes()), "5-6-5: BI_BITFIELDS and its masks");
+        let (_, bytes) = bitmap_description((3, 2), (16, 0, RGB555_MASKS), Some(0x0070_0000), MAX_OBJECT_SIZE, true);
+        let header = BitmapInfoHeader32 { compression: BI_RGB, ..header };
+        let section = DibSection32 { bitmap, header, bitfields: RGB555_MASKS, section: 0, offset: 0 };
+        assert_eq!(&bytes[..], section.as_bytes(), "5-5-5: BI_RGB, and still its masks");
     }
 }
