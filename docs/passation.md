@@ -15,6 +15,16 @@
   d'une fenêtre de dossier, la réduction et le rétablissement par le bouton, dans les deux sens. **Suite** : les
   traînées en déplaçant une
   fenêtre d'OpenOffice (le DC propre de ses fenêtres, CS_OWNDC, pas encore : un DC du cache à la place) ; WH_SHELL.
+- **L'interface de msiexec ne s'ouvrait pas** (`claude/null-instance-class`, sur `main` ; demandé le 2026-11-23 :
+  le MSI de 7-Zip ouvert depuis l'explorateur dans VirtualBox ne montrait rien). `msiexec` (interface complète,
+  niveau 5) échouait à chaque boîte (« Failed to create dialog "PrepareDlg" », `dll/win32/msi/dialog.c`) puis
+  s'arrêtait : `msi.dll` enregistre sa classe `MsiDialogCloseClass` avec une instance nulle, que `user32` fait celle
+  du programme (RegisterClassExWOWW : GetModuleHandleW(NULL)), et crée ses boîtes avec une instance nulle ;
+  IntFindClass de ReactOS prend une instance nulle pour toute instance, `win32k::class::ClassLists::find` cherchait
+  une classe de l'instance 0 (ERROR_CANNOT_FIND_WND_CLASS). Test hôte
+  `a_null_instance_finds_a_private_class_of_any_instance` ; scénario `class-null-instance`
+  (`tests/native/nullinst1.c`, AMD et Intel), qui échoue sans le correctif (vérifié). Le banc du M7 ne le voyait
+  pas : il installe les MSI sans interface (`/qn`).
 - **La fenêtre de PeaZip et sa fermeture** (`claude/peazip-window`, sur la PR 174, M7, le banc,
   [`compat/applications.md`](compat/applications.md#la-fenêtre-de-peazip-et-sa-fermeture-le-2026-11-23) ; demandé le
   2026-11-23). Rien à corriger dans Mino. Le gestionnaire se peint : la capture d'un scénario vient quand tous ses
