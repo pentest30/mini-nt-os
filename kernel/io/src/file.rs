@@ -348,6 +348,10 @@ impl File {
     /// # IRQL
     /// PASSIVE_LEVEL for filesystem I/O; may perform device reads.
     pub fn set_delete_pending(&self, delete: bool) -> Result<(), NtStatus> {
+        // MmFlushImageSection(MmFlushForDelete) of NT: a loaded image stays.
+        if delete && self.image_held() {
+            return Err(STATUS_CANNOT_DELETE);
+        }
         self.volume.set_delete_pending(&self.opened, delete)
     }
 
@@ -588,44 +592,38 @@ impl File {
         Ok(segment)
     }
 
-    /// Les octets du fichier pour une section d'image (NtCreateSection), et
-    /// la taille du fichier : ceux que tient déjà une section d'image du même
-    /// fichier inchangé, sinon son début, que `extent` mesure d'après ses
-    /// premiers 64 Kio et la taille du fichier (`mm::section::ImageLayout::extent` :
-    /// ses en-têtes et les données de ses sections, pas ce qu'un installeur
-    /// y ajoute) ; gardés pour les suivantes (`crate::section_cache::IMAGES`).
+    /// Pour une section d'image (NtCreateSection) : le début du fichier, ses
+    /// 64 premiers Kio, qui tiennent ses en-têtes (le reste se lit à la
+    /// faute, par le segment du fichier, [`data_segment`](Self::data_segment)),
+    /// et ce que la section tient du fichier
+    /// ([`crate::section_cache::ImageHold`] : tant qu'il vit, le fichier ne
+    /// s'écrit ni ne s'efface) ; pas de jeton pour un fichier sans identité.
     ///
     /// # IRQL
     /// PASSIVE_LEVEL for filesystem I/O; may allocate and perform device reads.
-    pub fn image_contents(&self, extent: impl FnOnce(&[u8], u64) -> u64) -> Result<(Arc<[u8]>, u64), NtStatus> {
+    pub fn image_head(&self) -> Result<(Vec<u8>, Option<Arc<crate::section_cache::ImageHold>>), NtStatus> {
         const HEAD: u64 = 64 * 1024;
         let node = self.node()?;
-        let cache = &crate::section_cache::IMAGES;
-        let key = self.cache_key(&node);
-        if let Some(bytes) = key.as_ref().and_then(|key| cache.lookup(key)) {
-            return Ok((bytes, node.size));
-        }
-        let read_at = cache.generation(self.volume.cache_id());
-        let mut bytes = vec![0u8; node.size.min(HEAD) as usize];
-        if self.read(0, &mut bytes)? != bytes.len() {
+        let mut head = vec![0u8; node.size.min(HEAD) as usize];
+        if self.read(0, &mut head)? != head.len() {
             return Err(STATUS_FILE_CORRUPT_ERROR);
         }
-        let wanted = extent(&bytes, node.size).min(node.size) as usize;
-        if wanted > bytes.len() {
-            let start = bytes.len();
-            bytes.resize(wanted, 0);
-            if self.read(start as u64, &mut bytes[start..])? != wanted - start {
-                return Err(STATUS_FILE_CORRUPT_ERROR);
-            }
-        } else {
-            bytes.truncate(wanted);
-        }
-        let bytes: Arc<[u8]> = Arc::from(bytes);
-        let bytes = match key {
-            Some(key) => cache.insert(key, &bytes, read_at),
-            None => bytes,
-        };
-        Ok((bytes, node.size))
+        let hold = node
+            .identity()
+            .filter(|_| !node.directory)
+            .map(|identity| crate::section_cache::hold_image(self.volume.cache_id(), identity));
+        Ok((head, hold))
+    }
+
+    /// Une section d'image tient-elle ce fichier ? Il ne s'ouvre alors pas
+    /// pour être écrit et ne s'efface pas.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn image_held(&self) -> bool {
+        self.opened
+            .identity()
+            .is_some_and(|identity| crate::section_cache::image_held(self.volume.cache_id(), identity))
     }
 
     /// Le fichier en entier.
@@ -819,6 +817,16 @@ pub fn check_open(file: &File, disposition: u32, options: u32, granted: AccessMa
     if options & FILE_DELETE_ON_CLOSE != 0 {
         let root = file.opened.identity().is_none();
         delete_on_close_allowed(file.volume.is_read_only(), root, file.node()?.attributes)?;
+    }
+    // MmFlushImageSection of NT (MmFlushForWrite, MmFlushForDelete): the
+    // file of an image section neither changes nor goes while it is mapped.
+    if file.image_held() {
+        if writes {
+            return Err(abi::ntstatus::STATUS_SHARING_VIOLATION);
+        }
+        if options & FILE_DELETE_ON_CLOSE != 0 {
+            return Err(STATUS_CANNOT_DELETE);
+        }
     }
     match disposition {
         FILE_OPEN | FILE_OPEN_IF => Ok(FILE_OPENED),

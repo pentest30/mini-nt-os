@@ -705,32 +705,7 @@ fn file_reads_take_runs_of_contiguous_clusters() {
 }
 
 #[test]
-fn image_sections_share_the_bytes_of_an_unchanged_file() {
-    use crate::File;
-
-    let (volume, _disk) = mounted(256);
-    let root = File::open(&volume, "\\").unwrap();
-    let file = root.create_child("SHELL32.DLL", false, 0).unwrap();
-    file.write(0, b"first").unwrap();
-    let whole = |_: &[u8], size: u64| size;
-    let (held, size) = file.image_contents(whole).unwrap();
-    assert_eq!((&held[..], size), (&b"first"[..], 5));
-    let (again, _) = File::open(&volume, "\\shell32.dll").unwrap().image_contents(whole).unwrap();
-    assert!(alloc::sync::Arc::ptr_eq(&held, &again), "another open, the same bytes: not read again");
-    file.write(0, b"FIRST").unwrap();
-    let (written, _) = file.image_contents(whole).unwrap();
-    assert_eq!(&written[..], b"FIRST", "a write of the same size: read again");
-    assert_eq!(&held[..], b"first", "a section keeps what it read");
-    file.set_size(3).unwrap();
-    assert_eq!(&file.image_contents(whole).unwrap().0[..], b"FIR", "a new size");
-    let other = root.create_child("OTHER.DLL", false, 0).unwrap();
-    other.write(0, b"FIR").unwrap();
-    let (other_bytes, _) = other.image_contents(whole).unwrap();
-    assert!(!alloc::sync::Arc::ptr_eq(&other_bytes, &file.image_contents(whole).unwrap().0), "its own bytes");
-}
-
-#[test]
-fn an_image_section_reads_the_extent_of_its_image_only() {
+fn an_image_section_reads_the_head_of_its_file_only() {
     use crate::File;
 
     let (volume, _disk) = mounted(256);
@@ -738,21 +713,40 @@ fn an_image_section_reads_the_extent_of_its_image_only() {
     let file = root.create_child("SETUP.EXE", false, 0).unwrap();
     let bytes: alloc::vec::Vec<u8> = (0..100_000u32).map(|i| (i % 251) as u8).collect();
     file.write(0, &bytes).unwrap();
-    // The image ends at 70000: what follows (an installer's payload) is not read.
-    let (image, size) = file
-        .image_contents(|head, size| {
-            assert_eq!((head.len(), size), (64 * 1024, 100_000), "the first 64 KiB, and the file's size");
-            70_000
-        })
-        .unwrap();
-    assert_eq!((image.len(), size), (70_000, 100_000));
-    assert!(image[..] == bytes[..70_000]);
-    let (small, _) = File::open(&volume, "\\SETUP.EXE").unwrap().image_contents(|_, _| unreachable!()).unwrap();
-    assert!(alloc::sync::Arc::ptr_eq(&image, &small), "taken from the first section");
-    let other = root.create_child("SMALL.EXE", false, 0).unwrap();
-    other.write(0, &bytes[..3000]).unwrap();
-    let (head, _) = other.image_contents(|head, _| head.len() as u64 - 1000).unwrap();
-    assert!(head[..] == bytes[..2000], "less than the first bytes read");
+    let (head, hold) = file.image_head().unwrap();
+    assert!(head[..] == bytes[..64 * 1024], "its first 64 KiB: the rest is read at a fault");
+    assert!(hold.is_some());
+    let small = root.create_child("SMALL.EXE", false, 0).unwrap();
+    small.write(0, &bytes[..3000]).unwrap();
+    assert!(small.image_head().unwrap().0[..] == bytes[..3000], "a file shorter than that");
+}
+
+#[test]
+fn the_file_of_an_image_section_is_neither_written_nor_deleted() {
+    use crate::{check_open, File};
+    use abi::file::{FILE_DELETE_ON_CLOSE, FILE_OPEN, FILE_OPENED, FILE_OVERWRITE, FILE_READ_DATA, FILE_WRITE_DATA};
+    use abi::ntstatus::STATUS_CANNOT_DELETE;
+    use ob::AccessMask;
+
+    let (volume, _disk) = mounted(256);
+    let root = File::open(&volume, "\\").unwrap();
+    let file = root.create_child("LOADED.DLL", false, 0).unwrap();
+    file.write(0, b"MZ").unwrap();
+    let other = root.create_child("OTHER.DLL", false, 0).unwrap();
+    let (_, hold) = file.image_head().unwrap();
+    let opened = File::open(&volume, "\\loaded.dll").unwrap();
+    let read = AccessMask(FILE_READ_DATA);
+    assert_eq!(check_open(&opened, FILE_OPEN, 0, read), Ok(FILE_OPENED), "read, as a loader does");
+    let write = AccessMask(FILE_WRITE_DATA);
+    assert_eq!(check_open(&opened, FILE_OPEN, 0, write), Err(abi::ntstatus::STATUS_SHARING_VIOLATION));
+    assert_eq!(check_open(&opened, FILE_OVERWRITE, 0, read), Err(abi::ntstatus::STATUS_SHARING_VIOLATION));
+    let delete = AccessMask::DELETE;
+    assert_eq!(check_open(&opened, FILE_OPEN, FILE_DELETE_ON_CLOSE, delete), Err(STATUS_CANNOT_DELETE));
+    assert_eq!(opened.set_delete_pending(true), Err(STATUS_CANNOT_DELETE));
+    assert_eq!(check_open(&other, FILE_OPEN, 0, write), Ok(FILE_OPENED), "another file");
+    drop(hold);
+    assert_eq!(check_open(&opened, FILE_OPEN, 0, write), Ok(FILE_OPENED), "the section gone");
+    assert_eq!(opened.set_delete_pending(true), Ok(()));
 }
 
 #[test]

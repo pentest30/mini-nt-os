@@ -137,10 +137,12 @@ privilège ; le `tar` de Windows ne lit pas le xz).
   import de la sonde, et **le triangle s'affiche**.
 
 À faire avant d'en dépendre dans un scénario :
-- **Le noyau lit une image en un seul bloc** : `io::File::image_contents` alloue la DLL (une cinquantaine de Mio) d'un tenant
-  dans le tas du noyau, ce qui échoue avec les 256 Mio du banc (STOP, « memory allocation of 52755544 bytes
-  failed », depuis NtCreateSection) ; l'essai a pris 1 Gio. Tâche de diagnostic : lire une image par pages (ou
-  par vues) plutôt que d'un bloc.
+- ~~Le noyau lit une image en un seul bloc~~ : `io::File::image_contents` allouait la DLL (une cinquantaine de Mio)
+  d'un tenant dans le tas du noyau, ce qui échouait avec les 256 Mio du banc (STOP, « memory allocation of 52755544
+  bytes failed », depuis NtCreateSection) ; l'essai avait pris 1 Gio. **Corrigé** (`claude/image-read`, ADR-024
+  précisée) : une section d'image ne lit que ses en-têtes, ses pages viennent du fichier à la faute, et son fichier
+  ne s'écrit ni ne s'efface tant qu'elle vit. Vérifié le 2026-11-25 avec les mêmes crochets d'essai, sans
+  `memory = 1024` : l'ICD se charge avec 256 Mio (143 Mio libres au démarrage) et le triangle s'affiche.
 - Le disque RAM de démarrage ne dépasse pas 64 Mio : l'ICD ira sur un disque système plus grand (comme `app =`).
 - Les avis de licence (Mesa, LLVM, zlib) sont copiés dans `third_party/mesa-icd/licences/` ; ils iront sur le
   disque avec la DLL.

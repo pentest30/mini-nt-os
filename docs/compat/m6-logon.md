@@ -547,7 +547,8 @@ données ne lit plus rien à sa création ; la faute d'une page de sa vue lit le
 les sections du même fichier inchangé partagent ces pages (`mm::section::FileSegment`, `io::section_cache::DATA`).
 Mesuré (trace temporaire de NtCreateSection) : les trois sections en 0, 10 et 0 ms, 80 pages lues (320 Kio) pour
 l'icône ; `shell32.dll` en fichier de données, ~112 pages par extraction au lieu de 10,9 Mo. Une section d'image
-lit ses en-têtes et les données de ses sections, pas ce qui les suit (`ImageLayout::extent`). Scénario
+ne lit que ses en-têtes ; ses pages viennent du même segment à la faute, et son fichier est tenu tant qu'elle vit
+(ADR-024, précisée le 2026-11-25). Scénario
 `folder-apps` : l'icône de l'installeur dans la liste de `C:\APPS` dans les 60 s de `screen-wait`. Écart avec NT :
 une page déjà lue ne voit pas une écriture faite ensuite au fichier, et les pages modifiées d'une vue partagée ne
 retournent pas au fichier.
