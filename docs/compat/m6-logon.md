@@ -393,6 +393,30 @@ routines `0xFFFF0001` de NtUserCallNoParam et `0xFFFE000E` de NtUserCallOneParam
 `consrv`, que ReactOS n'implémente pas (« UNIMPLEMENTED »). `winlogon` charge en vain `beepmidi.dll`, `msacm32.drv`,
 `midimap.dll` pour le son de fin de session.
 
+## La pile d'un thread fini (M7, le 2026-11-24)
+
+Un thread qui finit par ExitThread de `kernel32`, ou en revenant de sa fonction (BaseThreadStartup l'appelle), ou
+par RtlExitUserThread de `ntdll` (les threads de `csrss`), pose `FreeStackOnTermination` dans son TEB avant
+NtTerminateThread. Le noyau doit alors rendre sa pile, de `DeallocationStack` (PspExitThread de ReactOS, avant
+MmDeleteTeb). Mino rendait la page du TEB, jamais la pile. Dans un processus qui dure, chaque thread fini laissait
+donc :
+- la réservation de sa pile (1 Mio d'adresses par défaut) ;
+- ses pages committées ;
+- un nœud de VAD (48 octets du pool).
+
+Chez `csrss`, le thread d'entrée de chaque console perdait ainsi sa pile ; la mesure du pool d'une session l'a
+trouvé.
+
+`ps::ethread::delete_teb` rend maintenant la pile, quand le thread l'a demandé, puis le TEB. Un thread terminé par
+TerminateThread ne le demande pas et garde sa pile, comme sur XP.
+
+Scénario `thread-stack` (`tests/native/thrstk1.c`, AMD et Intel) :
+- un thread qui revient, puis un qui appelle ExitThread : leur pile est ensuite MEM_FREE ;
+- un thread terminé par TerminateThread : sa pile reste committée ;
+- 20 threads qui reviennent : 20 piles rendues.
+
+Sans le correctif (une mutation), les piles restent et le scénario échoue.
+
 ## La suite
 
 Le premier critère du M6 est atteint ; restent le changement de résolution (troisième critère : `bochs-dispi`,

@@ -624,7 +624,9 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   fin d'une session (`win32k::shutdown` : UserInitiateShutdown, WM_LOGONNOTIFY à la fenêtre SAS de `winlogon`,
   UserEndShutdown ; le bureau d'entrée par `ob::HandleTable::find_object`), `ntmarta.dll` est sur le disque, et
   WM_CLIENTSHUTDOWN devient WM_QUERYENDSESSION puis WM_ENDSESSION (`defwnd::end_session_messages`) ; `winlogon`
-  ferme la session puis appelle NtShutdownSystem ; scénario `session-shutdown` (`tests/native/shutdn1.c`).
+  ferme la session puis appelle NtShutdownSystem ; scénario `session-shutdown` (`tests/native/shutdn1.c`). La pile
+  d'un thread fini est rendue quand il l'a demandé (`FreeStackOnTermination` : `ps::ethread::delete_teb`) ; scénario
+  `thread-stack` (`tests/native/thrstk1.c`).
   Suite : [`docs/passation.md`](docs/passation.md).
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.

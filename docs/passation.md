@@ -1,5 +1,11 @@
 # Notes de passation
 
+- **La pile d'un thread fini** (`claude/thread-stack`, sur la PR 184, M7, Ps ;
+  [`compat/m6-logon.md`](compat/m6-logon.md#la-pile-dun-thread-fini-m7-le-2026-11-24) ; trouvé en mesurant le pool
+  d'une session). PspExitThread rend la pile d'un thread qui l'a demandé (`FreeStackOnTermination` du TEB : ExitThread,
+  RtlExitUserThread), de `DeallocationStack`, avant le TEB (`ps::ethread::delete_teb`). Chaque thread fini d'un
+  processus qui dure laissait sa réservation, ses pages et un nœud de VAD (le thread d'entrée de chaque console chez
+  `csrss`). Scénario `thread-stack` (`tests/native/thrstk1.c`, AMD et Intel ; sans le correctif, il échoue).
 - **SPI_GETWORKAREA et SPI_SETWORKAREA : OpenOffice ouvre son Start Center** (`claude/spi-work-area`, M7,
   [`compat/applications.md`](compat/applications.md#spi_getworkarea-openoffice-ouvrait-ses-fenêtres-hors-de-lécran-le-2026-11-23) ;
   demandé le 2026-11-23, après les PR 181 et 182). Dans l'image VirtualBox, OpenOffice s'installe mais ne montre

@@ -24,7 +24,7 @@ use alloc::sync::{Arc, Weak};
 use core::any::Any;
 use core::cell::UnsafeCell;
 use core::ffi::c_void;
-use core::mem::MaybeUninit;
+use core::mem::{offset_of, MaybeUninit};
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
 use abi::context::Context32;
@@ -1013,9 +1013,30 @@ fn create_teb(process: &EProcess, tid: ThreadId, stack: &InitialTeb) -> Result<u
     })?
 }
 
-/// MmDeleteTeb : rend la page du TEB, si l'espace d'adresses existe encore.
+/// PspExitThread, puis MmDeleteTeb : la pile utilisateur du thread dont le
+/// TEB est en `teb` est rendue s'il l'a demandé (`FreeStackOnTermination`,
+/// que posent ExitThread de `kernel32` et RtlExitUserThread de `ntdll` : sa
+/// réservation, de `DeallocationStack`), puis la page du TEB, si l'espace
+/// d'adresses existe encore. Sans la pile rendue, chaque thread fini d'un
+/// processus qui dure laissait sa réservation (1 Mio d'adresses par
+/// défaut), ses pages committées et son nœud de VAD : le thread d'entrée de
+/// chaque console chez `csrss`.
+///
+/// # IRQL
+/// PASSIVE_LEVEL.
 pub(crate) fn delete_teb(process: &EProcess, teb: u32) {
-    let _ = process.with_space(|space| space.free(u64::from(teb), 0, FreeType::MEM_RELEASE));
+    let _ = process.with_space(|space| {
+        let field = |offset: usize, buffer: &mut [u8]| space.read_bytes(u64::from(teb) + offset as u64, buffer);
+        let (mut free, mut bottom) = ([0u8; 1], [0u8; 4]);
+        let asked = field(offset_of!(Teb32, free_stack_on_termination), &mut free).is_ok() && free[0] != 0;
+        if asked && field(offset_of!(Teb32, deallocation_stack), &mut bottom).is_ok() {
+            let bottom = u32::from_le_bytes(bottom);
+            if bottom != 0 {
+                let _ = space.free(u64::from(bottom), 0, FreeType::MEM_RELEASE);
+            }
+        }
+        space.free(u64::from(teb), 0, FreeType::MEM_RELEASE)
+    });
 }
 
 #[cfg(test)]
