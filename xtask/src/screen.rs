@@ -3,7 +3,8 @@
 //! in the run directory, a TCP port of localhost on Windows) dumps the
 //! screen (`screendump`, a binary PPM), and each listed pixel must have its
 //! colour. The monitor also types the keys
-//! of a scenario (`keys = MARKER => KEY…`, [`send_keys`]).
+//! of a scenario (`keys = MARKER => KEY…`, [`send_keys`]), and records what
+//! the processor does in a run that times out ([`record_state`]).
 
 use std::io::{Read, Write};
 use std::path::Path;
@@ -354,13 +355,18 @@ impl Session {
 /// ([`key_duration`]) before the next. A mouse token ([`mouse_command`])
 /// drives QEMU's PS/2 mouse instead: the first one selects it (`info mice`,
 /// `mouse_set`) and sends an empty move (QEMU loses the first mouse event of
-/// a monitor connection). A pause ([`pause_ms`]) waits.
+/// a monitor connection). A pause ([`pause_ms`]) waits. `nmi` sends an NMI
+/// ([`NMI`]).
 pub fn send_keys(monitor: &Monitor, keys: &[String]) -> Result<()> {
     let mut session = Session::open(monitor)?;
     let mut mouse_ready = false;
     for key in keys {
         if let Some(ms) = pause_ms(key) {
             std::thread::sleep(Duration::from_millis(ms));
+            continue;
+        }
+        if key == NMI {
+            session.command("nmi")?;
             continue;
         }
         match mouse_command(key) {
@@ -393,6 +399,64 @@ pub fn send_keys(monitor: &Monitor, keys: &[String]) -> Result<()> {
     Ok(())
 }
 
+/// The time between two samples of [`record_state`].
+const STATE_INTERVAL: Duration = Duration::from_millis(100);
+
+/// The `keys` token that sends an NMI: the kernel reports its threads
+/// (`ke::report`, `[threads]` lines in the serial log), at its balance set
+/// manager's next pass.
+pub const NMI: &str = "nmi";
+
+/// How long the thread report takes to reach the serial log after its NMI:
+/// the balance set manager passes every second.
+const NMI_REPORT_WAIT: Duration = Duration::from_secs(3);
+
+/// What the processor of the QEMU whose monitor listens on `monitor` is
+/// doing, into `file`: `samples` answers of `info registers`, a tenth of a
+/// second apart, each with the instructions at its program counter and the
+/// 32 quadwords under its stack pointer. Enough to tell an idle processor
+/// (the idle thread's `hlt`) from a loop, and where the loop is: the
+/// kernel's addresses symbolize from its ELF (`llvm-symbolizer`), a user
+/// address is in the process of CR3. Then an NMI, and the time for the
+/// kernel's thread report to reach the serial log: who waits on what.
+pub fn record_state(monitor: &Monitor, file: &Path, samples: usize) -> Result<()> {
+    let mut session = Session::open(monitor)?;
+    let mut record = String::new();
+    for sample in 0..samples {
+        if sample > 0 {
+            std::thread::sleep(STATE_INTERVAL);
+        }
+        record.push_str(&format!("--- sample {sample}\n"));
+        let registers = answer(&session.command("info registers")?);
+        record.push_str(&registers);
+        record.push_str(&answer(&session.command("x /6i $pc")?));
+        // HMP has no name for the stack pointer of long mode: its value
+        // (ESP when the processor runs 32-bit code).
+        if let Some(rsp) = register(&registers, "RSP").or_else(|| register(&registers, "ESP")) {
+            record.push_str(&answer(&session.command(&format!("x /32gx {rsp:#x}"))?));
+        }
+    }
+    std::fs::write(file, record).map_err(|e| format!("{}: {e}", file.display()))?;
+    session.command("nmi")?;
+    std::thread::sleep(NMI_REPORT_WAIT);
+    Ok(())
+}
+
+/// The answer of a monitor command without its echo (the command as the
+/// line editor redrew it, up to the first line feed) and the next prompt.
+fn answer(text: &str) -> String {
+    let body = text.split_once('\n').map_or("", |(_, rest)| rest);
+    let body = body.strip_suffix("(qemu) ").unwrap_or(body);
+    body.replace('\r', "")
+}
+
+/// The value of `name` (`RSP`, `RIP`…) in the answer of `info registers`.
+fn register(registers: &str, name: &str) -> Option<u64> {
+    let start = registers.find(&format!("{name}="))? + name.len() + 1;
+    let digits: String = registers[start..].chars().take_while(char::is_ascii_hexdigit).collect();
+    u64::from_str_radix(&digits, 16).ok()
+}
+
 /// How many times `needle` is in `haystack`.
 fn count(haystack: &[u8], needle: &[u8]) -> usize {
     haystack.windows(needle.len()).filter(|window| *window == needle).count()
@@ -401,6 +465,29 @@ fn count(haystack: &[u8], needle: &[u8]) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_state_of_a_hang_reads_the_monitor_s_answers() {
+        // An answer: the echo redrawn by the line editor, the output, the
+        // next prompt.
+        let text = "i\x1b[K\x1b[Dinfo registers\x1b[K\r\nCPU#0\r\nRAX=0000000000001a77 RBX=0000000000002710\r\n\
+                    RSI=0000000000299f40 RDI=000000000e9b4b54 RBP=000000000fe59cc0 RSP=000000000fe59c90\r\n(qemu) ";
+        let registers = answer(text);
+        assert!(registers.starts_with("CPU#0\nRAX="), "{registers:?}");
+        assert!(!registers.contains("(qemu)"));
+        assert_eq!(register(&registers, "RSP"), Some(0x0fe5_9c90));
+        assert_eq!(register(&registers, "RAX"), Some(0x1a77));
+        assert_eq!(register(&registers, "RIP"), None);
+        // 32-bit code: the same names, E for R.
+        assert_eq!(
+            register(
+                "EIP=00401020 EFL=00000206
+ESP=00210000",
+                "ESP"
+            ),
+            Some(0x0021_0000)
+        );
+    }
 
     #[test]
     fn mouse_tokens_become_monitor_commands() {

@@ -744,6 +744,23 @@ pub fn client_exists(pid: ProcessId, tid: ThreadId) -> bool {
     }
 }
 
+/// Le thread de l'exécutif `owner` (le propriétaire d'un thread Ke), pour le
+/// relevé des threads de Ke (`ke::report`) : son PID, son TID et l'image de
+/// son processus.
+///
+/// # Safety
+/// `owner` est le propriétaire d'un thread Ke encore enregistré : il vient
+/// d'`Arc::as_ptr` à la création du thread, et la liste de son processus,
+/// puis le reaper, en tiennent un pointeur jusqu'à ce que Ke l'oublie.
+///
+/// # IRQL
+/// Tout niveau (des champs immuables ; sous le verrou dispatcher).
+pub(crate) unsafe fn describe_owner(owner: *const c_void, out: &mut dyn core::fmt::Write) {
+    // SAFETY: garanti par l'appelant.
+    let thread = unsafe { &*owner.cast::<Object<EThread>>() };
+    let _ = write!(out, "PID {} TID {} {}", thread.pid(), thread.tid(), thread.process().image_file_name());
+}
+
 /// Le thread de l'exécutif qui s'exécute ; `None` pour un thread noyau ou un
 /// thread de l'ancien chargeur.
 ///

@@ -657,7 +657,12 @@ cargo build -p mino-loader --target x86_64-unknown-uefi --profile kernel
   de mode d'affichage).
 - `keys = MARQUEUR => TOUCHES` : quand le marqueur paraît dans le journal série, le moniteur de QEMU tape ces
   touches (`sendkey` : `a`, `shift-a`, `ret`…), une ligne après l'autre ; `"dir C:\"` entre guillemets donne les
-  touches de chaque caractère (clavier américain).
+  touches de chaque caractère (clavier américain). `nmi` envoie un NMI : le noyau imprime le relevé de ses threads
+  (`ke::report`, lignes `[threads]` : état, attente, service en cours, pile noyau symbolisée ; scénario
+  `thread-report`).
+- Un run qui expire, avec un moniteur (des `keys` ou un `screen`), relève les registres du processeur dans
+  `hang.txt` (cinq échantillons, les instructions et la pile) puis envoie un NMI : le relevé des threads est à la
+  fin du journal série. C'est l'outil pour un système figé.
 - `initial-command = PROGRAMME.EXE` : ce programme Win32 de `tests/native/` prend la place de `winlogon.exe` sur le
   disque, et `smss` le lance comme commande initiale (avec `requires = userland, native`).
 - `memory = MiB` : la mémoire de QEMU (256 Mio sinon) ; `high-memory` en donne 8 Gio, comme un PC dont le firmware

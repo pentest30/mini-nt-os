@@ -16,6 +16,9 @@ pub const DEFAULT_MEMORY_MB: u32 = 256;
 const POLL: Duration = Duration::from_millis(250);
 /// How often the screen is captured again while `screen-wait` runs.
 const SCREEN_RETRY: Duration = Duration::from_secs(1);
+/// How many samples of the processor's state a run that times out records
+/// ([`record_hang`]).
+const HANG_SAMPLES: usize = 5;
 
 /// QEMU CPU model.
 #[derive(Clone)]
@@ -361,6 +364,9 @@ fn boot_once(
         eprintln!("xtask: QEMU may outlive this run: {why}");
     }
 
+    // The state of an earlier run's hang, which this one replaces.
+    let hang = run_dir.join("hang.txt");
+    let _ = fs::remove_file(&hang);
     let start = Instant::now();
     // The `keys` lines already typed, in order.
     let mut typed = 0;
@@ -402,7 +408,8 @@ fn boot_once(
                     End::PowerCut(after) => format!("`{after}`"),
                     _ => "the machine reset".to_string(),
                 };
-                break (false, format!("timeout ({} s) before {what}", timeout.as_secs()));
+                let state = record_hang(monitor.as_ref(), &hang);
+                break (false, format!("timeout ({} s) before {what}{state}", timeout.as_secs()));
             }
             continue;
         }
@@ -433,7 +440,11 @@ fn boot_once(
                     break (false, format!("QEMU exited ({status}); missing: {}", missing.join("; ")));
                 }
                 if start.elapsed() >= timeout {
-                    break (false, format!("timeout ({} s); missing: {}", timeout.as_secs(), missing.join("; ")));
+                    let state = record_hang(monitor.as_ref(), &hang);
+                    break (
+                        false,
+                        format!("timeout ({} s); missing: {}{state}", timeout.as_secs(), missing.join("; ")),
+                    );
                 }
             }
         }
@@ -449,6 +460,18 @@ fn boot_once(
         reason.push_str(qemu_output.trim_end());
     }
     Ok(Outcome { passed, reason, elapsed, serial_log: serial_log.to_path_buf() })
+}
+
+/// On a timeout, what the processor was doing ([`crate::screen::record_state`]),
+/// into `file` when the machine has a monitor (a scenario with keys or screen
+/// checks), and the kernel's thread report in the serial log; rends what to
+/// add to the reason.
+fn record_hang(monitor: Option<&crate::screen::Monitor>, file: &Path) -> String {
+    let Some(monitor) = monitor else { return String::new() };
+    match crate::screen::record_state(monitor, file, HANG_SAMPLES) {
+        Ok(()) => format!("; the processor's state in {}, the threads in the serial log", file.display()),
+        Err(why) => format!("; the processor's state not recorded: {why}"),
+    }
 }
 
 /// Why QEMU ended when another process ended it, `None` otherwise. On a

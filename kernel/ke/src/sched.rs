@@ -1346,6 +1346,104 @@ pub fn thread_object(tid: usize) -> Option<*mut DispatcherHeader> {
     }
 }
 
+/// Le relevé du thread `tid` ([`crate::report`]), copié sous le verrou
+/// dispatcher : son état, son attente, son propriétaire, la trame de sa
+/// dernière entrée depuis le mode utilisateur et sa pile noyau ; `None` s'il
+/// n'existe pas.
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub(crate) fn record(tid: usize) -> Option<crate::report::Record> {
+    use crate::dispatcher::{KMutant, ObjectType};
+    use crate::report::{Record, Wait, MAX_WAITS};
+    let describe = crate::report::owner_describer();
+    // SAFETY: verrou tenu de acquire à release. Un thread enregistré est
+    // valide, comme son propriétaire (`report::OwnerDescriber`) ; tant qu'il
+    // attend, ses wait blocks et les objets qu'ils désignent le sont aussi, et
+    // le propriétaire d'un mutant est un thread enregistré. Sa pile et sa trame
+    // ne se lisent que par les tables de pages (`trap_of`, `kernel_backtrace`).
+    unsafe {
+        let old_irql = DISPATCHER_LOCK.acquire::<KePlatform>();
+        let t = (*threads()).get(tid);
+        if t.is_null() {
+            DISPATCHER_LOCK.release::<KePlatform>(old_irql);
+            return None;
+        }
+        let mut record = Record::new(tid, (*t).tcb.state);
+        record.priority = (*t).priority;
+        record.base_priority = (*t).base_priority;
+        record.user_mode = (*t).user_mode;
+        record.current = t == current_thread();
+        record.wait_mode = (*t).tcb.wait_mode;
+        record.alertable = (*t).tcb.alertable;
+        let blocks = (*t).tcb.wait_block_list;
+        if record.state == ThreadState::Waiting && !blocks.is_null() {
+            record.wait_count = usize::from((*t).tcb.wait_count);
+            for (index, slot) in record.waits.iter_mut().enumerate().take(record.wait_count.min(MAX_WAITS)) {
+                let object = (*blocks.add(index)).object;
+                if object.is_null() {
+                    continue;
+                }
+                let kind = (*object).kind;
+                let mutant_owner = if kind == ObjectType::Mutant {
+                    let owner = (*object.cast::<KMutant>()).owner_thread;
+                    // The KThread heads its Thread (`repr(C)`).
+                    (!owner.is_null()).then(|| (*owner.cast::<Thread>()).tid)
+                } else {
+                    None
+                };
+                *slot = Some(Wait { kind, object: object as u64, signal_state: (*object).signal_state, mutant_owner });
+            }
+        }
+        if record.user_mode {
+            record.trap = trap_of((*t).kernel_stack_top);
+        }
+        // A terminated thread's stack is its end, the same for all.
+        if !record.current && record.state != ThreadState::Terminated {
+            let ctx = (*t).ctx;
+            record.push_frame(ctx.rip);
+            hal::bugcheck::kernel_backtrace(ctx.rbp, |ret| {
+                record.push_frame(ret);
+            });
+        }
+        let owner = (*t).owner;
+        if let (Some(describe), false) = (describe, owner.is_null()) {
+            record.describe_owner(|out| describe(owner, out));
+        }
+        DISPATCHER_LOCK.release::<KePlatform>(old_irql);
+        Some(record)
+    }
+}
+
+/// La trame de la dernière entrée depuis le mode utilisateur d'un thread dont
+/// la pile initiale est `initial_stack` (`callout::current_trap_frame`) : le
+/// CPU y empile EIP, CS, EFLAGS, ESP et SS au même endroit pour une
+/// interruption que pour une trame de trap entière ; le service en cours
+/// d'une entrée par `int 2Eh` ou SYSENTER est dans EAX. `None` si la trame ne
+/// se lit pas ou ne vient pas du mode utilisateur. Lue par les tables de
+/// pages, sans faute possible.
+///
+/// # IRQL
+/// Tout niveau.
+fn trap_of(initial_stack: u64) -> Option<crate::report::Trap> {
+    use core::mem::{offset_of, size_of};
+    use hal::trap::KTrapFrame;
+    let frame = initial_stack.checked_sub(size_of::<KTrapFrame>() as u64)?;
+    let read = |offset: usize| hal::bugcheck::read_mapped_word(frame + offset as u64);
+    if read(offset_of!(KTrapFrame, cs))? & 3 != 3 {
+        return None;
+    }
+    let vector = read(offset_of!(KTrapFrame, vector))?;
+    let service = (vector == u64::from(hal::trap::LAST_GATE) || vector == hal::trap::SYSENTER)
+        .then(|| read(offset_of!(KTrapFrame, rax)).map(|rax| rax as u32))
+        .flatten();
+    Some(crate::report::Trap {
+        eip: read(offset_of!(KTrapFrame, rip))? as u32,
+        esp: read(offset_of!(KTrapFrame, rsp))? as u32,
+        service,
+    })
+}
+
 /// Le `KThread` de `tid`, pour lui envoyer un APC ; il reste valide jusqu'à
 /// [`delete_thread`].
 ///
