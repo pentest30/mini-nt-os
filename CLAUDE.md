@@ -605,6 +605,10 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   GetDIBits de 24 bits) et les DIB sections de 1 bit : PeaZip ouvre son gestionnaire et une archive ; scénario
   `bitmap-24`. Il ne se ferme pas seul : il attend un `cmd.exe` détaché sans handles standard, que le `cmd` de
   ReactOS fige à son premier message (`conutils` : le verrou d'un flux au handle nul n'est pas initialisé), un défaut
+  de ReactOS que le banc contourne en terminant PeaZip. Ke n'a plus de limite de 64 threads (`ke::sched` : files
+  prêtes chaînées par des liens dans chaque thread, `ReadyLink`, comme le `WaitListEntry` de ReactOS ; table des
+  threads qui grandit hors du verrou dispatcher, `register_locked`) : les runtimes de Visual C++ d'OpenOffice
+  manquaient de threads (`rpcrt4`, error 1450) ; scénario `many-threads` (`tests/native/manythr1.c`).
   de ReactOS que le banc contourne en terminant PeaZip. Les DIB sections de 16 bits (`gdi::surface::Format::Rgb16` :
   5-5-5, ou les masques de BI_BITFIELDS ; GetObject, GetDIBits de 16 bits) ; scénario `bitmap-16`.
   Suite : [`docs/passation.md`](docs/passation.md).
