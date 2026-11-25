@@ -72,6 +72,7 @@ pub mod scrollex;
 pub mod sent;
 pub mod shared;
 pub mod shell;
+pub mod shellhook;
 pub mod shutdown;
 pub mod sizemove;
 pub mod startup;

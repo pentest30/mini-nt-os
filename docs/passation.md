@@ -1,5 +1,20 @@
 # Notes de passation
 
+- **La barre des tâches : les crochets du shell, les fenêtres réduites, SwitchToThisWindow** (`claude/shell-hooks`,
+  M6/M7, [`compat/m6-fenetres.md`](compat/m6-fenetres.md) étape 48 ; demandé le 2026-11-24, dans la machine
+  VirtualBox). La barre d'`explorer` n'avait aucun bouton et une fenêtre réduite « disparaissait » (sous la barre, en
+  bas à gauche). Comme ReactOS : RegisterShellHookWindow et DeregisterShellHookWindow (NtUserCallHwnd 0x48, 0x45),
+  SetTaskmanWindow et SetProgmanWindow (NtUserCallHwndOpt 0x4B, 0x4A ; NtUserGetThreadState 0x14, 0x13), le message
+  « SHELLHOOK » posté aux fenêtres inscrites quand une fenêtre de premier niveau est montrée, cachée, détruite,
+  renommée ou activée (`win32k::shellhook`) ; SPI_GET/SETMINIMIZEDMETRICS (`explorer` demande `ARW_HIDE` : réduite,
+  la fenêtre sort de l'écran) ; SwitchToThisWindow (NtUserCallTwoParam 0x63 : un clic sur le bouton la rétablit) ;
+  ShowWindowAsync d'une fenêtre d'un autre thread (WM_ASYNC_SHOWWINDOW, traité par win32k dans son thread : un clic
+  sur le bouton de la fenêtre active la réduit).
+  Scénario `shell-hooks` (`tests/native/shellhk1.c`, AMD et Intel). Vérifié : lint, tests hôte, `shell-hooks`,
+  `minmax`, `window-menu`, `hotkey`, `async-activate` (AMD, Intel), `logon`, `folder-view` ; dans la machine, le bouton
+  d'une fenêtre de dossier, la réduction et le rétablissement par le bouton, dans les deux sens. **Suite** : les
+  traînées en déplaçant une
+  fenêtre d'OpenOffice (le DC propre de ses fenêtres, CS_OWNDC, pas encore : un DC du cache à la place) ; WH_SHELL.
 - **Une session sans fuite de pool : le second critère du M7** (`claude/pool-measure`, sur la PR 186, la pile d'un
   thread fini ; [`compat/m6-logon.md`](compat/m6-logon.md#une-session-sans-fuite-de-pool-m7-le-2026-11-24) ; demandé
   le 2026-11-23). NtQuerySystemInformation(SystemPoolTagInformation, 22) : ce que chaque étiquette tient dans les

@@ -631,6 +631,12 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   tours de travail, au plus 256 octets de plus du tour 2 au tour 4, puis l'arrêt) ; la sonde de `smss` ne garde plus
   que ses enfants, la vue de la section d'un client chez `csrss` part avec le port du serveur
   (`lpc::Port::set_view_release`) : **le second critère du M7 est coché**.
+  La barre des tâches d'`explorer` montre ses boutons : les
+  crochets du shell (`win32k::shellhook` : RegisterShellHookWindow, le message « SHELLHOOK » à chaque fenêtre de premier
+  niveau montrée, cachée, détruite, renommée ou activée ; SetTaskmanWindow), SPI_GET/SETMINIMIZEDMETRICS (`ARW_HIDE` :
+  une fenêtre réduite sort de l'écran), SwitchToThisWindow (le clic sur le bouton la rétablit) et ShowWindowAsync
+  d'une fenêtre d'un autre thread (WM_ASYNC_SHOWWINDOW : le clic sur le bouton de la fenêtre active la réduit) ;
+  scénario `shell-hooks` (`tests/native/shellhk1.c`).
   Suite : [`docs/passation.md`](docs/passation.md).
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.
