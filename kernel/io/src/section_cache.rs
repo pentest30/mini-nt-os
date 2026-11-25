@@ -7,11 +7,12 @@
 //!   données du même fichier inchangé reprend le segment : ce qui est lu
 //!   pour l'une sert à toutes ; `shell32` ouvre ainsi `shell32.dll`
 //!   (11 Mio) comme fichier de données pour chaque icône qu'il extrait ;
-//! - [`IMAGES`] : les octets qu'une section d'image a lus du fichier (ses
-//!   en-têtes et les données de ses sections, [`crate::File::image_contents`]),
-//!   que reprend une autre section d'image du même fichier inchangé : tant
-//!   qu'une section les tient (une DLL chargée, une section de `\KnownDlls`),
-//!   le fichier n'est lu qu'une fois.
+//! - [`ImageHold`] : ce que tient une section d'image de son fichier (dont
+//!   les pages se lisent à la faute, dans le segment de [`DATA`]) : tant
+//!   qu'une section d'image tient le fichier (une DLL chargée, une section de
+//!   `\KnownDlls`), Io refuse de l'ouvrir pour l'écrire
+//!   (`STATUS_SHARING_VIOLATION`) et de l'effacer (`STATUS_CANNOT_DELETE`),
+//!   comme MmFlushImageSection de NT : une image ne change pas sous ses vues.
 //!
 //! Io ne connaît pas Mm : un segment est ici un `dyn Any`, que
 //! `ntoskrnl::sys::section` crée et reconnaît.
@@ -140,9 +141,6 @@ impl<T: ?Sized> Default for Cache<T> {
 /// Les segments des sections de données des fichiers des volumes montés.
 pub static DATA: Cache<dyn Any + Send + Sync> = Cache::new();
 
-/// Les octets des sections d'image des fichiers des volumes montés.
-pub static IMAGES: Cache<[u8]> = Cache::new();
-
 /// Le fichier `identity` du volume `volume` (tous ses fichiers sans
 /// `identity`) change : ses sections suivantes ne reprennent rien.
 ///
@@ -150,7 +148,40 @@ pub static IMAGES: Cache<[u8]> = Cache::new();
 /// <= DISPATCH_LEVEL.
 pub fn invalidate(volume: usize, identity: Option<u64>) {
     DATA.invalidate(volume, identity);
-    IMAGES.invalidate(volume, identity);
+}
+
+/// Ce que tient une section d'image de son fichier ([`hold_image`]) : tant
+/// qu'il vit, le fichier ne s'écrit ni ne s'efface ([`image_held`]).
+#[derive(Debug)]
+pub struct ImageHold {
+    volume: usize,
+    identity: u64,
+}
+
+/// Les fichiers que tiennent des sections d'image : (volume, identité,
+/// jeton). Le registre ne retient rien lui-même.
+static IMAGES: KSpinLock<Vec<Weak<ImageHold>>> = KSpinLock::new(Vec::new());
+
+/// Une section d'image tient le fichier `identity` du volume `volume`
+/// jusqu'à ce que le jeton rendu disparaisse.
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn hold_image(volume: usize, identity: u64) -> Arc<ImageHold> {
+    let hold = Arc::new(ImageHold { volume, identity });
+    let mut images = IMAGES.lock();
+    images.retain(|held| held.strong_count() > 0);
+    images.push(Arc::downgrade(&hold));
+    hold
+}
+
+/// Une section d'image tient-elle le fichier `identity` du volume
+/// `volume` ?
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn image_held(volume: usize, identity: u64) -> bool {
+    IMAGES.lock().iter().filter_map(Weak::upgrade).any(|hold| (hold.volume, hold.identity) == (volume, identity))
 }
 
 #[cfg(test)]
@@ -172,6 +203,19 @@ mod tests {
         assert!(cache.lookup(&key(0x2000, 7, 10)).is_none(), "another volume");
         drop((found, bytes));
         assert!(cache.lookup(&key(0x1000, 7, 10)).is_none(), "gone with the last section");
+    }
+
+    #[test]
+    fn an_image_holds_its_file_while_its_section_lives() {
+        let first = hold_image(0x9000, 3);
+        let second = hold_image(0x9000, 3);
+        assert!(image_held(0x9000, 3));
+        assert!(!image_held(0x9000, 4), "another file");
+        assert!(!image_held(0x9001, 3), "another volume");
+        drop(first);
+        assert!(image_held(0x9000, 3), "the other section still holds it");
+        drop(second);
+        assert!(!image_held(0x9000, 3), "let go with the last section");
     }
 
     #[test]

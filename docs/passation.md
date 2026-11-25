@@ -1,5 +1,29 @@
 # Notes de passation
 
+- **Les sections d'image paginées, leur fichier tenu** (`claude/image-read`, sur `main` ; M8, avant l'étape 3 du
+  spike « ICD XP » ; [ADR-024](03-decisions.md#adr-024--sections-de-fichiers--les-pages-lues-à-la-faute-partagées-par-le-segment-du-fichier--le-fichier-dune-image-tenu)
+  précisée, encore proposée). NtCreateSection(`SEC_IMAGE`) lisait l'image d'un seul bloc dans le tas du noyau
+  (`io::File::image_contents`) : l'ICD Mesa (50 Mio) faisait un STOP avec 256 Mio. Une section d'image ne lit plus
+  que ses 64 premiers Kio (`File::image_head`, `ImageLayout::parse_head`) ; une page de l'image se remplit à sa
+  faute des pages du fichier qu'elle demande (`ImageLayout::file_pages`), lues dans le segment du fichier
+  (`Source::PagedImage`, `Section::create_paged_image` ; partagé avec ses sections de données), verrou de la VAD
+  relâché comme pour les données. Comme MmFlushImageSection de NT, tant qu'une section d'image vit, son fichier ne
+  s'ouvre pas pour être écrit (`STATUS_SHARING_VIOLATION`, nouveau dans `abi`) et ne s'efface pas
+  (`STATUS_CANNOT_DELETE`) : `io::section_cache::ImageHold`, que la section garde ; `ImageLayout::extent` et le cache
+  des octets d'image sont retirés. Tests hôte (Mm : une faute ne lit que les pages du fichier qu'il faut, les données
+  d'un installeur au-delà ne sont pas lues ; Io : écriture et effacement refusés puis permis). Scénario
+  `section-cache` : `SECTION1.EXE` réécrit `C:\SECTION.BIN` en PE de 3 Mio et le projette en image (création en
+  ~10 ms, une faute en ~15 ms, la vue entière en ~650 ms ; erreurs 32 et 5 tant qu'elle vit, l'écriture permise
+  ensuite). Avec le noyau de `main`, le scénario échoue (création en 498 ms, écriture et effacement permis :
+  vérifié). L'ICD essayé avec les crochets d'essai, sans `memory = 1024` : 256 Mio suffisent, le triangle s'affiche.
+  Suite de démarrage (2026-11-25) : tout passe sauf `installer-finish` (« copy failed: c0000185 ») et
+  `app-npp-interactive` (pixel (0, 0)), qui échouent aussi sur la base `b397ebfe`. Vu une fois : `app-openoffice`
+  figé après « verifying installer: 96% » (le journal s'arrête à 600 s, ni `hang.txt` ni relevé) ; relancé, il
+  passe comme sur la base (1583 s contre 1635 s). Tâche de diagnostic s'il revient. Vu aussi une fois : le STOP de
+  l'autotest LPC sur Intel (« replied once ») dans `installed-persistence`, une course préexistante de
+  `lpc::conversation::reply` : le serveur trouve le waiter, relâche `WAITERS`, le client réveillé par la première
+  réponse le préempte, remet son état à `Reply(None)` et part ; la seconde réponse « réussit ». À corriger à part
+  (un état « répondu » que `request_wait_reply` laisse au lieu de `Reply(None)`, et un test hôte).
 - **Le relevé des threads, pour le blocage d'Intel** (`claude/intel-hang`, sur la PR 193 ; demandé le 2026-11-24 :
   diagnostiquer le blocage vu une fois sous Intel dans `display-desktop`, après la commande de la boîte Exécuter).
   Le blocage ne s'est pas reproduit : 18 runs Intel de plus, dont 10 avec 8 cœurs de l'hôte occupés, tous réussis
@@ -433,7 +457,7 @@
   `ansictl1.c`, vérifiées par mutation. Reste, comme ReactOS : une classe enregistrée avec une procédure d'appel de
   l'autre jeu fait des fenêtres du jeu de la classe.
 - **Les sections de fichiers paginées à la demande** (`claude/demand-paged-sections`, sur la PR 158, M7 ;
-  [ADR-024](03-decisions.md#adr-024--sections-de-fichiers--les-pages-dune-section-de-données-lues-à-la-faute-partagées-par-le-segment-du-fichier),
+  [ADR-024](03-decisions.md#adr-024--sections-de-fichiers--les-pages-lues-à-la-faute-partagées-par-le-segment-du-fichier--le-fichier-dune-image-tenu),
   proposée ; [`compat/m6-logon.md`](compat/m6-logon.md) ; demandé le 2026-11-21 après la mesure de l'entrée
   suivante). NtCreateSection ne lit plus rien pour une section de données : ses pages sont celles du segment du
   fichier (`mm::section::FileSegment`, partagé par toutes les sections du fichier inchangé, `io::section_cache::DATA`),
@@ -2882,8 +2906,8 @@ aussi (étape 8). `NtOpenKey`, `NtQueryValueKey`, `NtOpenDirectoryObject`, `NtOp
   va jusqu'au triangle avec un ICD Mesa chargé au démarrage. L'ADR-025 (acceptée le 2026-11-24) dit d'où vient l'ICD :
   reste le spike « ICD XP ». Étape 1 faite : `cargo xtask icd-build` construit et vérifie `mesaicd.dll`
   (GCC i686 à TLS émulée, hôte Windows ; essayée sous Mino par LoadLibrary, le triangle s'affiche). Restent
-  NtGdiExtEscape et `mino.inf` (étape 2), puis le scénario `d3d9-spike` jusqu'au triangle (étape 3), qui attend
-  qu'une image de 50 Mio se charge sans un bloc d'un tenant dans le tas du noyau (`io::File::image_contents`).
+  NtGdiExtEscape et `mino.inf` (étape 2, PR 198), puis le scénario `d3d9-spike` jusqu'au triangle (étape 3) ; une
+  image de 50 Mio se charge maintenant avec 256 Mio (`claude/image-read`, sections d'image paginées).
 - Router #DB, #BR, #NP, #SS, #AC du mode utilisateur vers KiDispatchException (aujourd'hui seuls #DE, #BP, #UD,
   #GP, #PF et `int 2Ch`).
 - KiDispatchException : si la pile utilisateur ne reçoit pas le contexte, le processus se termine avec le code de

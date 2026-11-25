@@ -34,7 +34,7 @@ Pour changer une décision acceptée, on écrit une nouvelle ADR qui la remplace
 | 021 | win32k : ce que USER partage avec ses clients, à des adresses du serveur sur 32 bits | **Proposée** (spike S3) |
 | 022 | FAT32 : crate partagée `fatfs` ; formatage et partitions servis par le noyau | **Proposée** (chantier d'installation) |
 | 023 | Premier démarrage en mode installation : couche Mino des ruches (`mino.inf`) et fin d'installation par un programme Mino | **Proposée** (scénario `logon`) |
-| 024 | Sections de fichiers : les pages d'une section de données lues à la faute, partagées par le segment du fichier | **Proposée** (scénarios `section-cache` et `folder-apps`) |
+| 024 | Sections de fichiers : les pages lues à la faute, partagées par le segment du fichier ; le fichier d'une image tenu | **Proposée** (scénarios `section-cache` et `folder-apps`) |
 | 025 | Direct3D : un ICD OpenGL Mesa llvmpipe construit pour XP depuis des sources épinglées, annoncé par le pilote d'affichage | Acceptée |
 
 ---
@@ -426,7 +426,7 @@ de session automatique d'`Administrator`. Jusqu'où elle va est suivi dans `docs
 
 ---
 
-## ADR-024 — Sections de fichiers : les pages d'une section de données lues à la faute, partagées par le segment du fichier
+## ADR-024 — Sections de fichiers : les pages lues à la faute, partagées par le segment du fichier ; le fichier d'une image tenu
 
 **Contexte.** Jusqu'ici, NtCreateSection sur un fichier lisait le fichier entier en mémoire (`io::File::read_all`),
 partagé entre les sections du même fichier inchangé seulement tant qu'une section le tenait (`io::section_cache`,
@@ -459,22 +459,35 @@ vues : il se défera difficilement.
 - Les écritures dans une vue partagée vont aux pages du segment, que voient les autres vues et sections du fichier
   (comme sur NT), mais pas au fichier : pas d'écrivain de pages modifiées (ADR-010 : pas de fichier d'échange, et pas
   encore de retour au fichier).
-- Une section d'**image** lit à sa création ses en-têtes et les données de ses sections
-  (`mm::section::ImageLayout::extent`, `io::File::image_contents`), pas ce qui les suit (les données qu'un installeur
-  ajoute à son exécutable). Elle garde cette copie : une DLL chargée ne change pas si son fichier est réécrit, ce que
-  NT refuse par ailleurs (MmFlushImageSection), et que Mino ne refuse pas encore.
+- Une section d'**image** ne lit à sa création que le début du fichier, qui tient ses en-têtes
+  (`io::File::image_head`, 64 Kio ; `mm::section::ImageLayout::parse_head`). Une page de l'image se remplit à sa
+  première faute des pages du fichier qu'elle demande (`ImageLayout::file_pages`), lues dans le même segment que les
+  sections de données, comme une page de données (`Section::create_paged_image`). Les données qu'un installeur
+  ajoute à son exécutable ne sont lues que si une page les touche.
+- **Le fichier d'une image est tenu**, comme MmFlushImageSection de NT : tant qu'une section d'image vit, Io refuse
+  d'ouvrir son fichier pour l'écrire ou l'écraser (`STATUS_SHARING_VIOLATION`) et de l'effacer
+  (`STATUS_CANNOT_DELETE`, à FILE_DELETE_ON_CLOSE comme à FileDispositionInformation) ; la section garde un jeton
+  d'Io (`io::section_cache::ImageHold`). Une DLL chargée ne change donc pas sous ses vues.
+  *Précisée le 2026-11-25, l'ADR encore proposée* : l'image était d'abord copiée à sa création, d'un seul bloc dans
+  le tas du noyau ; l'ICD Mesa de l'ADR-025 (50 Mio) faisait alors un STOP avec les 256 Mio du banc.
 
 **Conséquences.**
 - ✅ Créer une section sur un gros fichier ne coûte plus rien ; une icône lue dans un exécutable de 143 Mo ne lit
   que ses pages. Les sections du même fichier partagent leurs pages, plus seulement leurs octets.
 - ✅ Les données ajoutées d'un installeur (NSIS, Inno) ne sont plus lues pour en faire une image.
+- ✅ Une image ne coûte que les pages qu'on touche : l'ICD Mesa (50 Mio) se charge avec 256 Mio de mémoire, et les
+  pages de ses sections sont partagées avec ses sections de données (`shell32` en fichier de données pour ses icônes).
+- ❌ Un programme qui réécrit une DLL qu'il a chargée (une mise à jour) échoue, comme sur NT : il doit écrire ailleurs
+  et la remplacer au redémarrage (MoveFileEx, pas encore fait). Un handle ouvert pour écrire *avant* la création de
+  la section n'est pas refusé (NT ne crée pas la section dans ce cas, Mino si).
 - ❌ Une faute de page peut attendre le disque : la pile noyau d'un appel système qui touche une vue d'un fichier
   porte aussi la lecture du système de fichiers (24 Kio, `mm::kstack`), et la faute ne doit tenir aucun verrou
   tournant ni aucun verrou d'Io (les copies de NtReadFile et NtWriteFile se font hors des verrous d'Io).
 - ❌ La cohérence n'est pas celle de NT : une page déjà lue garde son contenu après une écriture du fichier, une
   page lue après la voit ; ce qui s'écrit dans une vue ne retourne pas au fichier.
 - ⚠️ À suivre : l'écrivain des pages modifiées et la cohérence avec NtWriteFile (le cache de fichiers de NT), les
-  pages d'image à la faute (avec le refus d'écrire une image chargée), la libération des pages d'un segment sous
+  pages d'image partagées avec le fichier sans copie (aujourd'hui, une page d'image lue est copiée depuis les pages
+  du segment, alignées sur le fichier et pas sur la section), la libération des pages d'un segment sous
   pression mémoire (avec le fichier d'échange, ADR-010), et le SMP (deux fautes sur la même page lisent toutes deux,
   la première gardée).
 
@@ -484,11 +497,16 @@ vues : il se défera difficilement.
 - *Lire dans un thread système de pagination, la faute attendant son événement* : la pile du thread fautif resterait
   courte, mais c'est un écart avec NT et ReactOS (MiReadPage dans le thread fautif), et chaque faute paierait deux
   commutations.
-- *Paginer aussi les images maintenant* : leurs pages viendraient du fichier à la faute, mais une DLL chargée
-  changerait sous ses vues si son fichier était réécrit ; sans le refus de NT, la copie de l'image est plus sûre.
+- *Copier l'image à sa création, en morceaux plutôt que d'un bloc* : plus de STOP, mais l'ICD Mesa coûterait ses
+  50 Mio de mémoire et une trentaine de secondes de lecture ATA à chaque premier chargement, pour quelques Mio de
+  code exécuté.
+- *Paginer les images sans tenir leur fichier* : une DLL chargée changerait sous ses vues si son fichier était
+  réécrit.
 
 **À valider.** Le scénario `section-cache` (un fichier de 16 Mio : la section et la faute d'une page en moins de
-200 ms, le partage entre sections, la copie sur écriture, l'écriture partagée, un fichier qui finit dans une page)
+200 ms, le partage entre sections, la copie sur écriture, l'écriture partagée, un fichier qui finit dans une page ;
+une image de 3 Mio dont la section et une faute coûtent moins du quart de toute la vue, et dont le fichier ne s'écrit
+ni ne s'efface tant qu'elle vit)
 et le scénario `folder-apps` (`explorer` ouvre `C:\APPS` et montre l'icône de l'installeur d'OpenOffice) ; les
 scénarios qui chargent des images (`smss`, `logon`, `notepad`, `app-*`) ne régressent pas.
 

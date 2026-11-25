@@ -176,8 +176,11 @@ pub const STATUS_RANGE_NOT_LOCKED: NtStatus = NtStatus(0xC000_007E);
 /// An open of a file whose deletion is pending.
 pub const STATUS_DELETE_PENDING: NtStatus = NtStatus(0xC000_0056);
 /// FileDispositionInformation, FILE_DELETE_ON_CLOSE: a read-only file, the
-/// root.
+/// root, the file of an image section.
 pub const STATUS_CANNOT_DELETE: NtStatus = NtStatus(0xC000_0121);
+/// An open for writing of the file of an image section
+/// (MmFlushImageSection).
+pub const STATUS_SHARING_VIOLATION: NtStatus = NtStatus(0xC000_0043);
 pub const STATUS_DIRECTORY_NOT_EMPTY: NtStatus = NtStatus(0xC000_0101);
 /// NtAccessCheck: the token is not an impersonation token.
 pub const STATUS_NO_IMPERSONATION_TOKEN: NtStatus = NtStatus(0xC000_005C);

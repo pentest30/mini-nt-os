@@ -7,9 +7,10 @@
 //! (ADR-024, proposée) : elle prend le segment du fichier
 //! (`mm::section::FileSegment`, partagé par `io::section_cache::DATA`), dont
 //! une faute de page lit chaque page par Io ([`FilePages`]). Une section
-//! d'image lit ses en-têtes et les données de ses sections
-//! (`io_manager::File::image_contents`, `ImageLayout::extent`), pas ce qui
-//! les suit. Ce qui s'écrit dans une vue ne retourne pas au fichier.
+//! d'image ne lit que ses en-têtes (`io_manager::File::image_head`) : ses
+//! pages se remplissent à la faute des pages du même segment ; tant qu'elle
+//! vit, Io refuse d'écrire et d'effacer le fichier. Ce qui s'écrit dans une
+//! vue ne retourne pas au fichier.
 //!
 //! Une section du fichier d'échange peut être réservée (`SEC_RESERVE` : ses
 //! pages se commitent par NtAllocateVirtualMemory dans une vue) et basée
@@ -34,8 +35,8 @@ use io_manager::{File, FILE_TYPE};
 use ke::usermem::UserPtr;
 use mm::address_space::ViewOptions;
 use mm::section::{
-    create_section_object, FileReader, FileSegment, ImageLayout, Section, SECTION_MAP_EXECUTE, SECTION_MAP_READ,
-    SECTION_MAP_WRITE, SECTION_TYPE,
+    create_section_object, FileReader, FileSegment, Section, SECTION_MAP_EXECUTE, SECTION_MAP_READ, SECTION_MAP_WRITE,
+    SECTION_TYPE,
 };
 use mm::vad::PageProtect;
 use ob::{AccessMask, Handle, Object, ObjectRef};
@@ -201,11 +202,15 @@ fn create_section(arguments: &[u32]) -> Result<NtStatus, NtStatus> {
                 return Err(STATUS_INVALID_FILE_FOR_SECTION);
             }
             if allocation & SEC_IMAGE != 0 {
-                // Its headers and the raw data of its sections, which
-                // another image section of the unchanged file may hold
-                // (io::section_cache::IMAGES).
-                let (bytes, file_size) = file.image_contents(ImageLayout::extent)?;
-                Section::create_image_from(bytes, file_size, file.path())?
+                // Its headers only: its pages are read at a fault from the
+                // file's segment, shared with its data sections
+                // (io::section_cache::DATA); while it lives, the file is
+                // neither written nor deleted (the hold).
+                let (head, hold) = file.image_head()?;
+                let reader = file.clone();
+                let segment = file.data_segment(|length| Ok(FileSegment::new(Box::new(FilePages(reader)), length)))?;
+                let hold = hold.map(|hold| -> Arc<dyn core::any::Any + Send + Sync> { hold });
+                Section::create_paged_image(&head, segment, file.path(), hold)?
             } else {
                 // Nothing read: the file's segment, which another data
                 // section of the unchanged file may hold

@@ -9,7 +9,12 @@
 # quarter of the walk through its whole view, which reads the rest (reading
 # the whole file at the creation made it the reverse: 0 without ADR-024); a
 # second section, the first open, finds its pages read; a third, both
-# closed, reads the file again. The times are logged.
+# closed, reads the file again. The times are logged. Then the file,
+# rewritten as a PE of 3 MiB, mapped as an image (SEC_IMAGE): its section
+# reads its headers only, a fault the file pages it needs; while it lives,
+# its file neither opens for writing (ERROR_SHARING_VIOLATION, 32) nor
+# deletes (ERROR_ACCESS_DENIED, 5), as MmFlushImageSection of NT; once it is
+# gone, the file writes again.
 features = test-smss, interactive
 requires = userland, native
 initial-command = SECTION1.EXE
@@ -31,11 +36,15 @@ expect = [section] a shared write is seen by the other view: 1, and by another s
 expect = [section] a file of 5000 bytes: its last byte 1, zeros after it 1, a view past its end refused 1
 # A section of \KnownDlls holds shell32.dll: its data section reads nothing.
 expect = [section] shell32.dll as a data file: MZ 1, in
+expect = [section] the image section read its headers, a fault read its pages: 1
+expect = [section] the file of a mapped image: write error 32, delete error 5
+expect = [section] the image gone, its file opens for writing: 1
 expect = [section] done
 
 forbid = *** STOP:
 forbid = [section] no view
 forbid = [section] no copy-on-write view
 forbid = [section] no shared view
+forbid = [section] no image view
 forbid = [section] the write failed
 forbid = not read for its section

@@ -21,7 +21,14 @@
  *   view is seen by another view, and by another section of the file;
  * - a file that ends inside a page: zeros after its end, and a view past
  *   its end is refused;
- * - shell32.dll as a data file.
+ * - shell32.dll as a data file;
+ * - C:\SECTION.BIN rewritten as a PE of 3 MiB (one section of the pattern):
+ *   its image section (SEC_IMAGE) reads its headers only, and a fault in
+ *   the middle of its view the file pages it needs, together less than a
+ *   quarter of the walk through the whole view; while the section lives,
+ *   the file opens for writing with ERROR_SHARING_VIOLATION and does not
+ *   delete (ERROR_ACCESS_DENIED); the section gone, it writes again
+ *   (MmFlushImageSection of NT).
  * Each step goes to the debug port (DbgPrint, a line each), with its time
  * (QueryPerformanceCounter). The program ends with EXIT_STATUS.
  *
@@ -46,6 +53,9 @@ typedef void *HANDLE;
 #define PAGE_READONLY 0x02
 #define PAGE_READWRITE 0x04
 #define PAGE_WRITECOPY 0x08
+#define SEC_IMAGE 0x01000000
+#define IMAGE_HEADERS 0x400
+#define IMAGE_SECTION_RVA 0x1000
 #define FILE_MAP_COPY 0x0001
 #define FILE_MAP_WRITE 0x0002
 #define FILE_MAP_READ 0x0004
@@ -61,6 +71,7 @@ __declspec(dllimport) HANDLE __stdcall CreateFileMappingW(HANDLE file, void *att
                                                           DWORD low, const WCHAR *name);
 __declspec(dllimport) HANDLE __stdcall CreateFileW(const WCHAR *name, DWORD access, DWORD share, void *attributes,
                                                    DWORD disposition, DWORD flags, HANDLE model);
+__declspec(dllimport) BOOL __stdcall DeleteFileW(const WCHAR *name);
 __declspec(dllimport) void __stdcall ExitProcess(UINT code);
 __declspec(dllimport) DWORD __stdcall GetLastError(void);
 __declspec(dllimport) void *__stdcall MapViewOfFile(HANDLE mapping, DWORD access, DWORD high, DWORD low,
@@ -240,6 +251,124 @@ static void short_file(void)
     unmap(file, mapping, view);
 }
 
+static void put16(unsigned char *at, DWORD value)
+{
+    at[0] = (unsigned char)value;
+    at[1] = (unsigned char)(value >> 8);
+}
+
+static void put32(unsigned char *at, DWORD value)
+{
+    put16(at, value & 0xFFFF);
+    put16(at + 2, value >> 16);
+}
+
+/* The headers of a PE32 DLL whose one section (.rdata, read-only) holds the
+ * file from IMAGE_HEADERS on, at IMAGE_SECTION_RVA, in the first
+ * IMAGE_HEADERS bytes of `file`. */
+static void image_headers(unsigned char *file)
+{
+    unsigned char *pe = file + 0x40, *optional = pe + 24, *section = optional + 0xE0;
+    DWORD raw = SIZE - IMAGE_HEADERS, at;
+    for (at = 0; at < IMAGE_HEADERS; ++at)
+        file[at] = 0;
+    file[0] = 'M';
+    file[1] = 'Z';
+    put32(file + 0x3C, 0x40);
+    pe[0] = 'P';
+    pe[1] = 'E';
+    put16(pe + 4, 0x14C);              /* i386 */
+    put16(pe + 6, 1);                  /* one section */
+    put16(pe + 20, 0xE0);              /* SizeOfOptionalHeader */
+    put16(pe + 22, 0x2102);            /* executable, 32 bits, DLL */
+    put16(optional, 0x10B);            /* PE32 */
+    put32(optional + 28, 0x30000000);  /* ImageBase */
+    put32(optional + 32, 0x1000);      /* SectionAlignment */
+    put32(optional + 36, 0x200);       /* FileAlignment */
+    put16(optional + 40, 4);           /* MajorOperatingSystemVersion */
+    put16(optional + 48, 4);           /* MajorSubsystemVersion */
+    put32(optional + 56, IMAGE_SECTION_RVA + ((raw + 0xFFF) & ~0xFFFUL)); /* SizeOfImage */
+    put32(optional + 60, IMAGE_HEADERS); /* SizeOfHeaders */
+    put16(optional + 68, 2);           /* the GUI subsystem */
+    put32(optional + 72, 0x100000);    /* stack reserve, commit */
+    put32(optional + 76, 0x1000);
+    put32(optional + 80, 0x100000);    /* heap reserve, commit */
+    put32(optional + 84, 0x1000);
+    put32(optional + 92, 16);          /* NumberOfRvaAndSizes */
+    section[0] = '.';
+    section[1] = 'r';
+    section[2] = 'd';
+    section[3] = 'a';
+    section[4] = 't';
+    section[5] = 'a';
+    put32(section + 8, raw);           /* VirtualSize */
+    put32(section + 12, IMAGE_SECTION_RVA);
+    put32(section + 16, raw);          /* SizeOfRawData */
+    put32(section + 20, IMAGE_HEADERS); /* PointerToRawData */
+    put32(section + 36, 0x40000040);   /* initialised data, read */
+}
+
+/* The image's view holds the pattern of the file it was made of (every
+ * 509th byte of its section, and the last). */
+static int image_holds_pattern(const volatile unsigned char *view)
+{
+    DWORD at, raw = SIZE - IMAGE_HEADERS;
+    for (at = 0; at < raw; at += 509)
+        if (view[IMAGE_SECTION_RVA + at] != byte_at(IMAGE_HEADERS + at))
+            return 0;
+    return view[IMAGE_SECTION_RVA + raw - 1] == byte_at(SIZE - 1) && view[0] == 'M';
+}
+
+/* C:\SECTION.BIN as a PE, mapped as an image. */
+static void image(void)
+{
+    HANDLE file, mapping, writer;
+    const volatile unsigned char *view;
+    LONGLONG start;
+    DWORD made, page, whole, write_error, delete_error;
+    int middle, holds, deleted;
+
+    image_headers(pattern);
+    write_file(PATH, pattern, SIZE, CREATE_ALWAYS);
+    file = open_file(PATH, GENERIC_READ);
+    QueryPerformanceCounter(&start);
+    mapping = CreateFileMappingW(file, 0, PAGE_READONLY | SEC_IMAGE, 0, 0, 0);
+    made = elapsed_ms(start);
+    view = mapping ? MapViewOfFile(mapping, FILE_MAP_READ, 0, 0, 0) : 0;
+    if (!view) {
+        DbgPrint("[section] no image view (error %lu)\n", GetLastError());
+        return;
+    }
+    QueryPerformanceCounter(&start);
+    middle = view[IMAGE_SECTION_RVA + SIZE / 2 + 123] == byte_at(IMAGE_HEADERS + SIZE / 2 + 123);
+    page = elapsed_ms(start);
+    QueryPerformanceCounter(&start);
+    holds = image_holds_pattern(view);
+    whole = elapsed_ms(start);
+    DbgPrint("[section] image section: made in %lu ms, a byte in its middle %d, read in %lu ms, its bytes %d, in %lu ms\n",
+             made, middle, page, holds, whole);
+    DbgPrint("[section] the image section read its headers, a fault read its pages: %d\n",
+             middle && holds && (made + page) * 4 < whole);
+
+    writer = CreateFileW(PATH, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, 0, OPEN_EXISTING,
+                         FILE_ATTRIBUTE_NORMAL, 0);
+    write_error = writer == INVALID_HANDLE_VALUE ? GetLastError() : 0;
+    if (writer != INVALID_HANDLE_VALUE)
+        CloseHandle(writer);
+    deleted = DeleteFileW(PATH);
+    delete_error = deleted ? 0 : GetLastError();
+    DbgPrint("[section] the file of a mapped image: write error %lu, delete error %lu\n", write_error,
+             delete_error);
+    UnmapViewOfFile((const void *)view);
+    CloseHandle(mapping);
+    CloseHandle(file);
+    writer = CreateFileW(PATH, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, 0, OPEN_EXISTING,
+                         FILE_ATTRIBUTE_NORMAL, 0);
+    DbgPrint("[section] the image gone, its file opens for writing: %d\n", writer != INVALID_HANDLE_VALUE);
+    if (writer != INVALID_HANDLE_VALUE)
+        CloseHandle(writer);
+}
+
 DWORD __stdcall GuiStartup(void)
 {
     HANDLE file1, map1, file2, map2, file3, map3;
@@ -312,6 +441,7 @@ DWORD __stdcall GuiStartup(void)
                  view5 && view5[0] == 'M' && view5[1] == 'Z', shell);
         unmap(file5, map5, view5);
     }
+    image();
     DbgPrint("[section] done\n");
     ExitProcess(EXIT_STATUS);
     return 0;
