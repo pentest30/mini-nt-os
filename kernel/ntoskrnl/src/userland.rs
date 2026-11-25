@@ -382,13 +382,28 @@ fn log_known_dlls() {
     );
 }
 
-/// The processes created while a probe runs (`ps::set_create_process_notify`).
+/// The processes the probe's process creates while it runs
+/// (`ps::set_create_process_notify`): its children, whose end it reports.
 static CREATED: hal::sync::KSpinLock<alloc::vec::Vec<Arc<ob::Object<ps::EProcess>>>> =
     hal::sync::KSpinLock::new(alloc::vec::Vec::new());
 
-/// Keeps `process`, created while a probe runs.
+/// The PID of the probe's process, while it runs; 0 before it exists.
+static PROBE: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
+/// Keeps `process` if the probe's process created it. Its other processes
+/// are not kept: a session runs as long as a person drives it (`interactive`),
+/// and every process of the session stayed in memory with its token until
+/// the probe's end.
 fn keep_created(process: &Arc<ob::Object<ps::EProcess>>) {
-    CREATED.lock().push(process.clone());
+    if is_probe_child(process.parent_pid(), PROBE.load(core::sync::atomic::Ordering::Acquire)) {
+        CREATED.lock().push(process.clone());
+    }
+}
+
+/// A process of parent `parent` is a child of the probe's process `probe`
+/// (0 before that one exists).
+fn is_probe_child(parent: u32, probe: u32) -> bool {
+    probe != 0 && parent == probe
 }
 
 /// Lance le programme natif `image` sous la DLL système, avec les paramètres
@@ -442,6 +457,8 @@ fn run_native(
     CREATED.lock().clear();
     ps::set_create_process_notify(Some(keep_created));
     let started = ps::create_process(&ps::system_process(), &section, name, false).and_then(|process| {
+        // Before its first thread: none of its children is missed.
+        PROBE.store(process.pid(), core::sync::atomic::Ordering::Release);
         ps::process_parameters::write(&process, params)?;
         let stack = ps::create_user_stack(&process, info.stack_reserve, info.stack_commit)?;
         let entry = process.image_base() + info.entry_point as u32;
@@ -493,6 +510,7 @@ fn run_native(
     // The processes it created: kept since their creation, whoever still
     // holds them.
     ps::set_create_process_notify(None);
+    PROBE.store(0, core::sync::atomic::Ordering::Release);
     let children: alloc::vec::Vec<_> = core::mem::take(&mut *CREATED.lock())
         .into_iter()
         .filter(|created| created.parent_pid() == process.pid())

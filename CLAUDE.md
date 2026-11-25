@@ -517,7 +517,7 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   (`win32k::kbdtables` : VSC→VK, ToUnicode), `win32k::input` (ProcessKeyEvent, état du clavier, premier plan à
   l'activation d'une fenêtre, SetFocus, TranslateMessage), les touches dans la file (`QS_KEY`, état du clavier du
   thread) ; `keys = MARQUEUR => TOUCHES` fait taper des touches par le moniteur de QEMU ; scénario `keyboard`
-  (`tests/native/keys1.c`). La sonde garde les processus créés depuis leur création (`ps::set_create_process_notify`).
+  (`tests/native/keys1.c`). La sonde garde ses enfants depuis leur création (`ps::set_create_process_notify`).
   Étape 7 (`cmd.exe` interactif) : ReadConsoleW marchait déjà ; NtQueryDirectoryFile (`abi::file` : entrées des
   classes 1, 2, 3, 12 ; `io::directory` : expression avec les jokers DOS de `kernel32`, tampon aligné ;
   `io::File::query_directory` : état de l'énumération dans le `File`, expression de la première requête, nom long ou
@@ -626,7 +626,11 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   WM_CLIENTSHUTDOWN devient WM_QUERYENDSESSION puis WM_ENDSESSION (`defwnd::end_session_messages`) ; `winlogon`
   ferme la session puis appelle NtShutdownSystem ; scénario `session-shutdown` (`tests/native/shutdn1.c`). La pile
   d'un thread fini est rendue quand il l'a demandé (`FreeStackOnTermination` : `ps::ethread::delete_teb`) ; scénario
-  `thread-stack` (`tests/native/thrstk1.c`).
+  `thread-stack` (`tests/native/thrstk1.c`). NtQuerySystemInformation(SystemPoolTagInformation) (`mm::pool`, les
+  totaux par étiquette) mesure le pool d'une session : scénario `session-work` (`tests/native/work1.c` : quatre
+  tours de travail, au plus 256 octets de plus du tour 2 au tour 4, puis l'arrêt) ; la sonde de `smss` ne garde plus
+  que ses enfants, la vue de la section d'un client chez `csrss` part avec le port du serveur
+  (`lpc::Port::set_view_release`) : **le second critère du M7 est coché**.
   Suite : [`docs/passation.md`](docs/passation.md).
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.

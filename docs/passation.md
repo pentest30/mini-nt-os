@@ -1,5 +1,16 @@
 # Notes de passation
 
+- **Une session sans fuite de pool : le second critère du M7** (`claude/pool-measure`, sur la PR 186, la pile d'un
+  thread fini ; [`compat/m6-logon.md`](compat/m6-logon.md#une-session-sans-fuite-de-pool-m7-le-2026-11-24) ; demandé
+  le 2026-11-23). NtQuerySystemInformation(SystemPoolTagInformation, 22) : ce que chaque étiquette tient dans les
+  pools (`mm::pool::Pool::tag_records`, les totaux alloués et rendus ; `mm::pool::merged_tags`). Scénario
+  `session-work` (`tests/native/work1.c`) : quatre tours de travail (un fichier, `cmd /c copy`, le Bloc-notes),
+  les pools lus quand ils ne bougent plus, au plus 256 octets de plus du tour 2 au tour 4, puis l'arrêt. Corrigé :
+  la sonde de `smss` (`interactive`) ne garde plus que ses propres enfants (elle gardait chaque processus de la
+  session, avec son jeton) ; la vue de la section d'un client chez `csrss` est défaite avec le port du serveur
+  (`lpc::Port::set_view_release`). Résultat : 0 octet du tour 2 au tour 4, AMD et Intel. **Le second critère du M7
+  est coché.** Vu, comme ReactOS : un handle de bureau laissé chez `csrss` par console (NtUserCloseDesktop refuse le
+  bureau du thread qui le ferme).
 - **La pile d'un thread fini** (`claude/thread-stack`, sur la PR 184, M7, Ps ;
   [`compat/m6-logon.md`](compat/m6-logon.md#la-pile-dun-thread-fini-m7-le-2026-11-24) ; trouvé en mesurant le pool
   d'une session). PspExitThread rend la pile d'un thread qui l'a demandé (`FreeStackOnTermination` du TEB : ExitThread,
