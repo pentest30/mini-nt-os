@@ -194,6 +194,8 @@ pub(super) fn nt_user_wait_message(_arguments: &[u32]) -> NtStatus {
 /// MWMO_*) (`queue::input_event`) ; `ONEPARAM_ROUTINE_BEGINDEFERWNDPOS` :
 /// BeginDeferWindowPos, un lot pour `Param` fenêtres
 /// (`win32k::deferpos::begin` ; 0 et l'erreur pour un nombre négatif) ;
+/// `ONEPARAM_ROUTINE_WINDOWFROMDC` : la fenêtre d'un DC du cache (0 sinon,
+/// `win32k::dce::window_from_dc`) ;
 /// `ONEPARAM_ROUTINE_ENUMCLIPBOARDFORMATS` : EnumClipboardFormats, le
 /// format qui suit `Param` (`super::clipboard::enum_clipboard_formats`). Une
 /// autre rend 0 et `ERROR_CALL_NOT_IMPLEMENTED`, journalisée une fois.
@@ -217,6 +219,7 @@ pub(super) fn nt_user_call_one_param(arguments: &[u32]) -> NtStatus {
         }
         abi::user::ONEPARAM_ROUTINE_GETINPUTEVENT => NtStatus(queue::input_event(&current(), param)),
         abi::user::ONEPARAM_ROUTINE_ENUMCLIPBOARDFORMATS => super::clipboard::enum_clipboard_formats(param),
+        abi::user::ONEPARAM_ROUTINE_WINDOWFROMDC => NtStatus(win32k::dce::window_from_dc(param)),
         abi::user::ONEPARAM_ROUTINE_BEGINDEFERWNDPOS => match win32k::deferpos::begin(param as i32) {
             Ok(handle) => NtStatus(handle),
             Err(error) => fail(error),

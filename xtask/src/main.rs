@@ -410,6 +410,12 @@ fn test(ws: &Workspace, mut args: Args) -> Result<()> {
                 }
             }
         }
+        if sc.requires_userland && sc.requires_native {
+            // The DLLs the test programs import beyond the userland's own
+            // closure (the Direct3D probe: d3d9, d3dwine, opengl32).
+            let imported = userland::program_imports(ws, &extra_files);
+            extra_files.extend(imported);
+        }
         if sc.requires_rostests {
             match rostests::build(ws)? {
                 Some(files) => extra_files.extend(files),

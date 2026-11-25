@@ -103,6 +103,7 @@ const PROGRAMS: &[(&[&str], &str, Toolchain)] = &[
     (&["notepad1.c"], "NOTEPAD1.EXE", Toolchain::MinGwWin32),
     (&["notepad2.c"], "NOTEPAD2.EXE", Toolchain::MinGwWin32),
     (&["appbench.c"], "APPBENCH.EXE", Toolchain::MinGwWin32),
+    (&["d3d1.c"], "D3D1.EXE", Toolchain::MinGwWin32),
     (&["auth1.c"], "AUTH1.EXE", Toolchain::MinGwWin32),
     (&["calc1.c"], "CALC1.EXE", Toolchain::MinGwWin32),
     (&["mine1.c"], "MINE1.EXE", Toolchain::MinGwWin32),
@@ -125,8 +126,9 @@ const PROGRAMS: &[(&[&str], &str, Toolchain)] = &[
 const SYSTEM_PROGRAMS: &[&str] = &["MINOINIT.EXE"];
 
 /// The DLLs of the import libraries (`tests/native/NAME.def`): ntdll for
-/// every program, kernel32, user32 and gdi32 for the Win32 ones.
-const LIBRARIES: &[&str] = &["ntdll", "kernel32", "user32", "gdi32"];
+/// every program, kernel32, user32 and gdi32 for the Win32 ones; d3d9 for
+/// the Direct3D probe (M8), whose import closure brings wined3d and Mesa.
+const LIBRARIES: &[&str] = &["ntdll", "kernel32", "user32", "gdi32", "d3d9"];
 
 /// MinGW: no C runtime, no stack protector, no unwind tables.
 const GCC_FLAGS: &[&str] = &[

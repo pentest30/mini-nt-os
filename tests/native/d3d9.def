@@ -1,0 +1,8 @@
+; The exports of d3d9.dll (ReactOS 0.4.16, i386: Wine's d3d9 over wined3d,
+; d3dwine.dll, over opengl32.dll's Mesa) that the Win32 test programs call,
+; for their import library (`cargo xtask` builds it with dlltool --kill-at).
+; A program that imports it brings d3d9, d3dwine and opengl32 to the boot
+; disk through the import closure.
+LIBRARY d3d9.dll
+EXPORTS
+Direct3DCreate9@4
