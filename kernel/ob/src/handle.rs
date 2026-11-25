@@ -275,6 +275,18 @@ impl HandleTable {
         })
     }
 
+    /// ObFindHandleForObject : le premier handle (le plus petit) sur `object`
+    /// ; `None` s'il n'y en a pas.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn find_object(&self, object: &ObjectRef) -> Option<Handle> {
+        let slots = self.slots.lock();
+        slots.entries.iter().enumerate().find_map(|(slot, entry)| {
+            entry.as_ref().filter(|entry| Arc::ptr_eq(&entry.object, object)).map(|_| Handle::from_slot(slot))
+        })
+    }
+
     /// ObDuplicateHandleTable : la table d'un processus fils, avec les handles
     /// héritables de celle-ci, aux mêmes valeurs.
     ///
@@ -423,6 +435,19 @@ mod tests {
         table.close(handle).unwrap();
         assert_eq!(table.find_by_type(&EVENT).map(|(handle, _)| handle), Some(Handle(12)), "the next one");
         assert!(table.find_by_type(&MUTANT).is_some_and(|(_, object)| Arc::ptr_eq(&object, &mutant)));
+    }
+
+    #[test]
+    fn the_first_handle_on_an_object_is_found() {
+        let table = HandleTable::new();
+        let object = event();
+        assert_eq!(table.find_object(&object), None, "no handle on it");
+        table.insert(event(), ALL, NONE).unwrap();
+        let first = table.insert(object.clone(), ALL, NONE).unwrap();
+        table.insert(object.clone(), ALL, NONE).unwrap();
+        assert_eq!(table.find_object(&object), Some(first), "the first of its two handles, not the other event's");
+        table.close(first).unwrap();
+        assert_eq!(table.find_object(&object), Some(Handle(12)), "the second one");
     }
 
     #[test]

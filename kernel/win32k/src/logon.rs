@@ -3,9 +3,11 @@
 //! station de fenêtres interactive. Il donne aussi sa fenêtre SAS
 //! (NtUserSetLogonNotifyWindow), où USER postera WM_LOGONNOTIFY.
 //!
+//! La fin d'une session y poste WM_LOGONNOTIFY (`crate::shutdown`).
+//!
 //! Pas encore : l'oubli du processus de logon à sa fin (le rappel de sortie
-//! d'un processus GUI n'existe pas encore) ; WM_LOGONNOTIFY (rien ne la poste
-//! encore : ni Ctrl+Alt+Suppr, ni écran de veille, ni fin de session).
+//! d'un processus GUI n'existe pas encore) ; WM_LOGONNOTIFY de Ctrl+Alt+Suppr
+//! et de l'écran de veille.
 
 use core::sync::atomic::{AtomicU32, Ordering};
 

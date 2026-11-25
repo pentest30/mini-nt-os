@@ -71,6 +71,7 @@ const PROGRAMS: &[(&[&str], &str, Toolchain)] = &[
     (&["msidlg1.c"], "MSIDLG1.EXE", Toolchain::MinGwWin32),
     (&["nullinst1.c"], "NULLINST1.EXE", Toolchain::MinGwWin32),
     (&["savedc1.c"], "SAVEDC1.EXE", Toolchain::MinGwWin32),
+    (&["msiver1.c"], "MSIVER1.EXE", Toolchain::MinGwWin32),
     (&["caret1.c"], "CARET1.EXE", Toolchain::MinGwWin32),
     (&["hook1.c"], "HOOK1.EXE", Toolchain::MinGwWin32),
     (&["section1.c"], "SECTION1.EXE", Toolchain::MinGwWin32),
@@ -119,6 +120,10 @@ const PROGRAMS: &[(&[&str], &str, Toolchain)] = &[
     (&["cbt1.c"], "CBT1.EXE", Toolchain::MinGwWin32),
     (&["bmp24.c"], "BMP24.EXE", Toolchain::MinGwWin32),
     (&["workarea1.c"], "WORKAREA1.EXE", Toolchain::MinGwWin32),
+    (&["manythr1.c"], "MANYTHR1.EXE", Toolchain::MinGwWin32),
+    (&["bmp16.c"], "BMP16.EXE", Toolchain::MinGwWin32),
+    (&["priv1.c"], "PRIV1.EXE", Toolchain::MinGwWin32),
+    (&["shutdn1.c"], "SHUTDN1.EXE", Toolchain::MinGwWin32),
     (&["minoinit.c"], "MINOINIT.EXE", Toolchain::MinGwWin32),
 ];
 

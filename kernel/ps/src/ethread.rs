@@ -88,8 +88,8 @@ pub static THREAD_TYPE: ObjectType = ObjectType::new(
 /// descendent page par page.
 pub const FIRST_TEB_VA: u32 = 0x7FFD_E000;
 
-/// Au plus autant de TEB sous le PEB : bien plus que de threads possibles
-/// (`ke::sched::MAX_THREADS`).
+/// Au plus autant de TEB sous le PEB, donc de threads vivants par processus
+/// (Ke n'a pas d'autre limite que la mémoire).
 const MAX_TEBS: u32 = 0x1000;
 
 /// Pas de thread Ke (pas encore créé).

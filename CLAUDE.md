@@ -611,6 +611,20 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   centre ses fenêtres (OpenOffice ouvrait son assistant du premier démarrage hors de l'écran), la barre des tâches
   d'`explorer` y garde sa place et son bureau s'y redimensionne ; scénario `work-area` (`tests/native/workarea1.c`).
   OpenOffice ouvre son Start Center.
+  de ReactOS que le banc contourne en terminant PeaZip. Ke n'a plus de limite de 64 threads (`ke::sched` : files
+  prêtes chaînées par des liens dans chaque thread, `ReadyLink`, comme le `WaitListEntry` de ReactOS ; table des
+  threads qui grandit hors du verrou dispatcher, `register_locked`) : les runtimes de Visual C++ d'OpenOffice
+  manquaient de threads (`rpcrt4`, error 1450) ; scénario `many-threads` (`tests/native/manythr1.c`).
+  de ReactOS que le banc contourne en terminant PeaZip. Les DIB sections de 16 bits (`gdi::surface::Format::Rgb16` :
+  5-5-5, ou les masques de BI_BITFIELDS ; GetObject, GetDIBits de 16 bits) ; scénario `bitmap-16`. Le second
+  critère (une session qui s'arrête) commencé : `minoinit` donne les droits des comptes de `defltwk.inf` (dans
+  `WINDOWS\INF`) par LsaAddAccountRights, comme InstallPrivileges de `syssetup` : le jeton d'`Administrator` a ses 20
+  privilèges, dont `SeShutdownPrivilege` ; scénario `session-privileges` (`tests/native/priv1.c`). Un programme
+  de la session arrête le système par ExitWindowsEx : NtUserSetInformationThread a les classes de `csrss` pour la
+  fin d'une session (`win32k::shutdown` : UserInitiateShutdown, WM_LOGONNOTIFY à la fenêtre SAS de `winlogon`,
+  UserEndShutdown ; le bureau d'entrée par `ob::HandleTable::find_object`), `ntmarta.dll` est sur le disque, et
+  WM_CLIENTSHUTDOWN devient WM_QUERYENDSESSION puis WM_ENDSESSION (`defwnd::end_session_messages`) ; `winlogon`
+  ferme la session puis appelle NtShutdownSystem ; scénario `session-shutdown` (`tests/native/shutdn1.c`).
   Suite : [`docs/passation.md`](docs/passation.md).
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.

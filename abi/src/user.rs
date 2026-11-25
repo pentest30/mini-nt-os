@@ -28,6 +28,72 @@ pub const TWOPARAM_ROUTINE_REGISTERLOGONPROCESS: u32 = 0x69;
 /// UserThreadCsrApiPort: the class of NtUserSetInformationThread by which
 /// csrss gives win32k its API port (`USERTHREADINFOCLASS`).
 pub const USER_THREAD_CSR_API_PORT: u32 = 10;
+/// UserThreadInitiateShutdown: csrss tells win32k a session is to end
+/// (`USERTHREADINFOCLASS`; the EWX_* flags in and out).
+pub const USER_THREAD_INITIATE_SHUTDOWN: u32 = 5;
+/// UserThreadEndShutdown: csrss tells win32k the session's processes are
+/// shut down (the status of that).
+pub const USER_THREAD_END_SHUTDOWN: u32 = 6;
+/// UserThreadUseActiveDesktop: csrss's thread goes on the input desktop.
+pub const USER_THREAD_USE_ACTIVE_DESKTOP: u32 = 7;
+/// UserThreadRestoreDesktop: csrss's thread leaves it.
+pub const USER_THREAD_RESTORE_DESKTOP: u32 = 9;
+
+// ExitWindowsEx's flags (`winuser.h`), and those that csrss, win32k and
+// winlogon add (ReactOS's `undocuser.h`).
+/// EWX_LOGOFF: the session ends.
+pub const EWX_LOGOFF: u32 = 0x0000;
+/// EWX_SHUTDOWN: then the system stops.
+pub const EWX_SHUTDOWN: u32 = 0x0001;
+/// EWX_REBOOT: then restarts.
+pub const EWX_REBOOT: u32 = 0x0002;
+/// EWX_FORCE: the processes do not get to refuse.
+pub const EWX_FORCE: u32 = 0x0004;
+/// EWX_POWEROFF: the machine powers off.
+pub const EWX_POWEROFF: u32 = 0x0008;
+/// EWX_SHUTDOWN_CANCELED: what win32k adds to the flags it gives winlogon
+/// back when the session's processes did not all end.
+pub const EWX_SHUTDOWN_CANCELED: u32 = 0x0080;
+/// EWX_CALLER_SYSTEM: the caller's logon session is LocalSystem's.
+pub const EWX_CALLER_SYSTEM: u32 = 0x0100;
+/// EWX_CALLER_WINLOGON: the logon process asks.
+pub const EWX_CALLER_WINLOGON: u32 = 0x0200;
+/// EWX_NONOTIFY: winlogon is not told.
+pub const EWX_NONOTIFY: u32 = 0x0001_0000;
+
+/// WM_LOGONNOTIFY: what USER posts to winlogon's SAS window (`undocuser.h`);
+/// its wParam is an LN_* notification.
+pub const WM_LOGONNOTIFY: u32 = 0x004C;
+/// LN_LOGOFF: a session is to end; lParam, the EWX_* flags.
+pub const LN_LOGOFF: u32 = 0x0;
+/// LN_LOGOFF_CANCELED: it did not end; lParam, the status.
+pub const LN_LOGOFF_CANCELED: u32 = 0xB;
+
+/// WM_QUERYENDSESSION: may the session end? (0: no).
+pub const WM_QUERYENDSESSION: u32 = 0x0011;
+/// WM_ENDSESSION: it ends (wParam TRUE) or not.
+pub const WM_ENDSESSION: u32 = 0x0016;
+/// WM_CLIENTSHUTDOWN: what winsrv sends a top-level window at the end of a
+/// session (`undocuser.h`); its wParam, MCS_* ; DefWindowProc answers an
+/// MCSR_* value.
+pub const WM_CLIENTSHUTDOWN: u32 = 0x003B;
+/// MCS_ENDSESSION: the session ends: WM_ENDSESSION.
+pub const MCS_ENDSESSION: u32 = 1;
+/// MCS_QUERYENDSESSION: WM_QUERYENDSESSION.
+pub const MCS_QUERYENDSESSION: u32 = 2;
+/// MCSR_GOODFORSHUTDOWN: the windows agree.
+pub const MCSR_GOODFORSHUTDOWN: u32 = 1;
+/// MCSR_SHUTDOWNFINISHED: they were told of the end.
+pub const MCSR_SHUTDOWNFINISHED: u32 = 2;
+/// MCSR_DONOTSHUTDOWN: one refused.
+pub const MCSR_DONOTSHUTDOWN: u32 = 3;
+/// ENDSESSION_CLOSEAPP, ENDSESSION_CRITICAL, ENDSESSION_LOGOFF: the
+/// lParam of WM_QUERYENDSESSION and WM_ENDSESSION.
+pub const ENDSESSION_CLOSEAPP: u32 = 0x0000_0001;
+/// ENDSESSION_CRITICAL.
+pub const ENDSESSION_CRITICAL: u32 = 0x4000_0000;
+/// ENDSESSION_LOGOFF.
+pub const ENDSESSION_LOGOFF: u32 = 0x8000_0000;
 
 // CONSOLECONTROL: what consrv asks of NtUserConsoleControl.
 /// The console input thread of a desktop (DESKTOP_CONSOLE_THREAD).

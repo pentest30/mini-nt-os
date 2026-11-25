@@ -906,6 +906,62 @@ l'assistant du premier démarrage au centre de l'écran, puis son Start Center a
 barre des tâches visible dessous. Restent : le bouton d'OpenOffice dans la barre des tâches, que rien n'y met ; le
 service RpcSs, que `services.exe` ne peut démarrer (TransactNamedPipe : FSCTL_PIPE_TRANSCEIVE, classe 5 de
 NtFsControlFile des tubes, manque).
+### Plus de 64 threads : les runtimes de Visual C++ d'OpenOffice, le 2026-11-23
+
+Dans l'image VirtualBox (`cargo xtask image --apps`), l'installeur d'Apache OpenOffice 4.1.17 passe son contrôle de
+version (`InstallerLocation` dans `tools/mkhive/mino.inf`) et lance les runtimes de Visual C++ : `vcredist_x86.exe`,
+puis `install.exe`, qui lance `msiexec.exe`. Dans `install.exe`, `rpcrt4` journalise « couldn't queue work item for
+worker thread, error was 1450 » (`dll/win32/rpcrt4/rpc_server.c:592`), puis une boîte dit « Insufficient system
+resources exist to complete the requested service ». QueueUserWorkItem est RtlQueueWorkItem
+(`sdk/lib/rtl/threadpool.c`), qui crée un thread de travail par RtlCreateUserThread : il rendait
+`STATUS_INSUFFICIENT_RESOURCES` (ERROR_NO_SYSTEM_RESOURCES, 1450), parce que `ke::sched::create_user_thread` rendait
+`None`. Ke n'avait que 64 threads pour tout le système, threads noyau compris (`MAX_THREADS` : la table des TID, et
+chacune des 32 files prêtes, des anneaux de 64). 197 threads utilisateur avaient été créés, plusieurs déjà finis ; XP
+en fait tourner des centaines au repos.
+
+Fait comme ReactOS (KxQueueReadyThread, `ntoskrnl/include/internal/ke_x.h` : le `WaitListEntry` du thread dans
+`DispatcherReadyListHead`) : les files prêtes sont chaînées par des liens que porte chaque thread
+(`ke::sched::ReadyLink`), sans capacité, et l'ordonnanceur n'alloue toujours rien à DISPATCH_LEVEL ; un thread mis
+deux fois en file arrête le système, `delete_thread` refuse un thread encore en file. La table des threads
+(`ThreadTable`) grandit hors du verrou dispatcher : `register_locked` prend la mémoire à PASSIVE_LEVEL
+(`ThreadTable::storage`, le double), la table y copie ses emplacements sous le verrou sans allouer (`grow`), et
+l'ancienne mémoire est rendue après. La mémoire est la seule limite de Ke ; restent 4 096 TEB par processus
+(`ps::ethread`) et 4 096 piles noyau (`mm::kstack::MAX_STACKS`).
+
+Scénario `many-threads` (`tests/native/manythr1.c`, AMD et Intel) : 200 threads qui attendent un événement, tous
+vivants et prêts ensemble derrière leur créateur, puis libérés. Sans le changement : « thread 41 not created (error
+1450) ». Tests hôte : une file de 300 threads, 200 threads prêts de même priorité à tour de rôle, une table qui grandit
+trois fois. L'effet sur OpenOffice reste à mesurer (l'image VirtualBox, ou le scénario `app-openoffice`).
+### Les DIB sections de 16 bits, le 2026-11-23
+
+C'est la dette que laissaient les bitmaps de 24 bits. Aucune application du banc ne les a encore demandées (aucun
+« a DIB section of 16 bits » dans les journaux gardés) : c'est un format que ReactOS fait et que Mino refusait.
+
+- **Le format.** `win32k::gdi::surface::Format::Rgb16` : 16 bits par pixel sous trois masques. C'est 5-5-5 en
+  BI_RGB, et les masques de BI_BITFIELDS sinon : 5-6-5, ou tout masque de bits consécutifs, disjoints, dans les
+  16 bits (`masks_fit_16`).
+- **Le dessin.** Le moteur dessine sur les pixels décodés en 32 bits, puis réécrit ceux qui ont changé. Au décodage,
+  une composante de n bits est étendue à 8 bits par arrondi : ce sont les tables 5 → 8 de ReactOS, et sa table
+  6 → 8 à une unité près sur quelques valeurs. À l'encodage, une composante garde ses bits hauts, comme
+  EXLATEOBJ_iXlateRGBto555 et RGBto565. Les trois formats convertis (indexé, 16 et 24 bits) passent maintenant par le
+  même chemin (`Format::decode`, `Format::encode`).
+- **GetObject.** Le DIBSECTION dit BI_RGB pour 5-5-5, BI_BITFIELDS sinon, et donne ses masques, comme
+  BITMAP_GetObject de ReactOS.
+- **GetDIBits.** La description dit 16 bits et BI_BITFIELDS, comme ReactOS. Les lignes de 16 bits sont en 5-5-5 pour
+  BI_RGB. En BI_BITFIELDS, elles prennent les masques de la DIB section de 16 bits, ou 5-6-5 pour un autre bitmap.
+  ReactOS donne les masques de la palette de toute DIB section, ce qui n'a pas de sens pour une de 32 bits.
+- **La copie.** Une copie (GetIconInfo) garde ses 16 bits et ses masques.
+
+Scénario `bitmap-16` (`tests/native/bmp16.c`, AMD et Intel) :
+- une DIB section de 5-5-5 : son DIBSECTION, un pixel écrit par le processus et lu par le noyau, d'autres peints par
+  le noyau et lus par le processus (le gris 128 devient 16 sur 31, relu 132) ;
+- GetDIBits : la description, les lignes de 16 et de 32 bits ;
+- une DIB section de 5-6-5 : ses masques par GetObject et par GetDIBits ;
+- un BitBlt de 5-5-5 vers 5-6-5.
+
+Sans la modification (une mutation : 16 bits refusés), il échoue à l'étape 1.
+
+Pas encore : CreateBitmap de 16 bits ; en 32 bits, d'autres masques que ceux de BI_RGB.
 
 ### La suite
 

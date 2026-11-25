@@ -21,6 +21,73 @@
   le `lParam` de WM_SETTINGCHANGE est nul (ReactOS passe « Control Panel\Desktop »). **Suite** : le bouton
   d'OpenOffice dans la barre des tâches ; RpcSs, que `services.exe` ne démarre pas (FSCTL_PIPE_TRANSCEIVE manque) ; le
   parcours d'OpenOffice (Writer).
+- **La fin de session et l'arrêt** (`claude/session-shutdown`, sur la PR 183, M7, second critère ;
+  [`compat/m6-logon.md`](compat/m6-logon.md#la-fin-de-session-et-larrêt-m7-le-2026-11-23) ; demandé le 2026-11-23).
+  Un programme de la session arrête le système par ExitWindowsEx. NtUserSetInformationThread a les classes de
+  `csrss` pour la fin d'une session : `UserThreadUseActiveDesktop`, `UserThreadRestoreDesktop`,
+  `UserThreadInitiateShutdown` et `UserThreadEndShutdown`. Elles passent par `win32k::shutdown` : la décision
+  d'UserInitiateShutdown et WM_LOGONNOTIFY à la fenêtre SAS de `winlogon`. Le bureau d'entrée passe par
+  `ob::HandleTable::find_object`. `ntmarta.dll` est sur le disque (le thread de fin de session de `winlogon`).
+  WM_CLIENTSHUTDOWN devient WM_QUERYENDSESSION, puis WM_ENDSESSION dans DefWindowProc
+  (`defwnd::end_session_messages`). Scénario `session-shutdown` (`tests/native/shutdn1.c`, AMD et Intel) : jusqu'à
+  NtShutdownSystem(power off). **Suite** pour le critère : du travail dans la session (une application, un fichier
+  enregistré) et la mesure du pool (avant et après, à l'arrêt), sans fuite.
+- **Les droits des comptes** (`claude/account-privileges`, sur la PR 180, M7, second critère ;
+  [`compat/m6-logon.md`](compat/m6-logon.md#les-droits-des-comptes-m7-le-2026-11-23) ; demandé le 2026-11-23 : une
+  session qui s'arrête). Le jeton d'`Administrator` n'avait aucun privilège, donc pas `SeShutdownPrivilege`
+  qu'ExitWindowsEx demande : la base de la LSA n'avait aucun compte, que `syssetup` crée à l'installation
+  (InstallPrivileges). `minoinit` donne maintenant les droits de `[Privilege Rights]` de `defltwk.inf` (sur le disque
+  dans `WINDOWS\INF`) par LsaAddAccountRights : 51 droits, 20 privilèges pour les Administrateurs. Scénario
+  `session-privileges` (`tests/native/priv1.c`). **Suite**, mesurée : csrss s'arrête ensuite à
+  NtUserSetInformationThread classe 7 (`UserThreadUseActiveDesktop`) ; puis `UserThreadInitiateShutdown`,
+  `UserThreadEndShutdown`, WM_LOGONNOTIFY à `winlogon`, la fin des processus de la session, NtShutdownSystem
+  (le travail en cours est gardé hors de la branche : `tests/native/shutdn1.c`, scénario `session-shutdown`).
+- **Plus de 64 threads : la limite de Ke levée** (`claude/ke-thread-limit`, M7,
+  [`compat/applications.md`](compat/applications.md#plus-de-64-threads-les-runtimes-de-visual-c-dopenoffice-le-2026-11-23) ;
+  demandé le 2026-11-23, le blocage d'OpenOffice après la PR 181). Dans l'image VirtualBox, `install.exe` (les
+  runtimes de Visual C++) ne pouvait mettre un travail en file : « couldn't queue work item for worker thread, error
+  was 1450 » (`rpcrt4`, RtlCreateUserThread : `STATUS_INSUFFICIENT_RESOURCES`). Ke n'avait que 64 threads pour tout le
+  système, threads noyau compris (`ke::sched::MAX_THREADS` : la table des TID et les 32 files prêtes, des anneaux).
+  Comme ReactOS (KxQueueReadyThread : le `WaitListEntry` dans `DispatcherReadyListHead`) : files prêtes chaînées par
+  des liens dans chaque thread (`ReadyLink`, sans capacité ; un thread mis deux fois en file arrête le système,
+  `delete_thread` refuse un thread encore en file) ; la table des threads grandit hors du verrou dispatcher
+  (`register_locked`, `ThreadTable::storage`, `grow` : rien n'est alloué ni libéré sous le verrou). `MAX_THREADS`
+  disparaît ; restent 4 096 TEB par processus et 4 096 piles noyau. Scénario `many-threads`
+  (`tests/native/manythr1.c`, 200 threads qui attendent un événement) : sans le changement, « thread 41 not created
+  (error 1450) » ; avec, 200 créés, en attente, puis finis. Tests hôte : une file de 300 threads, 200 threads prêts de
+  même priorité à tour de rôle, une table qui grandit trois fois. Vérifié : lint, 1 292 tests hôte,
+  `many-threads`, `ke-events`, `ke-starvation`, `fpu`, `smoke` (AMD, Intel), `bugcheck` (AMD, son seul processeur).
+  **Suite** : remesurer OpenOffice (l'image VirtualBox avec la PR 181, ou `app-openoffice`) ; le noyau ne journalise
+  ni la fin des threads ni leur nombre vivant.
+- **Le répertoire de msi.dll : l'installeur d'OpenOffice** (`claude/installer-location`, sur `main`, M7 ; demandé
+  le 2026-11-23 : dans VirtualBox, « This package requires at least the version '2.0' of the Windows Installer. You
+  have Windows Installer '0.1244568.1244716' »). Le `setup.exe` d'Apache OpenOffice ne charge `msi.dll` que du
+  répertoire que nomme `HKLM\Software\Microsoft\Windows\CurrentVersion\Installer\InstallerLocation`
+  (`aoo_msi_load`) ; sans la valeur, `aoo_MsiDllGetVersion` rend `HRESULT_FROM_WIN32(GetLastError())`, 0 sans
+  erreur en cours, et CheckVersion affiche sa DLLVERSIONINFO jamais remplie (des adresses de la pile). syssetup.inf
+  l'écrit à l'installation de ReactOS ([Classes], AddReg de RegistrationPhase2 : `%11%`) ; la clé manquait aux
+  ruches du LiveCD. `tools/mkhive/mino.inf` l'écrit (`C:\WINDOWS\system32`). Test hôte
+  `the_mino_layer_installs_a_system_that_logs_on` ; scénario `installer-location` (`tests/native/msiver1.c`, en
+  session sur le disque de 7-Zip, qui a `msi.dll` : la recherche de `setup.exe`, DllGetVersion rend 4.5.6001), qui
+  échoue sans la valeur (vérifié).
+- **Les DIB sections de 16 bits** (`claude/surface-16bit`, sur la PR 176, M7, GDI,
+  [`compat/applications.md`](compat/applications.md#les-dib-sections-de-16-bits-le-2026-11-23) ; demandé le
+  2026-11-23). `surface::Format::Rgb16` (5-5-5 en BI_RGB, les masques de BI_BITFIELDS sinon : `masks_fit_16`,
+  `decode_rgb16`, `encode_rgb16`, `pack_rgb16`) ; les formats convertis par un même chemin (`Format::decode`,
+  `Format::encode`, aussi pour les bitmaps du noyau) ; le DIBSECTION de GetObject (BI_BITFIELDS hors de 5-5-5, ses
+  masques) ; GetDIBits de 16 bits (5-5-5, ou en BI_BITFIELDS les masques de la DIB section de 16 bits, 5-6-5
+  sinon). Aucune application du banc ne les demandait encore. Scénario `bitmap-16` (`tests/native/bmp16.c`, AMD et
+  Intel ; sans la modification, il échoue à l'étape 1). Vérifié : lint, 1 294 tests hôte, `bitmap-16`, et sans
+  régression `bitmap-24`, `bitmap`, `icons`, `cursor`, `notepad-saveas` (AMD et Intel), `folder-view` et
+  `app-peazip` (AMD).
+  **Pas encore** : CreateBitmap de 16 bits ; en 32 bits, d'autres masques que ceux de BI_RGB.
+- **Les revues des bots des PR 173 à 178** (`claude/reviews-173-178`, sur `main` ; demandé le 2026-11-23 ;
+  [`revues/mergestorm-vortex.md`](revues/mergestorm-vortex.md)). Six remarques sur les PR 174, 176 et 177 ; rien à
+  corriger sur les PR 173, 175 et 178. Corrigé sur la PR 174 (`0179f84`, fusionné dans la PR 176 par `22d4048`) :
+  GetDIBits de 1 bit prend l'index de la table rendue (`dibits::encode_lines`, test hôte
+  `a_one_bit_dib_takes_the_index_of_its_table`), et les temps du parcours de PeaZip viennent d'un même run. Sans
+  suite, comme ReactOS : le DC du parent n'est pas coupé au rectangle de la fenêtre (PR 177). Faux : le test de
+  RestoreDC existe, le scénario `save-restore-dc` (PR 176).
 - **Les images des boîtes de msiexec** (`claude/msi-picture`, sur `main` ; trouvé le 2026-11-23 en cherchant
   pourquoi la page d'accueil du MSI de 7-Zip restait vide, qui était le DC du parent, PR 177 : ce MSI n'a pas
   d'image, et « Failed to load bitmap "WixUI_Bmp_Dialog" » y reste).

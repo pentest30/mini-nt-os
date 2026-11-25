@@ -1,20 +1,28 @@
 //! Les services de win32k (la seconde table) : NtUserProcessConnect,
 //! NtUserInitializeClientPfnArrays, NtUserInitialize, NtGdiInit,
 //! NtUserCallTwoParam (RegisterLogonProcess), NtUserSetInformationThread
-//! (le port d'API de `csrss`), NtUserLoadKeyboardLayoutEx,
+//! (le port d'API de `csrss`, la fin d'une session), NtUserLoadKeyboardLayoutEx,
 //! NtUserGetKeyboardLayoutList, NtUserSystemParametersInfo.
 //!
 //! Le thread qui les appelle est déjà un thread GUI (`super::dispatch`).
 
-use abi::ntstatus::{NtStatus, STATUS_ACCESS_DENIED, STATUS_INFO_LENGTH_MISMATCH, STATUS_SUCCESS};
-use abi::user::{TWOPARAM_ROUTINE_REGISTERLOGONPROCESS, USER_THREAD_CSR_API_PORT};
+use abi::ntstatus::{
+    NtStatus, STATUS_ACCESS_DENIED, STATUS_INFO_LENGTH_MISMATCH, STATUS_NOT_IMPLEMENTED, STATUS_SUCCESS,
+};
+use abi::security::{SE_SHUTDOWN_PRIVILEGE, SYSTEM_LUID};
+use abi::user::{
+    TWOPARAM_ROUTINE_REGISTERLOGONPROCESS, USER_THREAD_CSR_API_PORT, USER_THREAD_END_SHUTDOWN,
+    USER_THREAD_INITIATE_SHUTDOWN, USER_THREAD_RESTORE_DESKTOP, USER_THREAD_USE_ACTIVE_DESKTOP,
+};
 use abi::winerror::ERROR_CALL_NOT_IMPLEMENTED;
 use ex::{Event, EVENT_ALL_ACCESS, EVENT_TYPE};
 use ke::usermem::UserPtr;
 use lpc::port::PORT_TYPE;
 use ob::{AccessMask, Handle};
 use ps::eprocess::PROCESS_VM_OPERATION;
-use ps::ethread::THREAD_SET_INFORMATION;
+use ps::ethread::{EThread, THREAD_SET_INFORMATION};
+use se::Luid;
+use win32k::shutdown::{Requester, StationRights};
 
 /// Les routines de NtUserCallTwoParam demandées sans être implémentées.
 static UNSUPPORTED_TWO_PARAM_ROUTINES: super::ClassReport = super::ClassReport::new("NtUserCallTwoParam");
@@ -242,10 +250,19 @@ pub(super) fn nt_user_call_two_param(arguments: &[u32]) -> NtStatus {
 /// NtUserSetInformationThread(ThreadHandle, ThreadInformationClass,
 /// ThreadInformation, ThreadInformationLength), pour `csrss` seul
 /// (`STATUS_ACCESS_DENIED` sinon), sur un thread ouvert avec
-/// `THREAD_SET_INFORMATION`. `UserThreadCsrApiPort` : le handle d'un port
-/// LPC (4 octets) devient le port d'API de `csrss` pour win32k
-/// (`win32k::csrss::set_api_port`). Les autres classes rendent
-/// `STATUS_NOT_IMPLEMENTED`, journalisées une fois.
+/// `THREAD_SET_INFORMATION` :
+///
+/// | Classe | Ce qu'elle fait |
+/// |---|---|
+/// | `UserThreadCsrApiPort` (10) | le handle d'un port LPC (4 octets) devient le port d'API de `csrss` (`win32k::csrss::set_api_port`) |
+/// | `UserThreadInitiateShutdown` (5) | les drapeaux EWX_* (4 octets, réécrits) d'une fin de session demandée par ce thread client (`win32k::shutdown::initiate`) |
+/// | `UserThreadEndShutdown` (6) | le statut (4 octets) de la fin des processus de la session (`win32k::shutdown::end`) |
+/// | `UserThreadUseActiveDesktop` (7) | le thread courant va sur le bureau d'entrée (`win32k::shutdown::use_active_desktop`) |
+/// | `UserThreadRestoreDesktop` (9) | il le quitte |
+///
+/// Les deux dernières ne valent que pour le thread courant
+/// (`STATUS_NOT_IMPLEMENTED` sinon, comme ReactOS). Les autres classes
+/// rendent `STATUS_NOT_IMPLEMENTED`, journalisées une fois.
 pub(super) fn nt_user_set_information_thread(arguments: &[u32]) -> NtStatus {
     let [handle, class, information, length] = arguments[..4] else { unreachable!("4 arguments") };
     let set = || {
@@ -253,19 +270,69 @@ pub(super) fn nt_user_set_information_thread(arguments: &[u32]) -> NtStatus {
         if process.pid() != win32k::csrss::csrss() {
             return Err(STATUS_ACCESS_DENIED);
         }
-        super::reference_thread(handle, THREAD_SET_INFORMATION)?;
-        if class != USER_THREAD_CSR_API_PORT {
-            return Err(UNSUPPORTED_USER_THREAD_CLASSES.report(class));
+        let thread = super::reference_thread(handle, THREAD_SET_INFORMATION)?;
+        let current = ps::ethread::current_thread().is_some_and(|current| current.tid() == thread.tid());
+        match class {
+            USER_THREAD_CSR_API_PORT => {
+                if length != 4 {
+                    return Err(STATUS_INFO_LENGTH_MISMATCH);
+                }
+                let port = UserPtr::<u32>::new(information).read()?;
+                let port = process.handle_table.reference(Handle(port), Some(&PORT_TYPE), AccessMask(0))?;
+                win32k::csrss::set_api_port(port);
+                Ok(STATUS_SUCCESS)
+            }
+            USER_THREAD_INITIATE_SHUTDOWN => {
+                if length != 4 {
+                    return Err(STATUS_INFO_LENGTH_MISMATCH);
+                }
+                let pointer = UserPtr::<u32>::new(information);
+                let (status, flags) = win32k::shutdown::initiate(pointer.read()?, &requester(&thread));
+                pointer.write(&flags)?;
+                Ok(status)
+            }
+            USER_THREAD_END_SHUTDOWN => {
+                if length != 4 {
+                    return Err(STATUS_INFO_LENGTH_MISMATCH);
+                }
+                win32k::shutdown::end(NtStatus(UserPtr::<u32>::new(information).read()?));
+                Ok(STATUS_SUCCESS)
+            }
+            USER_THREAD_USE_ACTIVE_DESKTOP if current => {
+                win32k::shutdown::use_active_desktop(&process).map(|()| STATUS_SUCCESS)
+            }
+            USER_THREAD_RESTORE_DESKTOP if current => win32k::shutdown::restore_desktop().map(|()| STATUS_SUCCESS),
+            USER_THREAD_USE_ACTIVE_DESKTOP | USER_THREAD_RESTORE_DESKTOP => Err(STATUS_NOT_IMPLEMENTED),
+            _ => Err(UNSUPPORTED_USER_THREAD_CLASSES.report(class)),
         }
-        if length != 4 {
-            return Err(STATUS_INFO_LENGTH_MISMATCH);
-        }
-        let port = UserPtr::<u32>::new(information).read()?;
-        let port = process.handle_table.reference(Handle(port), Some(&PORT_TYPE), AccessMask(0))?;
-        win32k::csrss::set_api_port(port);
-        Ok(())
     };
-    set().map_or_else(|status| status, |()| STATUS_SUCCESS)
+    set().unwrap_or_else(|status| status)
+}
+
+/// Qui demande la fin d'une session : le thread client `thread` de `csrss`
+/// (son processus, sa session d'ouverture : celle du jeton qu'il emprunte,
+/// sinon de son processus, GetProcessLuid), et `csrss` lui-même, qui
+/// emprunte son identité (le privilège d'arrêt du sujet courant,
+/// HasPrivilege).
+fn requester(thread: &EThread) -> Requester {
+    let process = thread.process();
+    let token = thread.impersonation().map_or_else(|| process.primary_token(), |impersonation| impersonation.token);
+    let system = token.authentication_id() == Luid::from_abi(SYSTEM_LUID);
+    let process_info = win32k::gui::existing_process_info(process);
+    let station = process_info.as_ref().and_then(|info| info.window_station()).map(|station| StationRights {
+        exit_windows: station.access.0 & win32k::winsta::WINSTA_EXITWINDOWS != 0,
+        no_io: station.station.no_io(),
+    });
+    let subject = ps::ethread::current_thread()
+        .and_then(|current| current.impersonation())
+        .map_or_else(|| super::current_process().primary_token(), |impersonation| impersonation.token);
+    Requester {
+        gui: process_info.is_some(),
+        logon: process.pid() == win32k::logon::logon_process(),
+        system,
+        station,
+        shutdown_privilege: subject.is_privilege_enabled(Luid(u64::from(SE_SHUTDOWN_PRIVILEGE))),
+    }
 }
 
 /// Les drapeaux qu'accepte NtUserLoadKeyboardLayoutEx.
