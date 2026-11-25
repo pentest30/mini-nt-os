@@ -76,6 +76,33 @@ pub trait DisplayDriver: Send + Sync {
         let _ = (width, height);
         false
     }
+
+    /// Son ICD OpenGL, que `opengl32` lui demande par ExtEscape
+    /// (`crate::gdi::escape`) puis trouve sous
+    /// `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\OpenGLDrivers` ;
+    /// `None` : `opengl32` garde son rendu logiciel. Par défaut, l'ICD Mesa
+    /// de Mino (ADR-025), qui rend en logiciel sur toute surface.
+    fn opengl_icd(&self) -> Option<OpenglIcd> {
+        Some(OpenglIcd::MESA)
+    }
+}
+
+/// L'ICD OpenGL d'un pilote d'affichage : son nom sous `OpenGLDrivers` et
+/// les versions que la clé doit porter (`Drv_Opengl_Info`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OpenglIcd {
+    pub name: &'static str,
+    /// La version de l'interface des pilotes (`Version`).
+    pub version: u32,
+    /// La version du pilote (`DriverVersion`), que l'ICD valide
+    /// (DrvValidateVersion).
+    pub driver_version: u32,
+}
+
+impl OpenglIcd {
+    /// `mesaicd.dll` (`cargo xtask icd-build`), décrite par
+    /// `tools/mkhive/mino.inf` sous `OpenGLDrivers\Mesa` avec ces versions.
+    pub const MESA: Self = Self { name: "Mesa", version: 2, driver_version: 1 };
 }
 
 /// Le pilote installé.
@@ -257,6 +284,15 @@ pub fn modes() -> Vec<Mode> {
 /// Tout niveau.
 pub fn adapter() -> Option<(&'static str, &'static str)> {
     DRIVER.get().map(|driver| (driver.description(), driver.hardware_id()))
+}
+
+/// L'ICD OpenGL du pilote ([`DisplayDriver::opengl_icd`]) ; `None` sans
+/// pilote.
+///
+/// # IRQL
+/// Tout niveau.
+pub fn opengl_icd() -> Option<OpenglIcd> {
+    DRIVER.get().and_then(|driver| driver.opengl_icd())
 }
 
 /// Le pilote a pris l'écran : win32k y a dessiné.
