@@ -7,7 +7,7 @@ The system boots into a ReactOs desktop (taskbar, Start menu, file explorer, Con
 - **Written in Rust**: All privileged code (NT kernel, Win32 kernel subsystem, drivers).
 - **Reused components**: ReactOS user-mode components (`ntdll`, `kernel32`, `user32`, `csrss`, `explorer`, etc.), using version-pinned binaries.
 <img width="1280" height="800" alt="image-1793803234557" src="https://github.com/pentest30/mini-nt-os/blob/main/mino-5ca4cab-reactos.png" />
-<img width="1280" height="800" alt="image-1793803234557" src="https://github.com/pentest30/mini-nt-os/blob/main/image-1795013743831.png" />
+<img width="1280" height="800" alt="image-1793803234557" src="https://github.com/pentest30/mini-nt-os/blob/main/image-1795537363143.png" />
 
 
 ## Architecture
