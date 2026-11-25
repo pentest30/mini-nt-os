@@ -1,5 +1,25 @@
 # Notes de passation
 
+- **Les polygones : les traînées d'OpenOffice** (`claude/polygons`, sur `main`, M7, GDI,
+  [`compat/applications.md`](compat/applications.md#les-polygones--les-traînées-dopenoffice-le-2026-11-24) ; demandé le
+  2026-11-24 : déplacer une fenêtre d'OpenOffice laisse des traînées, un menu fermé reste à l'écran). VCL peint ses
+  fonds et ses dégradés par Polygon avec NULL_PEN : NtGdiPolyPolyDraw n'avait pas de handler et GetStockObject ne
+  donnait aucun stylo, rien n'était peint. Fait : NtGdiPolyPolyDraw (`win32k::gdi::shape` : Polygon, PolyPolygon,
+  Polyline, PolylineTo, PolyBezier, PolyBezierTo, CreatePolyPolygonRgn ; `win32k::gdi::polyfill` : lignes de
+  balayage, règle des centres, ALTERNATE et WINDING, Bézier en segments) ; les stylos de stock (`pen::STOCK_PENS`,
+  BLACK_PEN dans un DC neuf) ; le stylo des attributs du DC (`dc::line_pen`, DC_vUpdateLineBrush : `gdi32` le
+  choisit sans appeler le noyau, et LineTo traçait toujours en noir) ; le mode de mélange (`dc::draw_modes`, R2_NOT) ;
+  LineTo et Rectangle comme ReactOS (sans le dernier pixel, le stylo nul) ; la couleur d'un trait dans l'ordre
+  d'octets de la surface (un stylo rouge traçait en bleu) ; NtGdiSetPixel. Scénario `polygons`
+  (`tests/native/poly1.c`). Le DC propre (CS_OWNDC) n'y était pour rien ; deux Échap pour quitter le menu de la
+  fenêtre ouvert au clavier, c'est XP (MENU_KeyEscape). **Pas encore** : ExtCreateRegion (VCL se replie sur
+  CombineRgn), les chemins (BeginPath, PathToRegion), les ellipses, SetDIBitsToDevice, le DC propre d'une fenêtre.
+  Vérifié : lint, 1 300 tests hôte, `polygons` (AMD, Intel ; avec le noyau de `main`, il échoue), la suite de
+  démarrage (190 réussis sur 196 : `app-peazip` a fini sur le STOP du test du TPR, l'hôte chargé, puis passe seul ;
+  `app-npp-interactive` ne vérifie pas encore son écran ; `keyboard` et `display-desktop` échouent aussi avec le
+  noyau de `main` : `winlogon` reçoit le PID 8 au lieu de 28, et le marqueur `Desktop\*.*` ne paraît plus), la
+  machine VirtualBox (le dégradé du centre de démarrage, plus de reste du menu de la fenêtre ni de traînées après
+  un déplacement au clavier). **Suite** : les deux scénarios cassés sur `main`.
 - **La barre des tâches : les crochets du shell, les fenêtres réduites, SwitchToThisWindow** (`claude/shell-hooks`,
   M6/M7, [`compat/m6-fenetres.md`](compat/m6-fenetres.md) étape 48 ; demandé le 2026-11-24, dans la machine
   VirtualBox). La barre d'`explorer` n'avait aucun bouton et une fenêtre réduite « disparaissait » (sous la barre, en

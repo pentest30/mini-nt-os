@@ -8,11 +8,12 @@
 //! ([`fontobj`]), les bitmaps ([`surface`] : DIB sections), ce qu'un objet
 //! dit de lui-même ([`object`] : GetObject), les contextes de
 //! périphérique de l'écran et en mémoire ([`dc`]), BitBlt ([`bitblt`]), le
-//! texte ([`text`], ADR-013) et les appels qu'un client met en lot
-//! ([`batch`]).
+//! texte ([`text`], ADR-013), les appels qu'un client met en lot
+//! ([`batch`]), les stylos ([`pen`]), les polygones, polylignes et courbes
+//! de Bézier ([`shape`], sur la géométrie de [`polyfill`]).
 //!
-//! Pas encore : stylos et palettes comme objets GDI, transformations, lignes
-//! et courbes, MaskBlt.
+//! Pas encore : les palettes comme objets GDI, les transformations, les
+//! chemins, les ellipses, MaskBlt.
 
 pub mod batch;
 pub mod bitblt;
@@ -26,8 +27,10 @@ pub mod fontobj;
 pub mod handles;
 pub mod object;
 pub mod pen;
+pub mod polyfill;
 pub mod region;
 pub mod rgnobj;
+pub mod shape;
 pub mod surface;
 pub mod syscolor;
 pub mod text;

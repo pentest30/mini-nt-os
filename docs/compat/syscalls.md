@@ -9,7 +9,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | Table | Implémentés | Services |
 |---|---:|---:|
 | ntoskrnl | 137 | 296 |
-| win32k | 230 | 737 |
+| win32k | 232 | 737 |
 
 ## ntoskrnl
 
@@ -554,7 +554,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x10eb` | `NtGdiPathToRegion` | 1 |  |
 | `0x10ec` | `NtGdiPlgBlt` | 11 |  |
 | `0x10ed` | `NtGdiPolyDraw` | 4 |  |
-| `0x10ee` | `NtGdiPolyPolyDraw` | 5 |  |
+| `0x10ee` | `NtGdiPolyPolyDraw` | 5 | ✅ |
 | `0x10ef` | `NtGdiPolyTextOutW` | 4 |  |
 | `0x10f0` | `NtGdiPtInRegion` | 3 |  |
 | `0x10f1` | `NtGdiPtVisible` | 3 |  |
@@ -597,7 +597,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1116` | `NtGdiGetDeviceWidth` | 1 |  |
 | `0x1117` | `NtGdiMirrorWindowOrg` | 1 |  |
 | `0x1118` | `NtGdiSetLayout` | 3 |  |
-| `0x1119` | `NtGdiSetPixel` | 4 |  |
+| `0x1119` | `NtGdiSetPixel` | 4 | ✅ |
 | `0x111a` | `NtGdiSetPixelFormat` | 2 | ✅ |
 | `0x111b` | `NtGdiSetRectRgn` | 5 |  |
 | `0x111c` | `NtGdiSetSystemPaletteUse` | 2 |  |

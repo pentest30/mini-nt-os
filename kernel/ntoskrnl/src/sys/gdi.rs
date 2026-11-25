@@ -917,6 +917,79 @@ pub(super) fn nt_gdi_line_to(arguments: &[u32]) -> NtStatus {
     NtStatus(u32::from(win32k::gdi::dc::line_to(&dc, x as i32, y as i32)))
 }
 
+/// Les figures qu'un appel de NtGdiPolyPolyDraw accepte au plus, et leurs
+/// points ensemble : 2 Mio de points copiés dans le noyau au plus.
+const MAX_POLY_FIGURES: u32 = 0x1_0000;
+const MAX_POLY_POINTS: u64 = 0x4_0000;
+
+/// NtGdiPolyPolyDraw(hdc, ppt, pcpt, ccpt, iFunc) : ULONG_PTR, les `ccpt`
+/// figures de `pcpt` points de `ppt` dessinées sur le DC par la fonction
+/// `iFunc` (`abi::gdi::poly_func` : `win32k::gdi::shape::poly_poly_draw`),
+/// TRUE ou FALSE ; ou, pour GdiPolyPolyRgn, le handle de leur région, le
+/// « DC » étant le mode de remplissage
+/// (`win32k::gdi::shape::create_poly_polygon_rgn`). Comme ReactOS : FALSE
+/// sans erreur pour un pointeur nul, aucune figure, une fonction inconnue,
+/// une mémoire illisible, aucun point ; `ERROR_INVALID_PARAMETER` pour une
+/// figure de moins de deux points ; `ERROR_NOT_ENOUGH_MEMORY` au-delà de
+/// [`MAX_POLY_FIGURES`] figures ou [`MAX_POLY_POINTS`] points.
+pub(super) fn nt_gdi_poly_poly_draw(arguments: &[u32]) -> NtStatus {
+    use abi::gdi::poly_func::POLY_POLY_RGN;
+    let [hdc, points, counts, count, function] = arguments[..5] else { unreachable!("5 arguments") };
+    if points == 0 || counts == 0 || count == 0 || function == 0 || function > POLY_POLY_RGN {
+        return NtStatus(0);
+    }
+    if count > MAX_POLY_FIGURES {
+        return fail(ERROR_NOT_ENOUGH_MEMORY, 0);
+    }
+    let mut bytes = alloc::vec![0u8; count as usize * 4];
+    if copy_from_user(&mut bytes, u64::from(counts)).is_err() {
+        return NtStatus(0);
+    }
+    let counts: alloc::vec::Vec<u32> =
+        bytes.chunks_exact(4).map(|word| u32::from_le_bytes([word[0], word[1], word[2], word[3]])).collect();
+    let total: u64 = counts.iter().map(|&count| u64::from(count)).sum();
+    if total == 0 {
+        return NtStatus(0);
+    }
+    if counts.iter().any(|&count| count < 2) {
+        return fail(ERROR_INVALID_PARAMETER, 0);
+    }
+    if total > MAX_POLY_POINTS {
+        return fail(ERROR_NOT_ENOUGH_MEMORY, 0);
+    }
+    let mut bytes = alloc::vec![0u8; total as usize * 8];
+    if copy_from_user(&mut bytes, u64::from(points)).is_err() {
+        return NtStatus(0);
+    }
+    let word = |at: &[u8]| i32::from_le_bytes([at[0], at[1], at[2], at[3]]);
+    let points: alloc::vec::Vec<(i32, i32)> =
+        bytes.chunks_exact(8).map(|point| (word(&point[..4]), word(&point[4..]))).collect();
+    let counts: alloc::vec::Vec<usize> = counts.iter().map(|&count| count as usize).collect();
+    if function == POLY_POLY_RGN {
+        return match win32k::gdi::shape::create_poly_polygon_rgn(&points, &counts, hdc as i32) {
+            Ok(handle) => NtStatus(handle),
+            Err(_) => fail(ERROR_NOT_ENOUGH_MEMORY, 0),
+        };
+    }
+    match win32k::gdi::shape::poly_poly_draw(hdc, &points, &counts, function) {
+        Ok(done) => NtStatus(u32::from(done)),
+        Err(error) => fail(error, 0),
+    }
+}
+
+/// NtGdiSetPixel(hdc, x, y, crColor) : COLORREF, le point logique prend
+/// `crColor` là où le DC peint (`win32k::gdi::dc::set_pixel`) ; rend la
+/// couleur posée (aussi hors de là où le DC peint, comme ReactOS),
+/// CLR_INVALID pour un DC sans surface ou qui n'est pas au processus
+/// (`ERROR_INVALID_HANDLE`). VCL finit ses traits par SetPixelV.
+pub(super) fn nt_gdi_set_pixel(arguments: &[u32]) -> NtStatus {
+    let [hdc, x, y, color] = arguments[..4] else { unreachable!("4 arguments") };
+    let Some(dc) = win32k::gdi::dc::lock(hdc) else {
+        return fail(ERROR_INVALID_HANDLE, win32k::gdi::dc::CLR_INVALID);
+    };
+    NtStatus(win32k::gdi::dc::set_pixel(&dc.state(), x as i32, y as i32, color))
+}
+
 /// NtGdiCreatePatternBrushInternal(hbmp, ...) : HBRUSH, le pinceau à motif
 /// du bitmap `hbmp` (`win32k::gdi::brush::create_pattern`), au processus
 /// courant ; NULL sans bitmap ou sans place.

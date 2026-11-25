@@ -29,18 +29,22 @@
 //! disent `DC_DIBSECTION` quand une DIB section y est choisie : `gdi32` y
 //! dessine alors sans mettre en lot.
 //!
+//! Son stylo est celui de ses attributs (`hpen`, que `gdi32` y choisit
+//! sans appeler le noyau : [`line_pen`], DC_vUpdateLineBrush), BLACK_PEN
+//! pour un DC neuf ; ses traits et ses polygones (`super::shape`) suivent
+//! son mode de mélange (`jROP2`) et de remplissage (`lFillMode`).
+//!
 //! Pas encore : les régions de méta
 //! (SetMetaRgn), ExcludeClipRect, IntersectClipRect, OffsetClipRgn,
 //! GetClipRgn, les transformations (le DC est en MM_TEXT, ses matrices à
-//! zéro), les stylos (`hpen` reste nul), les DC d'un autre propriétaire
-//! que le processus courant.
+//! zéro), les DC d'un autre propriétaire que le processus courant.
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::mem::{offset_of, size_of};
 use core::sync::atomic::{AtomicBool, Ordering};
 
-use abi::gdi::dirty::{DC_BRUSH_DIRTY, DC_DIBSECTION, DIRTY_FILL, DIRTY_LINE};
+use abi::gdi::dirty::{DC_BRUSH_DIRTY, DC_DIBSECTION, DC_PEN_DIRTY, DIRTY_FILL, DIRTY_LINE};
 use abi::gdi::{
     objt, rgn, stock, BrushAttr32, DcAttr32, RgnAttr32, ATTR_RGN_VALID, ERROR, LO_BITMAP_TYPE, LO_DC_TYPE, SIMPLEREGION,
 };
@@ -487,7 +491,7 @@ pub fn take(handle: u32, dc: &Dc, vis: Region, origin: (i32, i32)) -> Result<(),
     let attrs = DcAttr32 {
         vis_rect_region: state.vis_rect_region(),
         lfnt_new: super::brush::stock_object(stock::SYSTEM_FONT),
-        ..DcAttr32::initial(white, 0, width, height)
+        ..DcAttr32::initial(white, super::brush::stock_object(stock::BLACK_PEN), width, height)
     };
     let written = copy_to_user(u64::from(attr), attrs.as_bytes()).and_then(|()| handles::set_owner(handle, pid, attr));
     if let Err(status) = written {
@@ -601,7 +605,7 @@ pub fn create_memory_dc() -> Result<u32, NtStatus> {
     let attrs = DcAttr32 {
         vis_rect_region: state.vis_rect_region(),
         lfnt_new: super::brush::stock_object(stock::SYSTEM_FONT),
-        ..DcAttr32::initial(white, 0, width, height)
+        ..DcAttr32::initial(white, super::brush::stock_object(stock::BLACK_PEN), width, height)
     };
     let dc = Arc::new(Dc { state: KSpinLock::new(state), saves: KSpinLock::new(Vec::new()), memory: true });
     let inserted = copy_to_user(u64::from(attr), attrs.as_bytes())
@@ -886,13 +890,63 @@ pub fn select_pen(dc: &Dc, hpen: u32) -> Option<u32> {
     Some(dc.change(|state| state.pen.replace((hpen, *pen)).map_or(0, |(old, _)| old)))
 }
 
+/// Le stylo `handle`, s'il est au processus courant ou public.
+fn resolve_pen(handle: u32) -> Option<super::pen::Pen> {
+    handles::pen(handle, current_pid()).map(|pen| *pen)
+}
+
+/// DC_vUpdateLineBrush : le stylo du DC. Quand ses attributs le demandent
+/// (`DIRTY_LINE | DC_PEN_DIRTY` : SelectObject de `gdi32` y a écrit un
+/// autre `hpen` sans appeler le noyau), leur stylo devient celui du DC — un
+/// handle qui n'est pas un stylo du processus ou public laisse l'ancien —,
+/// et ces bits sont retirés. Sans stylo, le noir d'un pixel.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, dans le processus du DC, sans rien tenir.
+pub fn line_pen(dc: &Dc) -> super::pen::Pen {
+    if let Some((_, attr)) = dc.state().owner {
+        let mut head = [0u8; offset_of!(DcAttr32, hpen) + 4];
+        if copy_from_user(&mut head, u64::from(attr)).is_ok() {
+            let word = |at: usize| u32::from_le_bytes([head[at], head[at + 1], head[at + 2], head[at + 3]]);
+            let (dirty, hpen) = (word(offset_of!(DcAttr32, dirty)), word(offset_of!(DcAttr32, hpen)));
+            if dirty & (DIRTY_LINE | DC_PEN_DIRTY) != 0 {
+                if let Some(pen) = resolve_pen(hpen) {
+                    dc.change(|state| state.pen = Some((hpen, pen)));
+                }
+                let _ = change_dirty(attr, 0, DIRTY_LINE | DC_PEN_DIRTY);
+            }
+        }
+    }
+    dc.state().pen.map_or(super::pen::Pen::BLACK, |(_, pen)| pen)
+}
+
+/// Le mode de mélange (`jROP2`, SetROP2 ; R2_COPYPEN sans attributs) et le
+/// mode de remplissage des polygones (`lFillMode`, SetPolyFillMode : ce que
+/// `gdi32` écrit ; le noyau de ReactOS lit `jFillMode`, que personne n'y
+/// change) du DC d'état `state`, lus dans ses attributs.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, dans le processus du DC.
+pub fn draw_modes(state: &DcState) -> (u8, super::polyfill::FillMode) {
+    use super::polyfill::FillMode;
+    let read = |field: usize, bytes: &mut [u8]| {
+        let (_, attr) = state.owner?;
+        copy_from_user(bytes, u64::from(attr) + field as u64).ok()
+    };
+    let mut rop2 = [abi::gdi::R2_COPYPEN];
+    let _ = read(offset_of!(DcAttr32, rop2), &mut rop2);
+    let mut mode = abi::gdi::ALTERNATE.to_le_bytes();
+    let _ = read(offset_of!(DcAttr32, fill_mode), &mut mode);
+    (rop2[0], FillMode::from_mode(i32::from_le_bytes(mode)))
+}
+
 /// La position courante du DC `state` (`ptlCurrent`, en coordonnées
 /// logiques) : dans ses attributs chez son propriétaire, où MoveToEx de
 /// `gdi32` l'écrit sans appeler le noyau ; celle du noyau sans attributs.
 ///
 /// # IRQL
 /// PASSIVE_LEVEL.
-fn current_position(state: &DcState) -> (i32, i32) {
+pub fn current_position(state: &DcState) -> (i32, i32) {
     let Some((_, attr)) = state.owner else { return state.position };
     let mut bytes = [0u8; 8];
     if copy_from_user(&mut bytes, u64::from(attr) + offset_of!(DcAttr32, current) as u64).is_err() {
@@ -908,7 +962,7 @@ fn current_position(state: &DcState) -> (i32, i32) {
 ///
 /// # IRQL
 /// PASSIVE_LEVEL.
-fn set_current_position(dc: &Dc, (x, y): (i32, i32)) {
+pub fn set_current_position(dc: &Dc, (x, y): (i32, i32)) {
     use abi::gdi::dirty::{DIRTY_PTFXCURRENT, DIRTY_PTLCURRENT, DIRTY_STYLESTATE};
     let owner = dc.change(|state| {
         state.position = (x, y);
@@ -943,27 +997,29 @@ pub fn move_to(dc: &Dc, x: i32, y: i32, out: u32) -> Option<(i32, i32)> {
 
 /// LineTo (IntGdiLineTo) : le trait de la position courante
 /// ([`current_position`] : celle que MoveToEx de `gdi32` a écrite dans les
-/// attributs du DC) à `(x, y)` (coordonnées logiques), du stylo du DC — le
-/// noir d'un pixel sans stylo choisi —, où il peut peindre (`prgnRao`,
-/// comme [`paint`]) ; la position devient `(x, y)`. `false` sans DC ou sans
-/// où dessiner.
+/// attributs du DC) à `(x, y)` (coordonnées logiques), sans son dernier
+/// pixel (IntEngLineTo), du stylo du DC ([`line_pen`]) par son mode de
+/// mélange ([`draw_modes`]), où il peut peindre (`prgnRao`, comme
+/// [`paint`]) ; la position devient `(x, y)`. `false` sans DC ou sans où
+/// dessiner.
 ///
 /// # IRQL
 /// PASSIVE_LEVEL, sans rien tenir.
 pub fn line_to(dc: &Dc, x: i32, y: i32) -> bool {
+    let pen = line_pen(dc);
     let state = dc.state();
     let (dx, dy) = logical_origin(&state, None);
     let position = current_position(&state);
     // Any coordinates the caller gives (see Bitmap::draw_line).
     let from = (position.0.saturating_add(dx), position.1.saturating_add(dy));
     let to = (x.saturating_add(dx), y.saturating_add(dy));
-    let pen = state.pen.as_ref().map_or(super::pen::Pen::BLACK, |(_, pen)| *pen);
+    let (rop2, _) = draw_modes(&state);
     let rao = state.rao();
     if rao.is_empty() {
         return false;
     }
     let parts: alloc::vec::Vec<Rect> = rao.rects().to_vec();
-    let drew = state.draw(|surface| surface.draw_line(from, to, &pen, &parts));
+    let drew = state.draw(|surface| surface.draw_segment(from, to, &pen, rop2, &parts));
     drop(state);
     set_current_position(dc, (x, y));
     drew
@@ -1062,32 +1118,34 @@ pub fn paint(state: &DcState, rect: Rect, rop: u32, fill: &Fill) {
     }
 }
 
+/// Un trait, de son premier point à son dernier (exclu).
+pub type Segment = ((i32, i32), (i32, i32));
+
 /// Les parties d'un Rectangle de (`left`, `top`) à (`right`, `bottom`)
-/// (bords en tout ordre, la droite et le bas exclus) : son intérieur, s'il
-/// en a un, et ses quatre bords d'un pixel (haut, bas, gauche, droite) ;
-/// aucun pour un rectangle vide.
-pub fn rectangle_parts(left: i32, top: i32, right: i32, bottom: i32) -> (Option<Rect>, alloc::vec::Vec<Rect>) {
+/// (bords en tout ordre), comme IntRectangle en GM_COMPATIBLE : le
+/// rectangle sans sa colonne de droite ni sa ligne du bas, que le pinceau
+/// remplit, et les quatre traits de son contour, du coin en haut à gauche
+/// dans le sens des aiguilles d'une montre (chacun sans son dernier pixel :
+/// ensemble, le bord du rectangle entier, droite et bas compris).
+pub fn rectangle_parts(left: i32, top: i32, right: i32, bottom: i32) -> (Rect, [Segment; 4]) {
     let (left, right) = (left.min(right), left.max(right));
     let (top, bottom) = (top.min(bottom), top.max(bottom));
-    if right == left || bottom == top {
-        return (None, alloc::vec::Vec::new());
-    }
-    let inside = Rect::new(left + 1, top + 1, right - 1, bottom - 1);
-    let edges = alloc::vec![
-        Rect::new(left, top, right, top + 1),
-        Rect::new(left, bottom - 1, right, bottom),
-        Rect::new(left, top, left + 1, bottom),
-        Rect::new(right - 1, top, right, bottom),
+    let (right, bottom) = (right.saturating_sub(1), bottom.saturating_sub(1));
+    let outline = [
+        ((left, top), (right, top)),
+        ((right, top), (right, bottom)),
+        ((right, bottom), (left, bottom)),
+        ((left, bottom), (left, top)),
     ];
-    (Some(inside).filter(|rect| !rect.is_empty()), edges)
+    (Rect::new(left, top, right, bottom), outline)
 }
 
-/// NtGdiRectangle : sur le DC `hdc`, le rectangle de (`left`, `top`) à
-/// (`right`, `bottom`) ([`rectangle_parts`]) : son intérieur prend le
-/// pinceau du DC, son contour le stylo. Pas encore de stylos : le contour
-/// est d'un pixel, noir (BLACK_PEN, le stylo d'un nouveau DC, et celui de
-/// COLOR_WINDOWFRAME que les boutons de `user32` choisissent). `Err` :
-/// l'erreur de Win32.
+/// NtGdiRectangle (IntRectangle) : sur le DC `hdc`, le rectangle de
+/// (`left`, `top`) à (`right`, `bottom`) (coordonnées logiques,
+/// [`rectangle_parts`]) : il prend le pinceau du DC (PATCOPY), son contour
+/// le stylo du DC ([`line_pen`]) par son mode de mélange ; un stylo nul ne
+/// trace rien, et le rectangle rempli s'arrête alors avant sa droite et son
+/// bas. `Err` : l'erreur de Win32.
 ///
 /// # IRQL
 /// PASSIVE_LEVEL, dans un service système, sans rien tenir.
@@ -1095,16 +1153,24 @@ pub fn rectangle(hdc: u32, left: i32, top: i32, right: i32, bottom: i32) -> Resu
     let dc = lock(hdc).ok_or(abi::winerror::ERROR_INVALID_HANDLE)?;
     let Some((_, attr)) = dc.state().owner else { return Ok(false) };
     let brush = fill_brush(&dc, attr, None, false).ok().flatten();
+    let pen = line_pen(&dc);
     let state = dc.state();
     let (dx, dy) = logical_origin(&state, None);
-    let moved = |rect: Rect| Rect::new(rect.left + dx, rect.top + dy, rect.right + dx, rect.bottom + dy);
-    let (inside, edges) = rectangle_parts(left, top, right, bottom);
-    if let (Some(inside), Some(brush)) = (inside, brush) {
-        paint(&state, moved(inside), abi::gdi::rop::PATCOPY, &fill_of(&state, &brush, None));
+    let moved = |(x, y): (i32, i32)| (x.saturating_add(dx), y.saturating_add(dy));
+    let (inside, outline) = rectangle_parts(left, top, right, bottom);
+    let (corner, far) = (moved((inside.left, inside.top)), moved((inside.right, inside.bottom)));
+    if let Some(brush) = brush {
+        let inside = Rect::new(corner.0, corner.1, far.0, far.1);
+        paint(&state, inside, abi::gdi::rop::PATCOPY, &fill_of(&state, &brush, None));
     }
-    let pen = Fill::Solid(ColorRef(0));
-    for edge in edges {
-        paint(&state, moved(edge), abi::gdi::rop::PATCOPY, &pen);
+    if !pen.is_null() {
+        let (rop2, _) = draw_modes(&state);
+        let parts: alloc::vec::Vec<Rect> = state.rao().rects().to_vec();
+        state.draw(|surface| {
+            for (from, to) in outline {
+                surface.draw_segment(moved(from), moved(to), &pen, rop2, &parts);
+            }
+        });
     }
     Ok(true)
 }
@@ -1310,6 +1376,31 @@ pub fn get_pixel(state: &DcState, x: i32, y: i32) -> u32 {
     color
 }
 
+/// NtGdiSetPixel : le point logique (`x`, `y`) du DC ([`logical_origin`])
+/// prend la couleur `color` sur sa surface (l'écran ou son bitmap), s'il
+/// tombe là où le DC peint (`prgnRao`) ; rend cette couleur (sans son octet
+/// haut) — aussi quand le point tombe ailleurs, comme ReactOS, dont
+/// IntPatBlt réussit sur un rectangle coupé —, ou [`CLR_INVALID`] pour un DC
+/// sans surface (le bitmap par défaut d'un DC en mémoire).
+///
+/// # IRQL
+/// PASSIVE_LEVEL, dans le processus du DC.
+pub fn set_pixel(state: &DcState, x: i32, y: i32, color: u32) -> u32 {
+    let color = ColorRef(color & 0x00FF_FFFF);
+    let target = pixel_of(state, x, y);
+    let drew = state.draw(|surface| {
+        if let Some((column, row)) = target {
+            let pixel = surface.layout().pixel(color);
+            surface.mix_pixel(column, row, pixel, super::dib::PATCOPY);
+        }
+    });
+    if drew {
+        color.0
+    } else {
+        CLR_INVALID
+    }
+}
+
 /// Le pixel de la surface du point logique (`x`, `y`) du DC, s'il tombe là
 /// où le DC peint.
 fn pixel_of(state: &DcState, x: i32, y: i32) -> Option<(u32, u32)> {
@@ -1398,16 +1489,31 @@ mod tests {
     }
 
     #[test]
-    fn a_rectangle_has_an_inside_and_four_one_pixel_edges() {
-        let (inside, edges) = rectangle_parts(10, 20, 40, 30);
-        assert_eq!(inside, Some(Rect::new(11, 21, 39, 29)));
-        assert_eq!(edges[0], Rect::new(10, 20, 40, 21), "the top");
-        assert_eq!(edges[1], Rect::new(10, 29, 40, 30), "the bottom: the bottom edge excluded");
-        assert_eq!(edges[2], Rect::new(10, 20, 11, 30), "the left");
-        assert_eq!(edges[3], Rect::new(39, 20, 40, 30), "the right");
-        assert_eq!(rectangle_parts(40, 30, 10, 20).0, inside, "edges in any order");
-        assert_eq!(rectangle_parts(10, 20, 12, 30).0, None, "two pixels wide: no inside");
-        assert!(rectangle_parts(10, 20, 10, 30).1.is_empty(), "empty");
+    fn a_rectangle_is_filled_short_of_its_right_and_bottom_and_outlined_all_round() {
+        let (inside, outline) = rectangle_parts(10, 20, 40, 30);
+        assert_eq!(inside, Rect::new(10, 20, 39, 29), "without the right column and the bottom row");
+        assert_eq!(rectangle_parts(40, 30, 10, 20), (inside, outline), "corners in any order");
+        // The outline, each line without its last pixel: the border of the
+        // whole rectangle, each pixel once (R2_NOT twice would undo it).
+        let mut pixels = alloc::vec![0u32; 64 * 40];
+        {
+            let mut surface = Bitmap::new(&mut pixels, 64, 40, 64, super::super::dib::PixelLayout::Bgrx).unwrap();
+            surface.fill_rect(inside, ColorRef(0xFF));
+            let pen = super::super::pen::Pen::BLACK;
+            for (from, to) in outline {
+                surface.draw_segment(from, to, &pen, abi::gdi::R2_NOT, &[Rect::new(0, 0, 64, 40)]);
+            }
+        }
+        let at = |x: usize, y: usize| pixels[y * 64 + x];
+        let (red, inverted_red, inverted_black) = (0x00FF_0000, 0x0000_FFFF, 0x00FF_FFFF);
+        assert_eq!((at(10, 20), at(38, 20), at(10, 28)), (inverted_red, inverted_red, inverted_red), "top, left");
+        assert_eq!(
+            (at(39, 20), at(39, 29), at(10, 29)),
+            (inverted_black, inverted_black, inverted_black),
+            "right, bottom"
+        );
+        assert_eq!((at(11, 21), at(38, 28)), (red, red), "the inside");
+        assert_eq!((at(40, 25), at(25, 30), at(9, 25)), (0, 0, 0), "nothing outside");
     }
 
     #[test]
