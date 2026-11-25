@@ -23,6 +23,7 @@ pub mod devcaps;
 pub mod dib;
 pub mod dibits;
 pub mod draw;
+pub mod escape;
 pub mod fontobj;
 pub mod handles;
 pub mod object;

@@ -1,19 +1,27 @@
 # M8 spike: a Direct3D 9 triangle (tests/native/d3d1.c) through the pinned
-# ReactOS stack: d3d9, Wine's wined3d (d3dwine.dll), opengl32.dll's Mesa
-# software renderer (docs/compat/m8-direct3d.md). What works today, a floor:
-# wined3d makes its hidden window (a class found from a null instance) and a
-# GL context on it (WindowFromDC, NtGdiGetDCDword(GdiGetIsMemDc)), reads the
-# GL renderer, then finds no pixel format it keeps: all 36 formats of the
-# pinned opengl32 are PFD_GENERIC_FORMAT, which wined3d refuses without
-# WGL_ARB_pixel_format, and Direct3DCreate9 returns NULL. The next step needs
-# a decision (an OpenGL ICD; see the doc). What win32k says of pixel formats,
-# as ReactOS with a framebuffer driver: none described, none set or swapped.
+# ReactOS stack: d3d9, Wine's wined3d (d3dwine.dll), opengl32.dll
+# (docs/compat/m8-direct3d.md). What works today, a floor: win32k announces
+# the display driver's OpenGL ICD (NtGdiExtEscape: QUERYESCSUPPORT, then
+# OPENGL_GETINFO gives "Mesa", ADR-025), opengl32 finds OpenGLDrivers\Mesa
+# (mino.inf) with the same versions and tries mesaicd.dll, not yet on the
+# disk: it keeps its software renderer. wined3d makes its hidden window (a
+# class found from a null instance) and a GL context on it (WindowFromDC,
+# NtGdiGetDCDword(GdiGetIsMemDc)), reads the GL renderer, then finds no pixel
+# format it keeps: all 36 formats of the pinned opengl32 are
+# PFD_GENERIC_FORMAT, which wined3d refuses without WGL_ARB_pixel_format, and
+# Direct3DCreate9 returns NULL. With the ICD on the disk (step 3 of the spike)
+# the floor goes up to the triangle. What win32k says of pixel formats, as
+# ReactOS with a framebuffer driver: none described, none set or swapped.
 features = test-smss, interactive
 requires = userland, native
 initial-command = D3D1.EXE
 cpus = default
 timeout = 300
 expect = [d3d] the probe starts
+expect = [d3d] QUERYESCSUPPORT(OPENGL_GETINFO): 1
+expect = [d3d] OPENGL_GETINFO: 1, Mesa, version 2, driver version 1
+expect = [d3d] QUERYESCSUPPORT(OPENGL_CMD): 0
+expect = Could not load the ICD DLL: mesaicd.dll.
 expect = [d3d] DescribePixelFormat: 36 formats
 expect = [d3d] generic formats: 36 of 36
 expect = using GL_RENDERER "Mesa ReactOS SW Implementation"
@@ -31,4 +39,9 @@ forbid = NtGdiDescribePixelFormat (0x107b) is not implemented
 forbid = NtGdiSetPixelFormat (0x111a) is not implemented
 forbid = NtGdiSwapBuffers (0x1127) is not implemented
 forbid = LdrpMapDll failed
+forbid = NtGdiExtEscape (0x108e) is not implemented
+forbid = Driver claims to support OPENGL_GETINFO escape code
+forbid = Failed to open the OpenGLDrivers key.
+forbid = Unable to get ICD DLL name
+forbid = mismatch between registry
 forbid = *** STOP:

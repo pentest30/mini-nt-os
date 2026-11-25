@@ -149,16 +149,40 @@ privilège ; le `tar` de Windows ne lit pas le xz).
 - Un hôte Linux demanderait une construction croisée de LLVM (`llvm-config` et `tblgen` de l'hôte) : pas encore,
   `icd-build` s'y arrête en le disant.
 
+## L'ICD annoncé par le pilote d'affichage (étape 2 du spike « ICD XP »)
+
+Le chemin ordinaire de l'`opengl32` épinglé (`icdload.c`, IntGetIcdData), sans la clé `HKCU` d'`openglcfg.cpl` :
+
+- **NtGdiExtEscape** (`sys::gdi::nt_gdi_ext_escape`, comme NtGdiExtEscape de ReactOS) passe l'échappement au
+  pilote d'affichage du DC (`win32k::gdi::escape`), qui en répond deux : QUERYESCSUPPORT d'OPENGL_GETINFO (1 si le
+  pilote a un ICD), puis OPENGL_GETINFO (OPENGL_GETINFO_DRVNAME) : `Drv_Opengl_Info` (`abi::gdi::escape`, 532
+  octets : deux ULONG et 261 WCHAR), soit `Mesa`, Version 2, DriverVersion 1. Tout autre échappement rend 0, comme
+  une entrée trop courte ou une sortie trop petite. -1 sans DC, pour une taille négative ou un DC qui n'est pas au
+  processus. Écart : ReactOS recopie toute la sortie (remise à zéro), Mino les seuls octets écrits.
+- **L'ICD du pilote** : `DisplayDriver::opengl_icd` (`win32k::display`), par défaut `OpenglIcd::MESA` — llvmpipe
+  rend en logiciel, sur toute surface : `gopfb` et `bochs-dispi` l'annoncent tous deux.
+- **`tools/mkhive/mino.inf`** écrit `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\OpenGLDrivers\Mesa` :
+  `Dll` = `mesaicd.dll`, `Version` 2, `DriverVersion` 1, `Flags` 1 (seulement tracé). `opengl32` refuse l'ICD si
+  `Version` ou `DriverVersion` diffèrent de ce que dit le pilote (« Version mismatch between registry ») ; la
+  `DriverVersion` va aussi à DrvValidateVersion de l'ICD.
+- **Vérifié** (scénario `d3d9-spike`) : la sonde lit elle-même les deux échappements (1 ; `Mesa`, 2, 1 ;
+  OPENGL_CMD : 0), puis `opengl32` va jusqu'à LoadLibrary de `mesaicd.dll`, absente du disque : « Could not load
+  the ICD DLL: mesaicd.dll. », et il garde son rendu logiciel. Avec `Version` 3 dans `mino.inf`, le scénario
+  échoue (« Version mismatch between registry (3) and display driver (2) », vérifié).
+
 ## Vu en chemin
 
 - NtGdiGetDeviceGammaRamp (0x10ab) n'a pas de handler : wined3d le demande à la création du device et s'en passe.
-- NtGdiExtEscape (0x108e) n'a pas de handler : `opengl32` demande QUERYESCSUPPORT pour OPENGL_GETINFO et, sans
-  réponse, prend son rendu logiciel. À faire si l'on choisit la voie du pilote d'affichage.
+- NtGdiExtEscape (0x108e) n'avait pas de handler : `opengl32` demande QUERYESCSUPPORT pour OPENGL_GETINFO et, sans
+  réponse, prend son rendu logiciel. Fait à l'étape 2 (ci-dessus).
 - Un crochet de type 4 (WH_CALLWNDPROC) est posé par la pile sans être encore appelé par win32k.
 
 ## Le scénario
 
-`d3d9-spike` est un plancher : la sonde démarre, voit les 36 formats génériques, et wined3d lit le renderer de Mesa ;
+`d3d9-spike` est un plancher : la sonde démarre, lit l'ICD annoncé par le pilote (NtGdiExtEscape), `opengl32`
+trouve sa clé et tente de charger `mesaicd.dll`, absente ; la sonde voit les 36 formats génériques, et wined3d lit le
+renderer de Mesa ;
 il vérifie ce que win32k dit des formats de pixel (aucun décrit, posé ni échangé ; un DC en mémoire et un handle
-faux) et interdit les deux échecs corrigés et les cinq services sans handler. Retirer WindowFromDC le fait échouer
+faux) et interdit les deux échecs corrigés, les six services sans handler et les refus d'`opengl32` (clé
+absente, versions différentes, échappement promis sans réponse). Retirer WindowFromDC le fait échouer
 (vérifié). Quand l'ICD sera là, le plancher montera jusqu'au triangle (`screen` sur ses pixels).

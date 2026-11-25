@@ -78,3 +78,13 @@ HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon","AutoAdminLogon",0x
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon","DefaultUserName",0x00000000,"Administrator"
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon","DefaultDomainName",0x00000000,"MINO"
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon","DefaultPassword",0x00000000,""
+
+; L'ICD OpenGL du pilote d'affichage (ADR-025) : win32k le nomme « Mesa »
+; à ExtEscape(OPENGL_GETINFO) ; opengl32 lit ici sa DLL (cargo xtask
+; icd-build) et refuse l'ICD si Version ou DriverVersion diffèrent de ce que
+; dit le pilote (win32k::display::OpenglIcd::MESA). Flags n'est que tracé.
+; Sans le fichier, opengl32 garde son rendu logiciel.
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\OpenGLDrivers\Mesa","Dll",0x00000000,"mesaicd.dll"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\OpenGLDrivers\Mesa","Version",0x00010001,2
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\OpenGLDrivers\Mesa","DriverVersion",0x00010001,1
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\OpenGLDrivers\Mesa","Flags",0x00010001,1

@@ -179,6 +179,15 @@ fn the_mino_layer_installs_a_system_that_logs_on() {
     // The setup loader of OpenOffice loads msi.dll from there only.
     let installer = value(software, "Microsoft\\Windows\\CurrentVersion\\Installer", "InstallerLocation").unwrap();
     assert_eq!((installer.data_type, installer.data.clone()), (REG_SZ, sz("C:\\WINDOWS\\system32")));
+    // The display driver's OpenGL ICD (ADR-025): opengl32 refuses it when the
+    // versions differ from what win32k's OPENGL_GETINFO says (Version 2,
+    // DriverVersion 1).
+    let mesa = "Microsoft\\Windows NT\\CurrentVersion\\OpenGLDrivers\\Mesa";
+    let dll = value(software, mesa, "Dll").unwrap();
+    assert_eq!((dll.data_type, dll.data.clone()), (REG_SZ, sz("mesaicd.dll")));
+    assert_eq!(value(software, mesa, "Version").unwrap().data, dword(2));
+    assert_eq!(value(software, mesa, "DriverVersion").unwrap().data, dword(1));
+    assert_eq!(value(software, mesa, "Flags").unwrap().data, dword(1));
 }
 
 /// The pinned ReactOS hives (`cargo xtask fetch-userland`), layered as

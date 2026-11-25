@@ -8,6 +8,9 @@
 #include <d3d9.h>
 
 #define TAG "[d3d] "
+/* The display driver escapes of the pinned winddi.h. */
+#define OPENGL_CMD_CODE 4352
+#define OPENGL_GETINFO_CODE 4353
 
 typedef struct {
     float x, y, z, rhw;
@@ -67,6 +70,28 @@ DWORD WINAPI GuiStartup(void)
                            wc.hInstance, 0);
     if (!hwnd) finish("FAIL CreateWindow");
     pump(500);
+
+    /* How opengl32 finds the display driver's ICD (ADR-025, icdload.c):
+       QUERYESCSUPPORT of OPENGL_GETINFO, then OPENGL_GETINFO_DRVNAME, whose
+       name opengl32 looks up under OpenGLDrivers (mino.inf). */
+    {
+        HDC dc = GetDC(hwnd);
+        DWORD query = OPENGL_GETINFO_CODE, drvname = 0;
+        struct {
+            ULONG Version, DriverVersion;
+            WCHAR DriverName[MAX_PATH + 1];
+        } info;
+        int ret = ExtEscape(dc, QUERYESCSUPPORT, sizeof(query), (LPCSTR)&query, 0, 0);
+        DbgPrint(TAG "QUERYESCSUPPORT(OPENGL_GETINFO): %d\n", ret);
+        memset(&info, 0, sizeof(info));
+        ret = ExtEscape(dc, OPENGL_GETINFO_CODE, sizeof(drvname), (LPCSTR)&drvname, sizeof(info), (LPSTR)&info);
+        DbgPrint(TAG "OPENGL_GETINFO: %d, %ls, version %lu, driver version %lu\n", ret, info.DriverName,
+                 info.Version, info.DriverVersion);
+        query = OPENGL_CMD_CODE;
+        ret = ExtEscape(dc, QUERYESCSUPPORT, sizeof(query), (LPCSTR)&query, 0, 0);
+        DbgPrint(TAG "QUERYESCSUPPORT(OPENGL_CMD): %d\n", ret);
+        ReleaseDC(hwnd, dc);
+    }
 
     /* The pixel formats the window's DC offers (opengl32's Mesa): wined3d
        keeps none that is PFD_GENERIC_FORMAT when it has no
