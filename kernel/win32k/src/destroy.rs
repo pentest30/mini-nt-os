@@ -124,6 +124,9 @@ fn destroy(window: &Arc<Window>, current: &Arc<ThreadInfo>, mode: Mode) {
         }
     }
 
+    // The shell drops its button, even for a thread that ends.
+    crate::shellhook::window_destroyed(window);
+
     // Hidden: what it uncovers is painted again.
     if state.style & WS_VISIBLE != 0 && window.is_alive() {
         if !messages {

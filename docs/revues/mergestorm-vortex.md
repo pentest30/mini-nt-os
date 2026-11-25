@@ -38,9 +38,13 @@ traite l'une d'elles y ajoute la section de sa PR (voir « Ajouter une évaluati
 | [162](https://github.com/pentest30/mini-nt-os/pull/162) | 1 | 1 | 0 | 0 | 0 | 0 | 0 |
 | [163](https://github.com/pentest30/mini-nt-os/pull/163) | 2 | 0 | 1 | 0 | 0 | 1 | 0 |
 | [164](https://github.com/pentest30/mini-nt-os/pull/164) | 6 | 2 | 2 | 0 | 0 | 2 | 0 |
-| **Total** | **95** | **53** | **11** | **4** | **3** | **24** | **6** |
+| [174](https://github.com/pentest30/mini-nt-os/pull/174) | 3 | 3 | 0 | 0 | 0 | 0 | 0 |
+| [176](https://github.com/pentest30/mini-nt-os/pull/176) | 2 | 1 | 0 | 0 | 1 | 0 | 0 |
+| [177](https://github.com/pentest30/mini-nt-os/pull/177) | 1 | 0 | 0 | 0 | 0 | 1 | 0 |
+| **Total** | **101** | **57** | **11** | **4** | **4** | **25** | **6** |
 
-Toutes les remarques jusqu'à la PR 157 sont évaluées, puis celles des PR 158 à 164. Les remarques de Vortex sur la PR
+Toutes les remarques jusqu'à la PR 157 sont évaluées, puis celles des PR 158 à 164 et 173 à 178 ; sur les PR 173,
+175 et 178, Vortex n'avait rien à corriger et Codex aucune remarque. Les remarques de Vortex sur la PR
 160 à `f623515` et `dd65dcd` ne sont pas encore dans sa section.
 
 Ce qui ressort :
@@ -372,5 +376,39 @@ PR 161.
 | `kernel/win32k/src/window.rs:639` | SetWindowLong(GWLP_WNDPROC) d'une procédure d'appel remplace `ansi` par le jeu de la procédure donnée avant de calculer l'ancienne : un appelant ANSI qui rend une procédure Unicode par un handle `CPD_A2U` reçoit l'ancienne procédure vue en Unicode. | Fondé | IntSetWindowProc de ReactOS prend l'ancienne (IntGetWindowProc, avec l'`Ansi` de l'appelant) avant de lire le jeu de la procédure d'appel ; Mino passait le jeu remplacé à `replace_procedure` et à `seen_by_client`. À l'étape 5 de `ansictl1.c`, SetWindowLongA qui rend la procédure d'appel recevait une procédure d'appel de la sous-classe ANSI, et non la sous-classe elle-même. | `48460d8` (PR 161) : `replace_procedure` prend le jeu de l'appelant (`caller_ansi`) pour l'ancienne procédure ; test hôte `the_old_procedure_is_seen_in_the_callers_set`, étape 5 de `ansictl1.c` (vérifié par mutation). |
 | `kernel/win32k/src/window.rs:2094` (Codex, P2) | La même que sur la PR 163 (RegisterClassA d'une procédure d'appel). | Sans suite | Redite de la PR 163. | Aucune. |
 | `kernel/win32k/src/window.rs:637` (Codex, P2) | La même que celle de Vortex sur `window.rs:639`. | Fondé | Voir plus haut. | `48460d8` (PR 161). |
+
+Aucun défaut manqué vérifié.
+
+## PR 174 : les bitmaps de 24 bits et les DIB sections de 1 bit
+
+Commit relu par les bots : `cbb4631`. Évalué le 2026-11-23. Vortex a posté deux remarques, Codex une (P2).
+
+| Où | Remarque | Verdict | Pourquoi | Suite |
+|---|---|---|---|---|
+| `docs/compat/applications.md:806` | Les temps du parcours de PeaZip (l'archive ouverte en 26 s, extraite en 67 s, le scénario en 287 s), repris par `docs/passation.md`, ne sont pas ceux de la description de la PR (4 s, 27 s, 180 s) : les accorder sur un seul run. | Fondé | Les deux jeux de chiffres viennent de runs différents, et aucun n'est daté. Un run de la branche corrigée (AMD) donne « route step: opened, after 21 s », « extracted, after 63 s », et 306 s pour le scénario : la doc était proche, la description venait d'un run plus rapide. | `0179f84` : la doc et la passation donnent les temps de ce run, comptés depuis le début du parcours. |
+| `kernel/win32k/src/gdi/dibits.rs:529` | GetDIBits de 1 bit met le bit d'après la couleur du pixel (`to_monochrome(...) == WHITE`), et non d'après son index : une DIB section de 1 bit dont la table est blanc puis noir revient inversée, puisque `get_dibits` rend sa table. Prendre `nearest_index(palette, …)`, comme en 4 et 8 bits, et tester une table inversée. | Fondé | `get_dibits` rend la table d'une surface `Format::Indexed` de la même profondeur ; la branche 1 bit d'`encode_lines` l'ignorait. ReactOS traduit vers la table de la DIB par la couleur la plus proche (GreGetDIBitsInternal, EXLATEOBJ_iXlateRGBtoPal ; CreateDIBPalette fait une palette `PAL_INDEXED`, pas `PAL_MONOCHROME`). Sur la table par défaut (noir, blanc), `nearest_index` et `to_monochrome` ne diffèrent que pour une somme des composantes de 383. | `0179f84` : `nearest_index` pour 1 bit aussi ; test hôte `a_one_bit_dib_takes_the_index_of_its_table`, qui échoue sans le correctif (vérifié). `bitmap-24`, `icons`, `cursor`, `notepad-saveas` (AMD, Intel) et `app-peazip` passent. |
+| `kernel/win32k/src/gdi/surface.rs:504` (Codex, P2) | La même. | Fondé | Voir plus haut. | `0179f84`. |
+
+Aucun défaut manqué vérifié.
+
+## PR 176 : la fenêtre de PeaZip et sa fermeture
+
+Commit relu par les bots : `edaafb9`, avec les PR 173 et 174 qu'elle contient. Évalué le 2026-11-23. Vortex a posté
+une remarque, Codex une (P2), sur le code de la PR 174.
+
+| Où | Remarque | Verdict | Pourquoi | Suite |
+|---|---|---|---|---|
+| `kernel/win32k/src/gdi/dc.rs:324` | Le verrou de RestoreDC corrigé sans test qui l'aurait détecté, alors que la description dit que la PR ne corrige aucun bogue : ajouter un test hôte de RestoreDC avec un propriétaire, ou ne plus dire que c'est un correctif. | Faux | Le correctif est celui de la PR 173 (`183d5eb`), fusionnée sous cette branche ; son test est dans le diff relu : le scénario `save-restore-dc` (`tests/native/savedc1.c`, AMD et Intel : SaveDC et RestoreDC sur un DC de fenêtre et un DC en mémoire), qui se fige sans le correctif (vérifié sur la PR 173). La description parle des commits propres à la PR 176. Un test hôte ne le peut pas : le gel vient de `copy_to_user` vers le propriétaire, verrou tenu. | Aucune. |
+| `kernel/win32k/src/gdi/surface.rs:504` (Codex, P2) | GetDIBits de 1 bit ignore la table de la DIB section. | Fondé | Redite de la PR 174. | `0179f84` (PR 174), fusionné dans la PR 176 (`22d4048`). |
+
+Aucun défaut manqué vérifié.
+
+## PR 177 : le DC du parent (les textes de msiexec)
+
+Commit relu par Vortex : `d7a32a0`. Évalué le 2026-11-23. Une remarque ; Codex n'en a pas posté.
+
+| Où | Remarque | Verdict | Pourquoi | Suite |
+|---|---|---|---|---|
+| `kernel/win32k/src/dce.rs:253` | La région d'un DC `DCX_PARENTCLIP` est celle du parent entier, pas coupée au rectangle de la fenêtre, alors que le DC est à l'origine de la fenêtre : ce qu'on y peint (WM_ERASEBKGND d'un pinceau non nul, du texte) sort de la fenêtre ; la couper à sa zone cliente (ou à la fenêtre avec `DCX_WINDOW`). | Sans suite | C'est ce que fait ReactOS : DceUpdateVisRgn prend `DceGetVisRgn(Parent, …)` et ne le coupe qu'à `hrgnClip` ; DceSetDrawable pose l'origine et `erclWindow`, qui ne coupe rien (CLIPPING_UpdateGCRegion ne le lit pas). Win32 le documente pour `CS_PARENTDC` : l'enfant peut peindre sur son parent. L'exemple ne tient pas : le DC de WM_ERASEBKGND et celui de BeginPaint sont coupés à la région à repeindre de la fenêtre (`DCX_INTERSECTRGN`, `paint::erase_background`, `paint::begin_paint`), et DefWindowProc de `user32` efface la zone cliente, pas la boîte du DC, pour une classe `CS_PARENTDC` (« can't use GetClipBox with a parent DC »). | Aucune. Le test de la région est le scénario `msi-dialog-text`. |
 
 Aucun défaut manqué vérifié.

@@ -703,6 +703,19 @@ pub fn lock(hdc: u32) -> Option<Arc<Dc>> {
     }
 }
 
+/// NtGdiGetDCDword(GdiGetIsMemDc) : le type du DC `hdc` du processus
+/// (`dctype` de ReactOS : 0 DCTYPE_DIRECT, 1 DCTYPE_MEMORY), et sa
+/// profondeur de sauvegardes (GdiGetEMFRestorDc, `dclevel.lSaveDepth`) ;
+/// `None` pour un DC qui n'est pas au processus.
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn kind_and_save_depth(hdc: u32) -> Option<(u32, u32)> {
+    let dc = lock(hdc)?;
+    let depth = dc.saves.lock().len() as u32;
+    Some((u32::from(dc.memory), depth))
+}
+
 /// NtGdiSaveDC : l'état du DC `hdc` posé sur sa pile de sauvegardes ; rend
 /// son identifiant (1 : la première pose), 0 pour un DC qui n'est pas au
 /// processus (`ERROR_INVALID_HANDLE`).

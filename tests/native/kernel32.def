@@ -8,6 +8,12 @@ CheckRemoteDebuggerPresent@8
 OpenProcess@12
 CancelIo@4
 CloseHandle@4
+LocalFree@4
+GetFileAttributesExW@12
+DeleteFileW@4
+TerminateThread@8
+ExitThread@4
+GetExitCodeThread@8
 ConnectNamedPipe@8
 CopyFileW@12
 CreateDirectoryW@8

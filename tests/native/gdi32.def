@@ -61,3 +61,4 @@ PolylineTo@12
 SetPixel@16
 SetPolyFillMode@8
 SetROP2@8
+DescribePixelFormat@16

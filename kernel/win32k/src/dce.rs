@@ -497,6 +497,17 @@ fn set_free(hdc: u32) -> Option<u32> {
     clip_region
 }
 
+/// IntWindowFromDC : la fenêtre du DC `hdc` du cache (celle de sa dernière
+/// prise ; 0 si elle n'en a pas ou que ce n'est pas un DC du cache).
+/// WindowFromDC la demande (ONEPARAM_ROUTINE_WINDOWFROMDC) ; `opengl32` y
+/// distingue le DC d'une fenêtre d'un DC en mémoire.
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn window_from_dc(hdc: u32) -> u32 {
+    CACHE.lock().iter().find(|entry| entry.hdc == hdc).map_or(0, |entry| entry.window)
+}
+
 /// UserReleaseDC : le DC `hdc` du cache, pris par le processus courant,
 /// retourne au repos et n'est plus à personne ; la région d'un client qui
 /// le coupait est supprimée (sauf `DCX_KEEPCLIPRGN`). `false` pour un DC

@@ -14,6 +14,12 @@
 //! quand l'une disparaît, l'autre est déconnectée (`STATUS_PORT_DISCONNECTED`).
 //! La file compte ses messages dans un sémaphore ; le noyau peut y mettre un
 //! datagramme ([`Port::request`], LpcRequestPort).
+//!
+//! La section que le client partage est projetée chez le serveur quand il
+//! accepte ; son port de communication garde de quoi défaire cette vue
+//! ([`Port::set_view_release`]), ce que fait sa disparition (LpcpDeletePort :
+//! `ClientSectionBase`, `MappingProcess`). Sans cela, chaque client de `csrss`
+//! lui laissait sa section, ses pages comprises.
 
 use alloc::boxed::Box;
 use alloc::collections::VecDeque;
@@ -124,7 +130,15 @@ pub struct Port {
     queue: KSpinLock<VecDeque<Message>>,
     /// Compte les messages en file ; qui reçoit l'attend.
     semaphore: *mut KSemaphore,
+    /// Ce qui défait la vue de la section du client chez le serveur (un port
+    /// de communication du serveur), à sa disparition.
+    view_release: KSpinLock<Option<ViewRelease>>,
 }
+
+/// Défait la vue de la section d'un client chez son serveur : la vue et son
+/// processus, que garde l'appelant de [`Port::set_view_release`] (Lpc ne
+/// connaît pas Ps).
+pub type ViewRelease = Box<dyn FnOnce() + Send>;
 
 // SAFETY: Ke ne touche au sémaphore que sous le verrou dispatcher ; le
 // pointeur ne change pas ; la file et les liens sont sous leurs verrous.
@@ -155,6 +169,7 @@ impl Port {
                 context: AtomicU32::new(0),
                 queue: KSpinLock::new(VecDeque::new()),
                 semaphore,
+                view_release: KSpinLock::new(None),
             },
         )
     }
@@ -342,8 +357,30 @@ impl Port {
     }
 }
 
+impl Port {
+    /// La vue de la section du client chez le serveur sera défaite par
+    /// `release` quand ce port (de communication du serveur) disparaîtra ;
+    /// une précédente l'est tout de suite.
+    ///
+    /// # IRQL
+    /// PASSIVE_LEVEL.
+    pub fn set_view_release(&self, release: ViewRelease) {
+        let previous = self.view_release.lock().replace(release);
+        if let Some(previous) = previous {
+            previous();
+        }
+    }
+}
+
 impl Drop for Port {
+    /// LpcpDeletePort : la vue du client chez le serveur défaite (le dernier
+    /// handle et la dernière référence au port sont rendus à PASSIVE_LEVEL :
+    /// NtClose, la fin d'un processus).
     fn drop(&mut self) {
+        let release = self.view_release.lock().take();
+        if let Some(release) = release {
+            release();
+        }
         // SAFETY: alloué par `new` ; l'objet meurt, et qui l'attendait le
         // tenait.
         drop(unsafe { Box::from_raw(self.semaphore) });
@@ -361,6 +398,30 @@ mod tests {
         assert_eq!((port.kind(), port.server_pid()), (PortKind::Connection, 16));
         assert_eq!(Port::create(0x149, 0x130, 16).err(), Some(STATUS_INVALID_PARAMETER_3));
         assert_eq!(Port::create(0x28, 0x149, 16).err(), Some(STATUS_INVALID_PARAMETER_4));
+    }
+
+    #[test]
+    fn the_clients_view_goes_with_the_servers_port() {
+        use alloc::sync::Arc as StdArc;
+        use core::sync::atomic::AtomicBool;
+        let released = StdArc::new(AtomicBool::new(false));
+        let port = Port::create(0, 0x20, 16).expect("a port");
+        let flag = released.clone();
+        port.set_view_release(Box::new(move || flag.store(true, Ordering::SeqCst)));
+        let other = port.clone();
+        drop(port);
+        assert!(!released.load(Ordering::SeqCst), "the port is still held");
+        drop(other);
+        assert!(released.load(Ordering::SeqCst), "its last reference gone, the view is undone");
+        // A second release replaces the first, which runs at once.
+        let (first, second) = (StdArc::new(AtomicBool::new(false)), StdArc::new(AtomicBool::new(false)));
+        let port = Port::create(0, 0x20, 16).expect("a port");
+        let (one, two) = (first.clone(), second.clone());
+        port.set_view_release(Box::new(move || one.store(true, Ordering::SeqCst)));
+        port.set_view_release(Box::new(move || two.store(true, Ordering::SeqCst)));
+        assert!(first.load(Ordering::SeqCst) && !second.load(Ordering::SeqCst));
+        drop(port);
+        assert!(second.load(Ordering::SeqCst));
     }
 
     #[test]

@@ -332,6 +332,7 @@ pub(crate) fn release(window: &Window) {
         return;
     }
     WINDOWS.lock().remove(&window.handle);
+    crate::shellhook::deregister(window.handle);
     let _ = crate::handles::free(window.handle);
 }
 
@@ -1474,13 +1475,31 @@ pub fn dispatch_message(message: &Msg32) -> Result<u32, NtStatus> {
 
 /// co_IntSendMessage : `message` à la procédure de `window` ; rend ce
 /// qu'elle rend. Une procédure dans win32k (DesktopWindowProc) est appelée
+/// Le bit des messages internes de win32k (`Msg & 0x80000000`).
+const INTERNAL_MESSAGE: u32 = 0x8000_0000;
+
+/// handle_internal_message, dans le thread de `window` :
+/// `WM_ASYNC_SHOWWINDOW` (ShowWindowAsync d'un autre thread) fait
+/// ShowWindow(`wparam`) ; un autre rend 0.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, dans un service système, sans rien tenir.
+fn internal_message(window: &Arc<Window>, message: u32, wparam: u32) -> u32 {
+    match message {
+        abi::user::WM_ASYNC_SHOWWINDOW => u32::from(crate::winpos::show_window(window, wparam)),
+        _ => 0,
+    }
+}
+
 /// directement ; une procédure du client l'est par un rappel, le
 /// `CLIENTINFO` du thread désignant la fenêtre. La fenêtre d'un autre thread
 /// reçoit le message par sa file ([`crate::sent::send`]), le thread courant
 /// attendant la réponse.
 ///
 /// Un tampon du noyau voyage vers un autre thread par sa copie
-/// ([`crate::sent::send_buffer`]).
+/// ([`crate::sent::send_buffer`]). Un message interne de win32k
+/// (`WM_ASYNC_*`, le bit haut) n'a pas de procédure : dans le thread de la
+/// fenêtre, win32k le traite lui-même ([`internal_message`]).
 ///
 /// # Errors
 /// Celles du rappel ; un envoi à un autre thread sans réponse
@@ -1494,8 +1513,14 @@ pub fn send_message(window: &Arc<Window>, message: u32, wparam: u32, lparam: LPa
         LParam::Value(value) => *value,
         LParam::Buffer { .. } => 0,
     };
-    if let Some(result) = server_window_proc(window, message, wparam, &mut lparam) {
-        return Ok(result);
+    let internal = message & INTERNAL_MESSAGE != 0;
+    if internal && crate::convert_current_thread().is_ok_and(|thread| thread.server == window.pti) {
+        return Ok(internal_message(window, message, wparam));
+    }
+    if !internal {
+        if let Some(result) = server_window_proc(window, message, wparam, &mut lparam) {
+            return Ok(result);
+        }
     }
     let thread = crate::convert_current_thread()?;
     if thread.server != window.pti {

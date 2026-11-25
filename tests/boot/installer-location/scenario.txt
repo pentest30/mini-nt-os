@@ -1,0 +1,23 @@
+# The Windows Installer version as the setup loader of Apache OpenOffice
+# reads it (tests/native/msiver1.c), in a session: msi.dll loaded from the
+# directory that HKLM\Software\Microsoft\Windows\CurrentVersion\Installer
+# \InstallerLocation names, then its DllGetVersion. syssetup.inf writes the
+# value at installation (tools/mkhive/mino.inf for Mino); without it, the
+# loader said "You have Windows Installer '0.1244568.1244716'" (an
+# uninitialised DLLVERSIONINFO). The disk of an application of the bench
+# (app = 7zip) has the whole ReactOS tree, msi.dll with it.
+features = test-smss, interactive
+requires = userland, native
+session = MSIVER1.EXE
+app = 7zip
+boots = 2
+cpus = default
+timeout = 600
+
+expect = We are logged on
+expect = [msiver] InstallerLocation C:\WINDOWS\system32
+expect = [msiver] DllGetVersion 0: 4.5.6001
+expect = [msiver] done
+
+forbid = [msiver] no
+forbid = *** STOP:

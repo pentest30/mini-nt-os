@@ -71,6 +71,7 @@ const PROGRAMS: &[(&[&str], &str, Toolchain)] = &[
     (&["msidlg1.c"], "MSIDLG1.EXE", Toolchain::MinGwWin32),
     (&["nullinst1.c"], "NULLINST1.EXE", Toolchain::MinGwWin32),
     (&["savedc1.c"], "SAVEDC1.EXE", Toolchain::MinGwWin32),
+    (&["msiver1.c"], "MSIVER1.EXE", Toolchain::MinGwWin32),
     (&["caret1.c"], "CARET1.EXE", Toolchain::MinGwWin32),
     (&["hook1.c"], "HOOK1.EXE", Toolchain::MinGwWin32),
     (&["section1.c"], "SECTION1.EXE", Toolchain::MinGwWin32),
@@ -105,6 +106,7 @@ const PROGRAMS: &[(&[&str], &str, Toolchain)] = &[
     (&["notepad1.c"], "NOTEPAD1.EXE", Toolchain::MinGwWin32),
     (&["notepad2.c"], "NOTEPAD2.EXE", Toolchain::MinGwWin32),
     (&["appbench.c"], "APPBENCH.EXE", Toolchain::MinGwWin32),
+    (&["d3d1.c"], "D3D1.EXE", Toolchain::MinGwWin32),
     (&["auth1.c"], "AUTH1.EXE", Toolchain::MinGwWin32),
     (&["calc1.c"], "CALC1.EXE", Toolchain::MinGwWin32),
     (&["mine1.c"], "MINE1.EXE", Toolchain::MinGwWin32),
@@ -119,6 +121,14 @@ const PROGRAMS: &[(&[&str], &str, Toolchain)] = &[
     (&["cbt1.c"], "CBT1.EXE", Toolchain::MinGwWin32),
     (&["bmp24.c"], "BMP24.EXE", Toolchain::MinGwWin32),
     (&["poly1.c"], "POLY1.EXE", Toolchain::MinGwWin32),
+    (&["shellhk1.c"], "SHELLHK1.EXE", Toolchain::MinGwWin32),
+    (&["workarea1.c"], "WORKAREA1.EXE", Toolchain::MinGwWin32),
+    (&["manythr1.c"], "MANYTHR1.EXE", Toolchain::MinGwWin32),
+    (&["bmp16.c"], "BMP16.EXE", Toolchain::MinGwWin32),
+    (&["priv1.c"], "PRIV1.EXE", Toolchain::MinGwWin32),
+    (&["shutdn1.c"], "SHUTDN1.EXE", Toolchain::MinGwWin32),
+    (&["work1.c"], "WORK1.EXE", Toolchain::MinGwWin32),
+    (&["thrstk1.c"], "THRSTK1.EXE", Toolchain::MinGwWin32),
     (&["minoinit.c"], "MINOINIT.EXE", Toolchain::MinGwWin32),
 ];
 
@@ -128,8 +138,9 @@ const PROGRAMS: &[(&[&str], &str, Toolchain)] = &[
 const SYSTEM_PROGRAMS: &[&str] = &["MINOINIT.EXE"];
 
 /// The DLLs of the import libraries (`tests/native/NAME.def`): ntdll for
-/// every program, kernel32, user32 and gdi32 for the Win32 ones.
-const LIBRARIES: &[&str] = &["ntdll", "kernel32", "user32", "gdi32", "ole32", "oleaut32"];
+/// every program, kernel32, user32 and gdi32 for the Win32 ones; d3d9 for
+/// the Direct3D probe (M8), whose import closure brings wined3d and Mesa.
+const LIBRARIES: &[&str] = &["ntdll", "kernel32", "user32", "gdi32", "ole32", "oleaut32", "d3d9"];
 
 /// MinGW: no C runtime, no stack protector, no unwind tables.
 const GCC_FLAGS: &[&str] = &[
