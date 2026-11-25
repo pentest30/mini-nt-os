@@ -9,7 +9,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | Table | Implémentés | Services |
 |---|---:|---:|
 | ntoskrnl | 137 | 296 |
-| win32k | 224 | 737 |
+| win32k | 232 | 737 |
 
 ## ntoskrnl
 
@@ -439,7 +439,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1078` | `NtGdiDeleteColorSpace` | 1 |  |
 | `0x1079` | `NtGdiDeleteColorTransform` | 2 |  |
 | `0x107a` | `NtGdiDeleteObjectApp` | 1 | ✅ |
-| `0x107b` | `NtGdiDescribePixelFormat` | 4 |  |
+| `0x107b` | `NtGdiDescribePixelFormat` | 4 | ✅ |
 | `0x107c` | `NtGdiGetPerBandInfo` | 2 |  |
 | `0x107d` | `NtGdiDoBanding` | 4 |  |
 | `0x107e` | `NtGdiDoPalette` | 6 |  |
@@ -482,7 +482,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x10a3` | `NtGdiGetCharWidthInfo` | 2 |  |
 | `0x10a4` | `NtGdiGetColorAdjustment` | 2 |  |
 | `0x10a5` | `NtGdiGetColorSpaceforBitmap` | 1 |  |
-| `0x10a6` | `NtGdiGetDCDword` | 3 |  |
+| `0x10a6` | `NtGdiGetDCDword` | 3 | ✅ |
 | `0x10a7` | `NtGdiGetDCforBitmap` | 1 |  |
 | `0x10a8` | `NtGdiGetDCObject` | 2 | ✅ |
 | `0x10a9` | `NtGdiGetDCPoint` | 3 |  |
@@ -554,7 +554,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x10eb` | `NtGdiPathToRegion` | 1 |  |
 | `0x10ec` | `NtGdiPlgBlt` | 11 |  |
 | `0x10ed` | `NtGdiPolyDraw` | 4 |  |
-| `0x10ee` | `NtGdiPolyPolyDraw` | 5 |  |
+| `0x10ee` | `NtGdiPolyPolyDraw` | 5 | ✅ |
 | `0x10ef` | `NtGdiPolyTextOutW` | 4 |  |
 | `0x10f0` | `NtGdiPtInRegion` | 3 |  |
 | `0x10f1` | `NtGdiPtVisible` | 3 |  |
@@ -597,8 +597,8 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1116` | `NtGdiGetDeviceWidth` | 1 |  |
 | `0x1117` | `NtGdiMirrorWindowOrg` | 1 |  |
 | `0x1118` | `NtGdiSetLayout` | 3 |  |
-| `0x1119` | `NtGdiSetPixel` | 4 |  |
-| `0x111a` | `NtGdiSetPixelFormat` | 2 |  |
+| `0x1119` | `NtGdiSetPixel` | 4 | ✅ |
+| `0x111a` | `NtGdiSetPixelFormat` | 2 | ✅ |
 | `0x111b` | `NtGdiSetRectRgn` | 5 |  |
 | `0x111c` | `NtGdiSetSystemPaletteUse` | 2 |  |
 | `0x111d` | `NtGdiSetTextJustification` | 3 |  |
@@ -611,7 +611,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1124` | `NtGdiStretchDIBitsInternal` | 16 | ✅ |
 | `0x1125` | `NtGdiStrokeAndFillPath` | 1 |  |
 | `0x1126` | `NtGdiStrokePath` | 1 |  |
-| `0x1127` | `NtGdiSwapBuffers` | 1 |  |
+| `0x1127` | `NtGdiSwapBuffers` | 1 | ✅ |
 | `0x1128` | `NtGdiTransformPoints` | 5 | ✅ |
 | `0x1129` | `NtGdiTransparentBlt` | 11 | ✅ |
 | `0x112a` | `NtGdiUnloadPrinterDriver` | 2 |  |
@@ -630,9 +630,9 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1137` | `NtUserBuildHwndList` | 7 | ✅ |
 | `0x1138` | `NtUserBuildNameList` | 4 |  |
 | `0x1139` | `NtUserBuildPropList` | 4 |  |
-| `0x113a` | `NtUserCallHwnd` | 2 |  |
+| `0x113a` | `NtUserCallHwnd` | 2 | ✅ |
 | `0x113b` | `NtUserCallHwndLock` | 2 | ✅ |
-| `0x113c` | `NtUserCallHwndOpt` | 2 |  |
+| `0x113c` | `NtUserCallHwndOpt` | 2 | ✅ |
 | `0x113d` | `NtUserCallHwndParam` | 3 | ✅ |
 | `0x113e` | `NtUserCallHwndParamLock` | 3 | ✅ |
 | `0x113f` | `NtUserCallMsgFilter` | 2 | ✅ |

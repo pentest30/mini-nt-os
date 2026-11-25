@@ -517,7 +517,7 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   (`win32k::kbdtables` : VSC→VK, ToUnicode), `win32k::input` (ProcessKeyEvent, état du clavier, premier plan à
   l'activation d'une fenêtre, SetFocus, TranslateMessage), les touches dans la file (`QS_KEY`, état du clavier du
   thread) ; `keys = MARQUEUR => TOUCHES` fait taper des touches par le moniteur de QEMU ; scénario `keyboard`
-  (`tests/native/keys1.c`). La sonde garde les processus créés depuis leur création (`ps::set_create_process_notify`).
+  (`tests/native/keys1.c`). La sonde garde ses enfants depuis leur création (`ps::set_create_process_notify`).
   Étape 7 (`cmd.exe` interactif) : ReadConsoleW marchait déjà ; NtQueryDirectoryFile (`abi::file` : entrées des
   classes 1, 2, 3, 12 ; `io::directory` : expression avec les jokers DOS de `kernel32`, tampon aligné ;
   `io::File::query_directory` : état de l'énumération dans le `File`, expression de la première requête, nom long ou
@@ -605,7 +605,43 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   GetDIBits de 24 bits) et les DIB sections de 1 bit : PeaZip ouvre son gestionnaire et une archive ; scénario
   `bitmap-24`. Il ne se ferme pas seul : il attend un `cmd.exe` détaché sans handles standard, que le `cmd` de
   ReactOS fige à son premier message (`conutils` : le verrou d'un flux au handle nul n'est pas initialisé), un défaut
-  de ReactOS que le banc contourne en terminant PeaZip.
+  de ReactOS que le banc contourne en terminant PeaZip. SystemParametersInfo(SPI_GETWORKAREA) rend la zone de
+  travail du moniteur principal et SPI_SETWORKAREA la change (`sys::user`, `win32k::monitor::set_work_area`), puis
+  l'annonce (SPIF_SENDCHANGE : WM_SETTINGCHANGE aux fenêtres de premier niveau, `win32k::sent::broadcast`) : VCL y
+  centre ses fenêtres (OpenOffice ouvrait son assistant du premier démarrage hors de l'écran), la barre des tâches
+  d'`explorer` y garde sa place et son bureau s'y redimensionne ; scénario `work-area` (`tests/native/workarea1.c`).
+  OpenOffice ouvre son Start Center.
+  de ReactOS que le banc contourne en terminant PeaZip. Ke n'a plus de limite de 64 threads (`ke::sched` : files
+  prêtes chaînées par des liens dans chaque thread, `ReadyLink`, comme le `WaitListEntry` de ReactOS ; table des
+  threads qui grandit hors du verrou dispatcher, `register_locked`) : les runtimes de Visual C++ d'OpenOffice
+  manquaient de threads (`rpcrt4`, error 1450) ; scénario `many-threads` (`tests/native/manythr1.c`).
+  de ReactOS que le banc contourne en terminant PeaZip. Les DIB sections de 16 bits (`gdi::surface::Format::Rgb16` :
+  5-5-5, ou les masques de BI_BITFIELDS ; GetObject, GetDIBits de 16 bits) ; scénario `bitmap-16`. Le second
+  critère (une session qui s'arrête) commencé : `minoinit` donne les droits des comptes de `defltwk.inf` (dans
+  `WINDOWS\INF`) par LsaAddAccountRights, comme InstallPrivileges de `syssetup` : le jeton d'`Administrator` a ses 20
+  privilèges, dont `SeShutdownPrivilege` ; scénario `session-privileges` (`tests/native/priv1.c`). Un programme
+  de la session arrête le système par ExitWindowsEx : NtUserSetInformationThread a les classes de `csrss` pour la
+  fin d'une session (`win32k::shutdown` : UserInitiateShutdown, WM_LOGONNOTIFY à la fenêtre SAS de `winlogon`,
+  UserEndShutdown ; le bureau d'entrée par `ob::HandleTable::find_object`), `ntmarta.dll` est sur le disque, et
+  WM_CLIENTSHUTDOWN devient WM_QUERYENDSESSION puis WM_ENDSESSION (`defwnd::end_session_messages`) ; `winlogon`
+  ferme la session puis appelle NtShutdownSystem ; scénario `session-shutdown` (`tests/native/shutdn1.c`). La pile
+  d'un thread fini est rendue quand il l'a demandé (`FreeStackOnTermination` : `ps::ethread::delete_teb`) ; scénario
+  `thread-stack` (`tests/native/thrstk1.c`). NtQuerySystemInformation(SystemPoolTagInformation) (`mm::pool`, les
+  totaux par étiquette) mesure le pool d'une session : scénario `session-work` (`tests/native/work1.c` : quatre
+  tours de travail, au plus 256 octets de plus du tour 2 au tour 4, puis l'arrêt) ; la sonde de `smss` ne garde plus
+  que ses enfants, la vue de la section d'un client chez `csrss` part avec le port du serveur
+  (`lpc::Port::set_view_release`) : **le second critère du M7 est coché**.
+  La barre des tâches d'`explorer` montre ses boutons : les
+  crochets du shell (`win32k::shellhook` : RegisterShellHookWindow, le message « SHELLHOOK » à chaque fenêtre de premier
+  niveau montrée, cachée, détruite, renommée ou activée ; SetTaskmanWindow), SPI_GET/SETMINIMIZEDMETRICS (`ARW_HIDE` :
+  une fenêtre réduite sort de l'écran), SwitchToThisWindow (le clic sur le bouton la rétablit) et ShowWindowAsync
+  d'une fenêtre d'un autre thread (WM_ASYNC_SHOWWINDOW : le clic sur le bouton de la fenêtre active la réduit) ;
+  scénario `shell-hooks` (`tests/native/shellhk1.c`).
+  Les polygones (`win32k::gdi::shape`, `win32k::gdi::polyfill` :
+  NtGdiPolyPolyDraw, Polygon et PolyPolygon remplis par lignes de balayage, ALTERNATE et WINDING, polylignes,
+  Bézier, CreatePolyPolygonRgn), les stylos de stock, le stylo et le mode de mélange des attributs du DC
+  (`dc::line_pen`, `dc::draw_modes`), NtGdiSetPixel : OpenOffice peint ses fonds par Polygon, et ne laisse plus de
+  traînées ; scénario `polygons` (`tests/native/poly1.c`).
   Suite : [`docs/passation.md`](docs/passation.md).
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.
@@ -625,6 +661,7 @@ cargo xtask image [--output F] [--initial-command P] # image GPT (ESP + système
 cargo xtask image --apps [--app ID]                  # avec les installeurs du banc du M7 dans C:\APPS, logon, explorer
 cargo xtask syscall-gen                              # régénère abi/src/services.rs (listes de ReactOS épinglé)
 cargo xtask fetch-userland [--archive FICHIER]       # ReactOS épinglé : archive vérifiée, arborescence dans third_party/
+cargo xtask icd-build [--toolchain DIR]              # ICD Mesa pour XP (ADR-025), construit et vérifié dans third_party/
 cargo xtask fetch-apps [--app ID]                    # installeurs du banc du M7, vérifiés, dans third_party/apps/
 cargo xtask help
 ```

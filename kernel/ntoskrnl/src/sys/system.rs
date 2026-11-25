@@ -5,13 +5,14 @@ use abi::ntstatus::{
 };
 use abi::security::{SE_LOAD_DRIVER_PRIVILEGE, SE_SHUTDOWN_PRIVILEGE};
 use abi::system_information::{
-    SystemBasicInformation32, SystemProcessInformation32, SystemProcessorInformation32, SystemThreadInformation32,
-    MAXIMUM_USER_MODE_ADDRESS, MINIMUM_USER_MODE_ADDRESS, PROCESSOR_ARCHITECTURE_INTEL, SYSTEM_BASIC_INFORMATION,
-    SYSTEM_EXTEND_SERVICE_TABLE_INFORMATION, SYSTEM_FILECACHE_INFORMATION, SYSTEM_FIRMWARE_TABLE_INFORMATION,
-    SYSTEM_FLAGS_INFORMATION, SYSTEM_HANDLE_INFORMATION, SYSTEM_NUMA_PROCESSOR_MAP, SYSTEM_PERFORMANCE_INFORMATION,
-    SYSTEM_PROCESSOR_INFORMATION, SYSTEM_PROCESSOR_PERFORMANCE_INFORMATION, SYSTEM_PROCESS_INFORMATION,
-    SYSTEM_PROCESS_INFORMATION_NAME_AT, SYSTEM_RANGE_START, SYSTEM_RANGE_START_INFORMATION, SYSTEM_SESSION_CREATE,
-    SYSTEM_SESSION_DETACH, SYSTEM_THREAD_INFORMATION_SIZE, SYSTEM_TIME_OF_DAY_INFORMATION,
+    SystemBasicInformation32, SystemPoolTag32, SystemProcessInformation32, SystemProcessorInformation32,
+    SystemThreadInformation32, MAXIMUM_USER_MODE_ADDRESS, MINIMUM_USER_MODE_ADDRESS, PROCESSOR_ARCHITECTURE_INTEL,
+    SYSTEM_BASIC_INFORMATION, SYSTEM_EXTEND_SERVICE_TABLE_INFORMATION, SYSTEM_FILECACHE_INFORMATION,
+    SYSTEM_FIRMWARE_TABLE_INFORMATION, SYSTEM_FLAGS_INFORMATION, SYSTEM_HANDLE_INFORMATION, SYSTEM_NUMA_PROCESSOR_MAP,
+    SYSTEM_PERFORMANCE_INFORMATION, SYSTEM_POOL_TAG_INFORMATION, SYSTEM_PROCESSOR_INFORMATION,
+    SYSTEM_PROCESSOR_PERFORMANCE_INFORMATION, SYSTEM_PROCESS_INFORMATION, SYSTEM_PROCESS_INFORMATION_NAME_AT,
+    SYSTEM_RANGE_START, SYSTEM_RANGE_START_INFORMATION, SYSTEM_SESSION_CREATE, SYSTEM_SESSION_DETACH,
+    SYSTEM_THREAD_INFORMATION_SIZE, SYSTEM_TIME_OF_DAY_INFORMATION,
 };
 use core::sync::atomic::{AtomicBool, Ordering};
 use ke::usermem::UserPtr;
@@ -96,6 +97,7 @@ pub(super) fn nt_shutdown_system(arguments: &[u32]) -> NtStatus {
 /// | `SystemProcessorPerformanceInformation` (8) | les temps par processeur, tous nuls |
 /// | `SystemTimeOfDayInformation` (3) | l'heure du démarrage, l'heure, le fuseau (nul) ; les premiers octets que demande l'appelant, 48 au plus |
 /// | `SystemHandleInformation` (16) | le nombre de handles, nul |
+/// | `SystemPoolTagInformation` (22) | chaque étiquette des pools, ses blocs alloués et rendus et ses octets ([`pool_tag_information`]) |
 /// | `SystemFileCacheInformation` (21) | les caches de fichiers, nuls |
 /// | `SystemFlagsInformation` (9) | les drapeaux globaux (`NtGlobalFlag`), aucun |
 /// | `SystemRangeStartInformation` (50) | le début de la moitié système, `0x80000000` |
@@ -142,6 +144,7 @@ pub(super) fn nt_query_system_information(arguments: &[u32]) -> NtStatus {
             super::return_information(&NT_GLOBAL_FLAG.to_le_bytes(), buffer, length, return_length)
         }
         SYSTEM_NUMA_PROCESSOR_MAP => numa_processor_map(buffer, length, return_length),
+        SYSTEM_POOL_TAG_INFORMATION => pool_tag_information(buffer, length, return_length),
         // A class ReactOS knows without implementing it: kernel32 turns
         // STATUS_NOT_IMPLEMENTED into ERROR_INVALID_FUNCTION, which its
         // SystemFirmware apitest accepts, and not the ERROR_INVALID_PARAMETER
@@ -149,6 +152,33 @@ pub(super) fn nt_query_system_information(arguments: &[u32]) -> NtStatus {
         SYSTEM_FIRMWARE_TABLE_INFORMATION => UNSUPPORTED.report(class),
         _ => UNSUPPORTED.report_invalid_class(class),
     }
+}
+
+/// SystemPoolTagInformation (ExGetPoolTagInfo) : le nombre d'étiquettes,
+/// puis pour chacune (`mm::pool::merged_tags`) les blocs alloués et rendus
+/// sous elle depuis le démarrage et les octets qu'elle tient, dans le pool
+/// paginé et le non paginé (les allocations de Rust sous « Rust », les
+/// étiquettes au-delà de la table sous « Ovfl »). Une liste : un tampon trop
+/// petit rend `STATUS_INFO_LENGTH_MISMATCH` et la taille nécessaire.
+fn pool_tag_information(buffer: u32, length: u32, return_length: u32) -> NtStatus {
+    let non_paged = mm::pool::NONPAGED_POOL.tag_records();
+    let paged = mm::pool::PAGED_POOL.tag_records();
+    let merged = mm::pool::merged_tags(&non_paged, &paged);
+    let mut bytes = alloc::vec::Vec::with_capacity(4 + merged.len() * core::mem::size_of::<SystemPoolTag32>());
+    bytes.extend_from_slice(&(merged.len() as u32).to_le_bytes());
+    for (paged, non_paged) in &merged {
+        let entry = SystemPoolTag32 {
+            tag: paged.tag,
+            paged_allocs: paged.allocs as u32,
+            paged_frees: paged.frees as u32,
+            paged_used: paged.live.bytes as u32,
+            non_paged_allocs: non_paged.allocs as u32,
+            non_paged_frees: non_paged.frees as u32,
+            non_paged_used: non_paged.live.bytes as u32,
+        };
+        bytes.extend_from_slice(entry.as_bytes());
+    }
+    super::return_information_flexible(&bytes, buffer, length, return_length)
 }
 
 /// NtSetSystemInformation(SystemInformationClass, SystemInformation,

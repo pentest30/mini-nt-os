@@ -39,6 +39,13 @@ impl Region {
         Self { rects }
     }
 
+    /// La région de rectangles `rects` déjà disjoints (ceux d'un polygone,
+    /// `super::polyfill::spans`) ; les vides partent.
+    pub fn from_disjoint(mut rects: Vec<Rect>) -> Self {
+        rects.retain(|rect| !rect.is_empty());
+        Self { rects }
+    }
+
     /// Ses rectangles.
     pub fn rects(&self) -> &[Rect] {
         &self.rects

@@ -1,0 +1,34 @@
+# Polygons, polylines and Bézier curves (tests/native/poly1.c, MinGW, linked
+# to ReactOS's user32 and gdi32): POLY1.EXE takes the place of winlogon.exe.
+# NtGdiPolyPolyDraw (Polygon, PolyPolygon with ALTERNATE and WINDING,
+# Polyline, PolylineTo, PolyBezier, CreatePolygonRgn), the stock pens, the
+# pen and the mix mode (R2_NOT) of a DC's attributes, LineTo without its last
+# pixel, SetPixel; then a window painted by Polygon in WM_PAINT (bands, as a
+# gradient of VCL), a popup shown over it and destroyed: the screen where the
+# popup was shows the bands again. Apache OpenOffice paints its backgrounds so:
+# without polygons, a closed menu stayed on the screen, and moving a window
+# left trails. See docs/compat/applications.md.
+features = test-smss
+requires = userland, native
+initial-command = POLY1.EXE
+cpus     = default, intel
+timeout  = 120
+
+expect = [poly] on WinSta0\Default
+expect = [poly] step 1: stock pens 1 1 1, a new DC has BLACK_PEN 1
+expect = [poly] step 2: Polygon 1: 28 red pixels; (0,0) ff0000, (6,0) ff0000, (7,0) ffffff, (3,3) ff0000, (4,3) ffffff
+expect = [poly] step 3: outlined 1: inside 00c000, corner 0000ff, right 0000ff, bottom 0000ff, beyond ffffff ffffff
+expect = [poly] step 4: ALTERNATE 1: hole ffffff, ring ff0000; WINDING 1 (was 1): hole ff0000
+expect = [poly] step 5: R2_NOT once 00ffff, twice ff0000
+expect = [poly] step 6: Polyline (9,50) 000000 (10,50) ffffff; LineTo (9,52) 000000 (10,52) ffffff; PolylineTo (10,55) 000000, position 10,60; PolyBezier 1 (20,50) 000000 (25,57) 000000, 3 points 0
+expect = [poly] step 7: CreatePolygonRgn 1: complexity 3, box 0,0,7,7
+expect = [poly] step 8: SetPixel 030201: 010203
+expect = [poly] step 9: the popup over the bands is gone
+expect = [poly] done
+# Where the popup was, and beside it: the bands, green.
+screen = 200 180 00C000
+screen = 120 120 00C000
+
+forbid = *** STOP:
+forbid = NtGdiPolyPolyDraw (0x10ee) is not implemented
+forbid = NtGdiSetPixel (0x1119) is not implemented

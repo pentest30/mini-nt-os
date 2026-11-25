@@ -1,0 +1,19 @@
+# The welcome page of an MSI as msi.dll builds it (tests/native/msidlg1.c):
+# MSIDLG1.EXE takes the place of winlogon.exe. Two transparent texts under
+# an SS_BITMAP Static without its picture (the 7-Zip 9.20 MSI has none),
+# which the tab order puts above them; the Static class has CS_PARENTDC, the
+# texts' DC sees what the dialog sees. In VirtualBox, the page showed only
+# its buttons: the texts' DC was cut by the picture above them.
+features = test-smss
+requires = userland, native
+initial-command = MSIDLG1.EXE
+cpus     = default
+timeout  = 120
+
+expect = [msidlg] the title: shown
+expect = [msidlg] the description: shown
+expect = [msidlg] done
+
+forbid = [msidlg] the title: missing
+forbid = [msidlg] the description: missing
+forbid = *** STOP:

@@ -13,7 +13,9 @@
 //! verrouille l'objet) : l'un des changements peut se perdre, sans danger
 //! pour le noyau.
 //!
-//! Pas encore : les autres formes (ellipses, polygones, ExtCreateRegion),
+//! Une région de polygones vient de `super::shape` (CreatePolyPolygonRgn).
+//!
+//! Pas encore : les autres formes (ellipses, ExtCreateRegion),
 //! OffsetRgn, EqualRgn, PtInRegion, RectInRegion, GetRegionData, les
 //! régions d'un processus rendues à sa fin.
 
@@ -124,8 +126,19 @@ impl RegionObject {
 /// # IRQL
 /// PASSIVE_LEVEL, sans rien tenir.
 pub fn create_rect(x1: i32, y1: i32, x2: i32, y2: i32) -> Result<u32, NtStatus> {
+    create(Region::from_corners(x1, y1, x2, y2))
+}
+
+/// REGION_AllocUserRgnWithHandle : la région `region`, au processus
+/// courant, avec ses attributs chez lui ; rend son handle.
+///
+/// # Errors
+/// Ceux de l'allocation des attributs, de leur écriture, de la table.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, sans rien tenir.
+pub fn create(region: Region) -> Result<u32, NtStatus> {
     let (pid, attr) = allocate_attr(AttrKind::Region)?;
-    let region = Region::from_corners(x1, y1, x2, y2);
     let written = attributes(&region, 0);
     let object = Object::Region(Arc::new(RegionObject { region: KSpinLock::new(region), attr }));
     let created = copy_to_user(u64::from(attr), written.as_bytes())

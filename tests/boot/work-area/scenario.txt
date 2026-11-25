@@ -1,0 +1,44 @@
+# SystemParametersInfo(SPI_GETWORKAREA, SPI_SETWORKAREA) (workarea1.c, MinGW,
+# linked to ReactOS's user32): WORKAREA1.EXE takes the place of
+# winlogon.exe. Apache OpenOffice 4.1.17 started with no window: VCL centres
+# its splash screen and its first-start wizard in the work area, which Mino
+# did not give (FALSE, an uninitialised RECT, the windows at x = 0x4E4F43C0).
+# Given alone, explorer's taskbar disappeared (its desktop covered the whole
+# screen, a full-screen application for explorer): the taskbar keeps its
+# room with SPI_SETWORKAREA. As ReactOS (sysparams.c,
+# UserSystemParametersInfo: the primary monitor's rcWork, SpiGet, SpiSet;
+# sys::user::nt_user_system_parameters_info, win32k::monitor::set_work_area):
+# 1. TRUE and the whole screen (no taskbar takes room from it);
+# 2. the same rectangle as GetMonitorInfo's rcWork;
+# 3. uiParam ignored;
+# 4. a NULL pvParam: FALSE;
+# 5. SPI_SETWORKAREA, read back by SPI_GETWORKAREA and GetMonitorInfo;
+# 6. an empty rectangle, one beyond the screen, NULL: FALSE, the area kept;
+# 7. the whole screen again;
+# 8. with SPIF_SENDCHANGE, WM_SETTINGCHANGE (SPI_SETWORKAREA, lParam NULL)
+#    reaches another thread's top-level window (win32k::sent::broadcast), as
+#    explorer's desktop, which resizes itself then (after a change of
+#    resolution, the desktop as large as the old screen hid the taskbar);
+# 9. without it, nothing.
+features = test-smss
+requires = userland, native
+initial-command = WORKAREA1.EXE
+cpus     = default, intel
+timeout  = 120
+
+expect = [workarea] ready: a screen of
+expect = [workarea] step 1: 1, (0,0)-
+expect = , the screen 1
+expect = [workarea] step 2: GetMonitorInfo 1, the same rcWork 1
+expect = [workarea] step 3: uiParam 123: 1, the same 1
+expect = [workarea] step 4: a NULL pvParam: 0
+expect = [workarea] step 5: set 1, read back 1, the same 1, rcWork the same 1
+expect = [workarea] step 6: empty 0, beyond the screen 0, NULL 0, kept 1
+expect = [workarea] step 7: 1, the screen 1
+expect = [workarea] step 8: SPIF_SENDCHANGE 1, WM_SETTINGCHANGE 1, wParam 2f, lParam 0
+expect = [workarea] step 9: without SPIF_SENDCHANGE 1, 0 more
+expect = [workarea] done
+
+forbid = *** STOP:
+forbid = NtUserSystemParametersInfo class 0x30 is not implemented
+forbid = NtUserSystemParametersInfo class 0x2f is not implemented

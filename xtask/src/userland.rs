@@ -53,7 +53,8 @@ pub fn ntdll(ws: &Workspace) -> Option<PathBuf> {
 /// ADR-012), the Win32 subsystem that `smss` starts (`csrss.exe` and its
 /// server DLLs, M5), the language pack that `gdi32` loads when it starts
 /// (`lpk.dll`, GdiInitializeLanguagePack), the [`KNOWN_DLLS`], the [`FONTS`]
-/// of win32k in `WINDOWS/FONTS`, and then every
+/// of win32k in `WINDOWS/FONTS`, the [`INFS`] of `minoinit` in `WINDOWS/INF`,
+/// and then every
 /// DLL these programs
 /// and DLLs import, directly or not ([`import_closure`]): the loader of ntdll
 /// maps each import, and some of these have long names
@@ -129,6 +130,12 @@ fn files_with(ws: &Workspace, windows_files: &[&str]) -> Option<Vec<(PathBuf, St
         // Loaded by name by kernel32 to check a DNS host name
         // (SetComputerNameExW: BaseVerifyDnsName, DnsValidateName_W).
         "dnsapi.dll",
+        // Loaded by name by advapi32 for the access lists it builds
+        // (SetEntriesInAclW, GetNamedSecurityInfoW: ntmarta's AccRewrite*):
+        // winlogon's logoff thread takes its security attributes from it, and
+        // without them stops the logoff ("Failed to create Logoff security
+        // descriptor").
+        "ntmarta.dll",
         // The Display panel (M6): `rundll32 shell32.dll,Control_RunDLL
         // desk.cpl`, which `control desk.cpl` starts; shell32 loads the
         // applet by name.
@@ -161,7 +168,18 @@ fn files_with(ws: &Workspace, windows_files: &[&str]) -> Option<Vec<(PathBuf, St
     let fonts = FONTS
         .iter()
         .map(|font| fonts_file(ws, font).map(|path| (path, format!("{FONTS_DIR}/{}", font.to_ascii_uppercase()))));
-    system32.chain(windows).chain(fonts).collect()
+    let infs = INFS.iter().map(|inf| windows_file(ws, &format!("inf/{inf}")).map(|path| (path, inf_path(inf))));
+    system32.chain(windows).chain(fonts).chain(infs).collect()
+}
+
+/// The INF files of the boot disk, in `WINDOWS/INF` (`%SystemRoot%\inf`):
+/// `defltwk.inf`, the security defaults of a workstation, whose `[Privilege
+/// Rights]` minoinit gives to the accounts (syssetup's InstallSecurity).
+const INFS: [&str; 1] = ["defltwk.inf"];
+
+/// The path of the INF file `name` on the boot disk.
+fn inf_path(name: &str) -> String {
+    format!("{WINDOWS_DIR}/INF/{}", name.to_ascii_uppercase())
 }
 
 /// Every file of the fetched userland's tree, with its path on a system disk
@@ -288,6 +306,42 @@ pub fn import_closure(
     (added, missing)
 }
 
+/// The DLLs of the userland's system32 that the test programs among `files`
+/// (`HOST:FAT_PATH`, at the root of the disk: `tests/native`) import,
+/// directly or not, and that the disk does not have yet, as `HOST:FAT_PATH`
+/// entries in [`SYSTEM32`]. The userland's own closure (`boot_files`) starts
+/// from its programs only; a probe that imports more (the Direct3D probe of
+/// M8: d3d9, then d3dwine and opengl32) brings its DLLs this way, and the
+/// other scenarios' disks stay as they were.
+pub fn program_imports(ws: &Workspace, files: &[String]) -> Vec<String> {
+    let entries: Vec<(&str, &str)> = files.iter().filter_map(|file| file.rsplit_once(':')).collect();
+    let programs: Vec<(String, PathBuf)> = entries
+        .iter()
+        .filter(|(_, fat)| !fat.contains('/') && fat.to_ascii_lowercase().ends_with(".exe"))
+        .map(|(host, fat)| (fat.to_ascii_lowercase(), PathBuf::from(host)))
+        .collect();
+    let present: Vec<String> =
+        entries.iter().map(|(_, fat)| fat.rsplit('/').next().unwrap_or(fat).to_ascii_lowercase()).collect();
+    let read_imports = |path: &Path| -> Option<Vec<String>> {
+        let bytes = fs::read(path).ok()?;
+        let pe = pe::Pe32::parse(&bytes).ok()?;
+        Some(pe.imports().map(|import| import.dll_name().to_ascii_lowercase()).collect())
+    };
+    let (added, missing) = import_closure(&present, |file| match programs.iter().find(|(name, _)| name == file) {
+        Some((_, host)) => read_imports(host),
+        None => system32_file(ws, file).and_then(|path| read_imports(&path)),
+    });
+    for dll in missing.iter().filter(|dll| !present.contains(dll)) {
+        eprintln!("xtask: {dll}, imported by a test program, is not in the userland's system32");
+    }
+    added
+        .into_iter()
+        .filter_map(|dll| {
+            system32_file(ws, &dll).map(|path| format!("{}:{SYSTEM32}/{}", path.display(), dll.to_ascii_uppercase()))
+        })
+        .collect()
+}
+
 /// The system directory on the boot disk.
 const SYSTEM32: &str = "WINDOWS/SYSTEM32";
 
@@ -302,7 +356,7 @@ const KNOWN_DLLS: [&str; 21] = [
 
 /// The file `name` of the fetched `system32`; `None` until `fetch-userland`
 /// ran, or without it.
-fn system32_file(ws: &Workspace, name: &str) -> Option<PathBuf> {
+pub(crate) fn system32_file(ws: &Workspace, name: &str) -> Option<PathBuf> {
     let dir = dir(ws);
     let complete = fs::read_to_string(dir.join(STAMP)).is_ok_and(|s| s.trim() == SHA256);
     let file = dir.join(TREE).join("system32").join(name);

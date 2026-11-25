@@ -858,6 +858,153 @@ symptôme contourné et maintenant expliqué. Son lancement par `-ext2folder` se
 ReactOS (`conutils` : initialiser le verrou même sans handle, ou ne pas écrire sur un flux qui n'a pas pu
 s'initialiser). Côté Mino, aucune tâche : un `cmd` corrigé viendrait avec un ReactOS épinglé plus récent.
 
+### SPI_GETWORKAREA : OpenOffice ouvrait ses fenêtres hors de l'écran, le 2026-11-23
+
+Avec les PR 181 et 182, dans l'image VirtualBox (`cargo xtask image --apps`), OpenOffice s'installe. Lancé, il ne
+montre rien : `soffice.exe` et `soffice.bin` restent vivants sans fenêtre (`win32k` ne journalise pas leur fin), et
+chaque nouveau lancement aussi ; le processeur est au repos. Une trace temporaire des services de `soffice.bin`
+(service, arguments, résultat ; le noyau remplacé dans la partition EFI du disque de la machine, l'installation
+gardée ; jamais commitée) montre :
+
+- le premier `soffice.bin` crée son écran d'accueil (551×366) puis l'assistant du premier démarrage (601×394), les
+  place par NtUserSetWindowPos en x = 0x4E4F43C0, y = 0x4E4F46CC, et en x = 0x50563CE8, les montre, et attend dans la
+  boucle de messages de l'assistant (NtUserGetMessage) ;
+- juste avant chaque placement, NtUserSystemParametersInfo(SPI_GETWORKAREA, 0x30) rendait FALSE (une action non
+  implémentée) : VCL centre ses fenêtres dans la zone de travail, et prenait son RECT non initialisé ;
+- le fil du tube d'OpenOffice accepte la demande du lancement suivant, mais ne la traite qu'une fois la boucle
+  principale prête (MsgWaitForMultipleObjects) ; le second `soffice.bin` a écrit ses arguments et attend la réponse
+  sans fin (NtReadFile en attente, puis NtWaitForSingleObject).
+
+Fait comme ReactOS (`sysparams.c`, UserSystemParametersInfo : le `rcWork` du moniteur principal, SpiGet) :
+`sys::user::nt_user_system_parameters_info` rend la zone de travail de `win32k::monitor::primary`, `uiParam` ignoré,
+FALSE pour un `pvParam` où l'on ne peut écrire.
+
+SPI_GETWORKAREA seul faisait disparaître la barre des tâches (scénario `logon`, et dans la machine dès l'arrivée
+d'OpenOffice) : le bureau du shell (`CDesktopBrowser::_Resize`) prend la zone de travail, qui restait l'écran entier
+faute de SPI_SETWORKAREA ; le détecteur d'applications en plein écran d'`explorer` (`taskswnd.cpp`, chaque seconde :
+une fenêtre visible qui couvre le moniteur, du thread au premier plan) le prenait pour l'une d'elles et passait la
+barre au fond de l'ordre Z (`SetWindowPos(HWND_BOTTOM)`), sous le bureau. Avant, le bureau recevait un RECT non
+initialisé et n'y tombait pas. SPI_SETWORKAREA fait comme ReactOS (SpiSet) : un rectangle non vide, entier dans le
+moniteur, devient son `rcWork` (`win32k::monitor::set_work_area`, `checked_work_area`) ; sinon FALSE, sans rien
+changer. La barre réserve sa place avant que le bureau soit créé (`explorer.cpp` : la barre d'abord). Après un
+changement de résolution, le bureau, encore grand comme l'ancien écran, couvrait le nouveau, et la barre disparaissait
+de nouveau (`display-desktop`, sur AMD) : comme ReactOS (co_IntSendMessageTimeout de HWND_BROADCAST), SPIF_SENDCHANGE
+envoie WM_SETTINGCHANGE (`wParam` SPI_SETWORKAREA) aux fenêtres de premier niveau du bureau de l'appelant, 100 ms au
+plus chacune, livré plus tard à celles qui tardent (`win32k::sent::broadcast`, que WM_DISPLAYCHANGE prend aussi), et
+le bureau s'y redimensionne (`CDesktopBrowser::OnSettingChange`). Son `lParam` est nul, ce que MSDN permet ; ReactOS
+passe « Control Panel\Desktop ». Un message à pointeur au `lParam` nul n'a rien à traduire : il va à un autre
+processus (`win32k::queue::carries_pointer`).
+
+Scénario `work-area` (`tests/native/workarea1.c`, AMD et Intel) : sans le correctif, FALSE et le RECT intact ; puis
+SPI_SETWORKAREA relu par SPI_GETWORKAREA et GetMonitorInfo, les rectangles vides ou hors de l'écran refusés,
+WM_SETTINGCHANGE reçu par la fenêtre d'un autre thread avec SPIF_SENDCHANGE seulement (sans l'envoi, le scénario
+échoue). `folder-view` : la fenêtre de dossier prend la zone de travail au-dessus de la barre, sa barre d'état
+remonte ; `display-desktop` attend la ligne de ReadDirectoryChangesW, comme `folder-view` (la ligne du listage du
+bureau ne s'imprime plus depuis la PR 155 : il expirait sur main). Dans la
+machine (le noyau des PR 181, 182 et de ce correctif dans la partition EFI de son disque), OpenOffice montre
+l'assistant du premier démarrage au centre de l'écran, puis son Start Center agrandi dans la zone de travail, la
+barre des tâches visible dessous. Restent : le bouton d'OpenOffice dans la barre des tâches, que rien n'y met ; le
+service RpcSs, que `services.exe` ne peut démarrer (TransactNamedPipe : FSCTL_PIPE_TRANSCEIVE, classe 5 de
+NtFsControlFile des tubes, manque).
+### Plus de 64 threads : les runtimes de Visual C++ d'OpenOffice, le 2026-11-23
+
+Dans l'image VirtualBox (`cargo xtask image --apps`), l'installeur d'Apache OpenOffice 4.1.17 passe son contrôle de
+version (`InstallerLocation` dans `tools/mkhive/mino.inf`) et lance les runtimes de Visual C++ : `vcredist_x86.exe`,
+puis `install.exe`, qui lance `msiexec.exe`. Dans `install.exe`, `rpcrt4` journalise « couldn't queue work item for
+worker thread, error was 1450 » (`dll/win32/rpcrt4/rpc_server.c:592`), puis une boîte dit « Insufficient system
+resources exist to complete the requested service ». QueueUserWorkItem est RtlQueueWorkItem
+(`sdk/lib/rtl/threadpool.c`), qui crée un thread de travail par RtlCreateUserThread : il rendait
+`STATUS_INSUFFICIENT_RESOURCES` (ERROR_NO_SYSTEM_RESOURCES, 1450), parce que `ke::sched::create_user_thread` rendait
+`None`. Ke n'avait que 64 threads pour tout le système, threads noyau compris (`MAX_THREADS` : la table des TID, et
+chacune des 32 files prêtes, des anneaux de 64). 197 threads utilisateur avaient été créés, plusieurs déjà finis ; XP
+en fait tourner des centaines au repos.
+
+Fait comme ReactOS (KxQueueReadyThread, `ntoskrnl/include/internal/ke_x.h` : le `WaitListEntry` du thread dans
+`DispatcherReadyListHead`) : les files prêtes sont chaînées par des liens que porte chaque thread
+(`ke::sched::ReadyLink`), sans capacité, et l'ordonnanceur n'alloue toujours rien à DISPATCH_LEVEL ; un thread mis
+deux fois en file arrête le système, `delete_thread` refuse un thread encore en file. La table des threads
+(`ThreadTable`) grandit hors du verrou dispatcher : `register_locked` prend la mémoire à PASSIVE_LEVEL
+(`ThreadTable::storage`, le double), la table y copie ses emplacements sous le verrou sans allouer (`grow`), et
+l'ancienne mémoire est rendue après. La mémoire est la seule limite de Ke ; restent 4 096 TEB par processus
+(`ps::ethread`) et 4 096 piles noyau (`mm::kstack::MAX_STACKS`).
+
+Scénario `many-threads` (`tests/native/manythr1.c`, AMD et Intel) : 200 threads qui attendent un événement, tous
+vivants et prêts ensemble derrière leur créateur, puis libérés. Sans le changement : « thread 41 not created (error
+1450) ». Tests hôte : une file de 300 threads, 200 threads prêts de même priorité à tour de rôle, une table qui grandit
+trois fois. L'effet sur OpenOffice reste à mesurer (l'image VirtualBox, ou le scénario `app-openoffice`).
+### Les DIB sections de 16 bits, le 2026-11-23
+
+C'est la dette que laissaient les bitmaps de 24 bits. Aucune application du banc ne les a encore demandées (aucun
+« a DIB section of 16 bits » dans les journaux gardés) : c'est un format que ReactOS fait et que Mino refusait.
+
+- **Le format.** `win32k::gdi::surface::Format::Rgb16` : 16 bits par pixel sous trois masques. C'est 5-5-5 en
+  BI_RGB, et les masques de BI_BITFIELDS sinon : 5-6-5, ou tout masque de bits consécutifs, disjoints, dans les
+  16 bits (`masks_fit_16`).
+- **Le dessin.** Le moteur dessine sur les pixels décodés en 32 bits, puis réécrit ceux qui ont changé. Au décodage,
+  une composante de n bits est étendue à 8 bits par arrondi : ce sont les tables 5 → 8 de ReactOS, et sa table
+  6 → 8 à une unité près sur quelques valeurs. À l'encodage, une composante garde ses bits hauts, comme
+  EXLATEOBJ_iXlateRGBto555 et RGBto565. Les trois formats convertis (indexé, 16 et 24 bits) passent maintenant par le
+  même chemin (`Format::decode`, `Format::encode`).
+- **GetObject.** Le DIBSECTION dit BI_RGB pour 5-5-5, BI_BITFIELDS sinon, et donne ses masques, comme
+  BITMAP_GetObject de ReactOS.
+- **GetDIBits.** La description dit 16 bits et BI_BITFIELDS, comme ReactOS. Les lignes de 16 bits sont en 5-5-5 pour
+  BI_RGB. En BI_BITFIELDS, elles prennent les masques de la DIB section de 16 bits, ou 5-6-5 pour un autre bitmap.
+  ReactOS donne les masques de la palette de toute DIB section, ce qui n'a pas de sens pour une de 32 bits.
+- **La copie.** Une copie (GetIconInfo) garde ses 16 bits et ses masques.
+
+Scénario `bitmap-16` (`tests/native/bmp16.c`, AMD et Intel) :
+- une DIB section de 5-5-5 : son DIBSECTION, un pixel écrit par le processus et lu par le noyau, d'autres peints par
+  le noyau et lus par le processus (le gris 128 devient 16 sur 31, relu 132) ;
+- GetDIBits : la description, les lignes de 16 et de 32 bits ;
+- une DIB section de 5-6-5 : ses masques par GetObject et par GetDIBits ;
+- un BitBlt de 5-5-5 vers 5-6-5.
+
+Sans la modification (une mutation : 16 bits refusés), il échoue à l'étape 1.
+
+Pas encore : CreateBitmap de 16 bits ; en 32 bits, d'autres masques que ceux de BI_RGB.
+
+### Les polygones : les traînées d'OpenOffice, le 2026-11-24
+
+**Le constat** (machine VirtualBox, Apache OpenOffice 4.1.17 installé) : déplacer une fenêtre d'OpenOffice laisse des
+traînées, et un menu fermé reste peint à l'écran.
+
+**Le diagnostic** (QEMU sur une copie du disque de la machine, une trace temporaire des appels de `soffice.bin`).
+Le menu de la fenêtre ouvert par Alt+Espace puis fermé par Échap : OpenOffice repeint la zone découverte
+(GetUpdateRect, BeginPaint, EndPaint), puis peint le fond de son centre de démarrage, un dégradé, par bandes : pour
+chacune NtGdiCreateSolidBrush et NtGdiPolyPolyDraw (Polygon, une figure), sans handler, qui rendait 0. Rien n'était
+peint : ce que le menu, ou la fenêtre avant son déplacement, avait laissé restait. VCL dessine ses formes avec
+NULL_PEN, et NtGdiGetStockObject(NULL_PEN) rendait 0 (pas de stylos de stock). Deux points écartés : le DC propre
+d'une fenêtre (CS_OWNDC, que win32k remplace par un DC du cache) n'y est pour rien (une fenêtre CS_OWNDC déplacée
+par pas, peinte par son DC gardé, ne laisse rien) ; et il faut deux Échap pour quitter le menu de la fenêtre ouvert
+au clavier, comme sous XP (MENU_KeyEscape : le premier ferme le menu déroulant, la barre reste en mode menu).
+
+**Le changement** (`fillshap.c`, `polyfill.c`, `line.c` de ReactOS comme spécification) :
+
+- NtGdiPolyPolyDraw (`win32k::gdi::shape`) et ses six fonctions : Polygon et PolyPolygon (le pinceau du DC, puis le
+  contour fermé du stylo), Polyline et PolyPolyline, PolylineTo, PolyBezier et PolyBezierTo (la position courante),
+  CreatePolygonRgn et CreatePolyPolygonRgn (la région, coupée à ±32767) ;
+- le remplissage (`win32k::gdi::polyfill`) : un pixel est dedans quand son centre l'est, la règle des régions de
+  GDI, si bien que des bandes voisines se pavent sans trou ni recouvrement (ReactOS suit les arêtes par Bresenham) ;
+  les figures d'un PolyPolygon ensemble, selon `lFillMode` (ALTERNATE : un trou reste vide ; WINDING), là où
+  ReactOS remplit chaque figure à part et lit `jFillMode`, que `gdi32` n'écrit pas ;
+- les stylos de stock (WHITE_PEN, BLACK_PEN, NULL_PEN ; BLACK_PEN dans un DC neuf) et le stylo des attributs du DC
+  (DC_vUpdateLineBrush, `dc::line_pen`) : SelectObject de `gdi32` y écrit le stylo sans appeler le noyau, et LineTo
+  traçait toujours en noir ;
+- le mode de mélange des attributs (`jROP2`, `dc::draw_modes`) pour le remplissage et les traits : R2_NOT inverse,
+  comme VCL le fait pour ses cadres ;
+- LineTo et Rectangle comme ReactOS : un trait s'arrête avant son dernier pixel (IntEngLineTo), Rectangle remplit
+  sans sa colonne de droite ni sa ligne du bas, son contour du stylo du DC, rien pour un stylo nul ;
+- la couleur d'un trait dans l'ordre d'octets de la surface : un stylo rouge traçait en bleu sur l'écran et les DIB
+  sections de 32 bits ;
+- NtGdiSetPixel, par lequel VCL finit ses traits (SetPixelV).
+
+Scénario `polygons` (`tests/native/poly1.c`, AMD et Intel) : les étapes de GDI sur une DIB section, puis une fenêtre
+peinte par bandes de Polygon, un menu montré par-dessus puis détruit : l'écran montre de nouveau les bandes.
+
+**Pas encore** : ExtCreateRegion (VCL se replie sur CreateRectRgn et CombineRgn), les chemins (BeginPath, EndPath,
+PathToRegion, SelectClipPath), les ellipses, SetDIBitsToDevice, GetTransform, le DC propre d'une fenêtre ou de sa
+classe.
+
 ### La suite
 
 **Mise à jour du 2026-11-20 : ProcessDebugPort** (`fix/ps-process-debug-port`).

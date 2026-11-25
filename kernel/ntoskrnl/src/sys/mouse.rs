@@ -82,12 +82,18 @@ pub(super) fn nt_user_call_no_param(arguments: &[u32]) -> NtStatus {
 /// (`THREADSTATE_FOCUSWINDOW`), la fenêtre active
 /// (`THREADSTATE_ACTIVEWINDOW`) ou celle qui a la capture
 /// (`THREADSTATE_CAPTUREWINDOW`) dans la file du thread ; son curseur
-/// (`THREADSTATE_GETCURSOR` : GetCursor, `win32k::cursor`). Une autre rend
-/// 0, journalisée une fois.
+/// (`THREADSTATE_GETCURSOR` : GetCursor, `win32k::cursor`) ; les fenêtres
+/// que SetTaskmanWindow et SetProgmanWindow ont données au `DESKTOPINFO` de
+/// son bureau (`THREADSTATE_TASKMANWINDOW`, `THREADSTATE_PROGMANWINDOW`). Une
+/// autre rend 0, journalisée une fois.
 pub(super) fn nt_user_get_thread_state(arguments: &[u32]) -> NtStatus {
     let routine = arguments[0];
     if routine == THREADSTATE_GETCURSOR {
         return NtStatus(current().cursor.load(core::sync::atomic::Ordering::Acquire));
+    }
+    if routine == abi::user::THREADSTATE_TASKMANWINDOW || routine == abi::user::THREADSTATE_PROGMANWINDOW {
+        let task_man = routine == abi::user::THREADSTATE_TASKMANWINDOW;
+        return NtStatus(current().desktop().map_or(0, |desktop| desktop.desktop.shell_helper_window(task_man)));
     }
     let field = match routine {
         THREADSTATE_FOCUSWINDOW => |queue: &mut win32k::queue::QueueState| queue.focus,

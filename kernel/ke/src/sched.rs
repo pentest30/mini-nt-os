@@ -3,12 +3,17 @@
 //! Un thread est un [`Thread`] : la tranche dispatcher (`dispatcher::KThread`) en
 //! tête, puis son contexte de commutation, sa priorité, son quantum, son état
 //! FPU (ADR-009) et la base de répertoire (CR3) de son espace d'adresses, que
-//! chaque commutation charge (`mm::address_space`). La table des threads ([`ThreadTable`], TID → thread) est
-//! commune aux processeurs ; l'ordonnancement ([`Scheduler`]) est propre à
-//! chacun et vit dans son KPRCB (`ke::prcb`, ADR-015). Les threads prêts d'un
-//! processeur attendent dans une file par priorité (anneau, [`ReadyQueue`]) ; un
-//! bitmap résume les files non vides. Le thread idle n'est dans aucune file : il
-//! tourne quand aucun autre n'est prêt.
+//! chaque commutation charge (`mm::address_space`). La table des threads
+//! ([`ThreadTable`], TID → thread) est commune aux processeurs ; elle grandit
+//! à la création d'un thread, hors du verrou dispatcher : le nombre de threads
+//! n'a d'autre limite que la mémoire, comme dans XP. L'ordonnancement
+//! ([`Scheduler`]) est propre à chaque processeur et vit dans son KPRCB
+//! (`ke::prcb`, ADR-015). Les threads prêts d'un processeur attendent dans une
+//! file par priorité ([`ReadyQueue`]), chaînée par des liens que porte chaque
+//! thread, comme dans ReactOS (KxQueueReadyThread : le `WaitListEntry` du
+//! thread dans `DispatcherReadyListHead`) : une file n'a pas de capacité, et
+//! l'ordonnanceur n'alloue jamais. Un bitmap résume les files non vides. Le
+//! thread idle n'est dans aucune file : il tourne quand aucun autre n'est prêt.
 //!
 //! - Préemption : un thread qui devient prêt avec une priorité supérieure à celle
 //!   du thread courant le préempte à la prochaine interruption DISPATCH ; le
@@ -44,6 +49,7 @@
 //! [`KePlatform`] relie le dispatcher, les timers et l'IRQL à cet ordonnanceur.
 
 use alloc::boxed::Box;
+use alloc::vec::Vec;
 use core::cell::UnsafeCell;
 use core::ffi::c_void;
 use core::ptr;
@@ -59,8 +65,9 @@ use crate::thread::{context_switch_raw, KContext};
 
 // ── Constantes ───────────────────────────────────────────────────────────────
 
-/// Nombre maximal de threads.
-pub const MAX_THREADS: usize = 64;
+/// Emplacements de la table des threads à sa première allocation ; elle
+/// double chaque fois qu'elle est pleine ([`ThreadTable::storage`]).
+const INITIAL_THREAD_SLOTS: usize = 64;
 
 /// Niveaux de priorité : 0 (idle) à 31.
 pub const PRIORITY_LEVELS: usize = 32;
@@ -97,12 +104,30 @@ const STARVATION_BOOSTS: usize = 10;
 
 // ── File prête ───────────────────────────────────────────────────────────────
 
-/// File FIFO de threads, en anneau de capacité fixe : l'ordonnanceur n'alloue
-/// jamais (il s'exécute à DISPATCH_LEVEL). Un thread y figure au plus une fois.
-#[derive(Clone, Copy)]
+/// Les liens d'un thread dans une file prête ([`ReadyQueue`]). Un thread prêt
+/// n'attend pas : il est dans une file au plus (ReactOS chaîne de même ses
+/// threads prêts par leur `WaitListEntry`).
+struct ReadyLink {
+    next: *mut Thread,
+    prev: *mut Thread,
+    /// Le thread est dans une file prête.
+    queued: bool,
+}
+
+impl ReadyLink {
+    const fn new() -> Self {
+        Self { next: ptr::null_mut(), prev: ptr::null_mut(), queued: false }
+    }
+}
+
+/// File FIFO de threads, chaînée par leurs liens ([`ReadyLink`]) : sans
+/// capacité, elle n'alloue jamais (l'ordonnanceur s'exécute à
+/// DISPATCH_LEVEL). Un thread n'est que dans une file à la fois, et une fois.
+/// Elle ne tient que des pointeurs vers ses threads, qui ne pointent pas vers
+/// elle : elle peut changer d'adresse.
 pub struct ReadyQueue {
-    buf: [*mut Thread; MAX_THREADS],
-    head: usize,
+    head: *mut Thread,
+    tail: *mut Thread,
     len: usize,
 }
 
@@ -114,7 +139,7 @@ impl Default for ReadyQueue {
 
 impl ReadyQueue {
     pub const fn new() -> Self {
-        Self { buf: [ptr::null_mut(); MAX_THREADS], head: 0, len: 0 }
+        Self { head: ptr::null_mut(), tail: ptr::null_mut(), len: 0 }
     }
 
     #[inline]
@@ -123,63 +148,137 @@ impl ReadyQueue {
     }
 
     #[inline]
-    pub fn is_full(&self) -> bool {
-        self.len == MAX_THREADS
-    }
-
-    #[inline]
     pub fn len(&self) -> usize {
         self.len
     }
 
-    /// Ajoute en queue ; `false` si la file est pleine.
-    pub fn push(&mut self, thread: *mut Thread) -> bool {
-        if self.is_full() {
-            return false;
+    /// Ajoute en queue.
+    ///
+    /// # Panics
+    /// Si `thread` est déjà dans une file prête.
+    ///
+    /// # Safety
+    /// `thread` est valide tant qu'il est dans la file.
+    pub unsafe fn push(&mut self, thread: *mut Thread) {
+        // SAFETY: `thread` est valide (contrat) ; la queue, s'il y en a une,
+        // est un thread de la file, valide.
+        unsafe {
+            let link = Self::mark_queued(thread);
+            (*link).prev = self.tail;
+            (*link).next = ptr::null_mut();
+            if self.tail.is_null() {
+                self.head = thread;
+            } else {
+                (*self.tail).ready_link.next = thread;
+            }
         }
-        self.buf[(self.head + self.len) % MAX_THREADS] = thread;
+        self.tail = thread;
         self.len += 1;
-        true
     }
 
-    /// Ajoute en tête ; `false` si la file est pleine.
-    pub fn push_front(&mut self, thread: *mut Thread) -> bool {
-        if self.is_full() {
-            return false;
+    /// Ajoute en tête.
+    ///
+    /// # Panics
+    /// Si `thread` est déjà dans une file prête.
+    ///
+    /// # Safety
+    /// `thread` est valide tant qu'il est dans la file.
+    pub unsafe fn push_front(&mut self, thread: *mut Thread) {
+        // SAFETY: `thread` est valide (contrat) ; la tête, s'il y en a une,
+        // est un thread de la file, valide.
+        unsafe {
+            let link = Self::mark_queued(thread);
+            (*link).prev = ptr::null_mut();
+            (*link).next = self.head;
+            if self.head.is_null() {
+                self.tail = thread;
+            } else {
+                (*self.head).ready_link.prev = thread;
+            }
         }
-        self.head = (self.head + MAX_THREADS - 1) % MAX_THREADS;
-        self.buf[self.head] = thread;
+        self.head = thread;
         self.len += 1;
-        true
+    }
+
+    /// Les liens de `thread`, marqué en file.
+    ///
+    /// # Safety
+    /// `thread` est valide.
+    unsafe fn mark_queued(thread: *mut Thread) -> *mut ReadyLink {
+        // SAFETY: garanti par l'appelant.
+        unsafe {
+            let link = ptr::addr_of_mut!((*thread).ready_link);
+            assert!(!(*link).queued, "a thread is queued twice in the ready queues");
+            (*link).queued = true;
+            link
+        }
     }
 
     /// Les threads de la file, du premier au dernier.
     pub fn iter(&self) -> impl Iterator<Item = *mut Thread> + '_ {
-        (0..self.len).map(move |i| self.buf[(self.head + i) % MAX_THREADS])
+        let mut next = self.head;
+        core::iter::from_fn(move || {
+            let thread = next;
+            if thread.is_null() {
+                return None;
+            }
+            // SAFETY: un thread de la file est valide (contrat de `push`), et
+            // la file ne change pas tant que l'itérateur l'emprunte.
+            next = unsafe { (*thread).ready_link.next };
+            Some(thread)
+        })
     }
 
     /// Sort le premier thread.
     pub fn pop(&mut self) -> Option<*mut Thread> {
-        if self.is_empty() {
+        let thread = self.head;
+        if thread.is_null() {
             return None;
         }
-        let thread = self.buf[self.head];
-        self.head = (self.head + 1) % MAX_THREADS;
-        self.len -= 1;
+        // SAFETY: la tête est un thread de cette file, valide (contrat de
+        // `push`).
+        unsafe { self.unlink(thread) };
         Some(thread)
     }
 
     /// Retire `thread` où qu'il soit, sans changer l'ordre des autres ; `false`
-    /// s'il n'y est pas.
-    pub fn remove(&mut self, thread: *mut Thread) -> bool {
-        let Some(at) = (0..self.len).find(|&i| self.buf[(self.head + i) % MAX_THREADS] == thread) else {
-            return false;
-        };
-        for i in at..self.len - 1 {
-            self.buf[(self.head + i) % MAX_THREADS] = self.buf[(self.head + i + 1) % MAX_THREADS];
+    /// s'il n'est dans aucune file.
+    ///
+    /// # Safety
+    /// `thread` est valide ; s'il est dans une file prête, c'est celle-ci.
+    pub unsafe fn remove(&mut self, thread: *mut Thread) -> bool {
+        // SAFETY: garanti par l'appelant.
+        unsafe {
+            if !(*thread).ready_link.queued {
+                return false;
+            }
+            self.unlink(thread);
+        }
+        true
+    }
+
+    /// Détache `thread` de ses voisins dans la file.
+    ///
+    /// # Safety
+    /// `thread` est un thread de cette file.
+    unsafe fn unlink(&mut self, thread: *mut Thread) {
+        // SAFETY: `thread` et ses voisins sont des threads de la file, valides.
+        unsafe {
+            let link = ptr::addr_of_mut!((*thread).ready_link);
+            let (prev, next) = ((*link).prev, (*link).next);
+            if prev.is_null() {
+                self.head = next;
+            } else {
+                (*prev).ready_link.next = next;
+            }
+            if next.is_null() {
+                self.tail = prev;
+            } else {
+                (*next).ready_link.prev = prev;
+            }
+            link.write(ReadyLink::new());
         }
         self.len -= 1;
-        true
     }
 }
 
@@ -231,6 +330,8 @@ pub struct Thread {
     /// Le thread de l'exécutif qui le possède (ETHREAD de Ps), opaque pour Ke ;
     /// nul pour un thread noyau.
     owner: *const c_void,
+    /// Ses liens dans la file prête où il attend son tour, s'il est prêt.
+    ready_link: ReadyLink,
 }
 
 impl Thread {
@@ -266,6 +367,7 @@ impl Thread {
             ptr::addr_of_mut!((*t).directory_table_base).write(SYSTEM_DIRECTORY.load(Ordering::Relaxed));
             ptr::addr_of_mut!((*t).teb).write(0);
             ptr::addr_of_mut!((*t).owner).write(ptr::null());
+            ptr::addr_of_mut!((*t).ready_link).write(ReadyLink::new());
         }
         t
     }
@@ -274,9 +376,12 @@ impl Thread {
 // ── Table des threads ────────────────────────────────────────────────────────
 
 /// TID → thread, commune aux processeurs. Dans le noyau, sous le verrou
-/// dispatcher.
+/// dispatcher, où elle n'alloue ni ne libère rien : elle grandit par
+/// [`grow`](Self::grow), avec une mémoire prise avant
+/// ([`storage`](Self::storage)), et rend l'ancienne, à libérer après.
 pub struct ThreadTable {
-    threads: [*mut Thread; MAX_THREADS],
+    /// Par TID : le thread, ou nul pour un TID libre.
+    threads: Vec<*mut Thread>,
 }
 
 impl Default for ThreadTable {
@@ -287,19 +392,69 @@ impl Default for ThreadTable {
 
 impl ThreadTable {
     pub const fn new() -> Self {
-        Self { threads: [ptr::null_mut(); MAX_THREADS] }
+        Self { threads: Vec::new() }
     }
 
-    /// Enregistre `thread` et lui donne son TID ; `None` si la table est pleine.
+    /// Enregistre `thread` et lui donne son TID, le plus petit libre ; `None`
+    /// si la table est pleine : il faut l'agrandir ([`grow`](Self::grow)).
+    /// N'alloue jamais.
     ///
     /// # Safety
     /// `thread` est valide pour toute la vie de la table.
     pub unsafe fn register(&mut self, thread: *mut Thread) -> Option<usize> {
-        let tid = self.threads.iter().position(|t| t.is_null())?;
+        let tid = match self.threads.iter().position(|t| t.is_null()) {
+            Some(tid) => tid,
+            // Dans la capacité : `push` n'alloue pas.
+            None if self.threads.len() < self.threads.capacity() => {
+                self.threads.push(ptr::null_mut());
+                self.threads.len() - 1
+            }
+            None => return None,
+        };
         self.threads[tid] = thread;
         // SAFETY: garanti par l'appelant.
         unsafe { (*thread).tid = tid };
         Some(tid)
+    }
+
+    /// Les TID que la table peut donner sans grandir.
+    pub fn capacity(&self) -> usize {
+        self.threads.capacity()
+    }
+
+    /// Une borne des TID donnés : chacun est en dessous.
+    pub fn tid_bound(&self) -> usize {
+        self.threads.len()
+    }
+
+    /// La mémoire d'une table plus grande que `capacity` emplacements : le
+    /// double, ou [`INITIAL_THREAD_SLOTS`] la première fois ; `None` si la
+    /// mémoire manque.
+    ///
+    /// # IRQL
+    /// PASSIVE_LEVEL (alloue).
+    pub fn storage(capacity: usize) -> Option<Vec<*mut Thread>> {
+        let slots = capacity.checked_mul(2)?.max(INITIAL_THREAD_SLOTS);
+        let mut storage = Vec::new();
+        storage.try_reserve_exact(slots).ok()?;
+        Some(storage)
+    }
+
+    /// Prend `storage` ([`storage`](Self::storage)) s'il a plus de place que
+    /// la table, et y copie ses emplacements. Rend ce qui ne sert plus, à
+    /// libérer hors du verrou dispatcher : l'ancienne mémoire, ou `storage`
+    /// s'il n'a pas plus de place (la table a grandi entre-temps). N'alloue ni
+    /// ne libère rien.
+    pub fn grow(&mut self, mut storage: Vec<*mut Thread>) -> Vec<*mut Thread> {
+        if storage.capacity() <= self.threads.capacity() {
+            return storage;
+        }
+        storage.clear();
+        let capacity = storage.capacity();
+        // Dans la capacité : `extend_from_slice` n'alloue pas.
+        storage.extend_from_slice(&self.threads);
+        debug_assert_eq!(storage.capacity(), capacity, "the thread table allocated under the dispatcher lock");
+        core::mem::replace(&mut self.threads, storage)
     }
 
     /// Le thread `tid`, ou nul.
@@ -370,8 +525,15 @@ impl Scheduler {
             (*thread).priority
         };
         let queue = &mut self.ready[usize::from(p)];
-        let queued = if front { queue.push_front(thread) } else { queue.push(thread) };
-        assert!(queued, "ready queue overflow: a thread is queued twice");
+        // SAFETY: garanti par l'appelant ; un thread déjà en file arrête le
+        // système (`ReadyQueue::push`).
+        unsafe {
+            if front {
+                queue.push_front(thread);
+            } else {
+                queue.push(thread);
+            }
+        }
         self.summary |= 1 << p;
         self.current == self.idle || p > priority(self.current)
     }
@@ -442,13 +604,17 @@ impl Scheduler {
     /// Retire de sa file un thread prêt.
     ///
     /// # Safety
-    /// `thread` est valide.
+    /// `thread` est valide ; s'il est en file, c'est dans une file de cet
+    /// ordonnanceur.
     pub unsafe fn unready(&mut self, thread: *mut Thread) {
-        // SAFETY: garanti par l'appelant.
-        let p = usize::from(unsafe { (*thread).priority });
-        self.ready[p].remove(thread);
-        if self.ready[p].is_empty() {
-            self.summary &= !(1 << p);
+        // SAFETY: garanti par l'appelant ; la priorité d'un thread ne change pas
+        // tant qu'il est en file : c'est celle de sa file.
+        unsafe {
+            let p = usize::from((*thread).priority);
+            self.ready[p].remove(thread);
+            if self.ready[p].is_empty() {
+                self.summary &= !(1 << p);
+            }
         }
     }
 
@@ -539,8 +705,8 @@ impl Scheduler {
     /// depuis au moins `threshold` ticks passent à 15 pour un double quantum,
     /// au bout duquel ils reviennent à leur base. Au plus [`STARVATION_BOOSTS`]
     /// par appel, les moins prioritaires d'abord ; toutes les files sont
-    /// examinées (au plus [`MAX_THREADS`] threads). `true` si l'un d'eux doit
-    /// préempter le thread courant.
+    /// examinées, chacune jusqu'au bout. `true` si l'un d'eux doit préempter
+    /// le thread courant.
     pub fn scan_starved(&mut self, threshold: u64) -> bool {
         let mut starved = [ptr::null_mut(); STARVATION_BOOSTS];
         let mut found = 0;
@@ -865,54 +1031,89 @@ pub unsafe fn init(idle_stack_top: u64) {
         0,
         None,
     );
+    let storage = ThreadTable::storage(0).expect("thread table");
     // SAFETY: rien d'autre n'utilise encore l'ordonnanceur ; verrou tenu de
     // acquire à release.
-    unsafe {
+    let unused = unsafe {
         let old_irql = DISPATCHER_LOCK.acquire::<KePlatform>();
         let table = &mut *threads();
         assert!(table.get(0).is_null(), "scheduler initialised twice");
+        let unused = table.grow(storage);
         table.register(boot).expect("thread table");
         table.register(idle).expect("thread table");
         (*sched()).start(boot, idle);
         prcb::current().current_thread.store(boot, Ordering::Relaxed);
         DISPATCHER_LOCK.release::<KePlatform>(old_irql);
-    }
+        unused
+    };
+    drop(unused);
     crate::timer::init::<KePlatform>();
     log::info!("Ke scheduler: initialised (boot TID=0, idle TID=1, {} priorities)", PRIORITY_LEVELS);
+}
+
+/// Prend le verrou dispatcher et enregistre `t` ([`ThreadTable::register`]) ;
+/// si la table est pleine, la fait grandir hors du verrou, puis recommence.
+/// Rend le TID, verrou tenu, avec l'IRQL d'avant, à rendre à `release` ; ou
+/// `None`, verrou relâché, si la mémoire manque.
+///
+/// # Safety
+/// `t` est un thread neuf, valide pour toujours s'il est enregistré.
+///
+/// # IRQL
+/// PASSIVE_LEVEL (alloue).
+unsafe fn register_locked(t: *mut Thread) -> Option<(usize, Irql)> {
+    loop {
+        // SAFETY: verrou tenu de chaque acquire au release qui le suit, ou
+        // rendu tenu à l'appelant ; `t` est valide (contrat).
+        let unused = unsafe {
+            let old_irql = DISPATCHER_LOCK.acquire::<KePlatform>();
+            if let Some(tid) = (*threads()).register(t) {
+                return Some((tid, old_irql));
+            }
+            let capacity = (*threads()).capacity();
+            DISPATCHER_LOCK.release::<KePlatform>(old_irql);
+            let storage = ThreadTable::storage(capacity)?;
+            let old_irql = DISPATCHER_LOCK.acquire::<KePlatform>();
+            let unused = (*threads()).grow(storage);
+            DISPATCHER_LOCK.release::<KePlatform>(old_irql);
+            unused
+        };
+        drop(unused);
+    }
 }
 
 /// Enregistre `t` et le rend prêt ; il préempte l'appelant à la libération du
 /// verrou s'il est plus prioritaire. Son TID va dans `published`, s'il y en a
 /// un, avant qu'il soit prêt : il peut s'exécuter, et finir, avant que
-/// l'appelant reprenne. Libère `t` si la table est pleine.
+/// l'appelant reprenne. Libère `t` si la mémoire manque pour agrandir la
+/// table.
 ///
 /// # IRQL
 /// PASSIVE_LEVEL.
 fn start_thread(t: *mut Thread, published: Option<&AtomicUsize>, ready: bool) -> Option<usize> {
-    // SAFETY: `t` est un thread neuf, valide pour toujours s'il est enregistré ;
-    // verrou tenu de acquire à release.
-    let tid = unsafe {
-        let old_irql = DISPATCHER_LOCK.acquire::<KePlatform>();
-        let tid = (*threads()).register(t);
-        if let (Some(tid), Some(slot)) = (tid, published) {
+    // SAFETY: `t` est un thread neuf, valide pour toujours s'il est enregistré.
+    let Some((tid, old_irql)) = (unsafe { register_locked(t) }) else {
+        // SAFETY: jamais enregistré : personne d'autre ne le connaît.
+        drop(unsafe { Box::from_raw(t) });
+        return None;
+    };
+    // SAFETY: verrou tenu depuis l'enregistrement, jusqu'au release ; `t` est
+    // enregistré, ni courant ni en file.
+    unsafe {
+        if let Some(slot) = published {
             slot.store(tid, Ordering::Release);
         }
-        if ready && tid.is_some() && (*sched()).ready(t, false) {
+        if ready && (*sched()).ready(t, false) {
             request_reschedule();
         }
         DISPATCHER_LOCK.release::<KePlatform>(old_irql);
-        tid
-    };
-    if tid.is_none() {
-        // SAFETY: jamais enregistré : personne d'autre ne le connaît.
-        drop(unsafe { Box::from_raw(t) });
     }
-    tid
+    Some(tid)
 }
 
 /// Crée un thread noyau qui exécute `routine(context)` à la priorité
 /// `priority`, sur la pile `stack_top`, puis se termine. Son TID, ou `None` si
-/// la table est pleine. S'il est plus prioritaire que l'appelant, il s'exécute
+/// la mémoire manque. S'il est plus prioritaire que l'appelant, il s'exécute
 /// avant le retour.
 ///
 /// # Safety
@@ -1058,7 +1259,7 @@ pub struct UserThreadStart {
 ///
 /// Chaque commutation vers lui pointe le descripteur du TEB sur `start.teb`
 /// (`hal::gdt::set_teb_base`). La pile vient de Mm par l'appelant ; Ke n'en
-/// alloue jamais. Son TID, ou `None` si la table est pleine.
+/// alloue jamais. Son TID, ou `None` si la mémoire manque.
 ///
 /// # Safety
 /// `start.kernel_stack_top` est le haut, aligné sur 16 octets, d'une pile
@@ -1188,9 +1389,12 @@ pub unsafe fn delete_thread(tid: usize) -> bool {
         let old_irql = DISPATCHER_LOCK.acquire::<KePlatform>();
         let t = (*threads()).get(tid);
         let terminated = t.is_null() || (*t).tcb.state == ThreadState::Terminated;
-        let t = if terminated { (*threads()).unregister(tid) } else { ptr::null_mut() };
+        // Ses liens resteraient dans une file prête, sa mémoire rendue.
+        let queued = !t.is_null() && (*t).ready_link.queued;
+        let t = if terminated && !queued { (*threads()).unregister(tid) } else { ptr::null_mut() };
         DISPATCHER_LOCK.release::<KePlatform>(old_irql);
         assert!(terminated, "thread {tid} deleted before its end");
+        assert!(!queued, "thread {tid} deleted in a ready queue");
         t
     };
     if t.is_null() {
@@ -1470,7 +1674,7 @@ pub fn terminate_user_threads() {
     unsafe {
         let old_irql = DISPATCHER_LOCK.acquire::<KePlatform>();
         let current = current_thread();
-        for tid in 0..MAX_THREADS {
+        for tid in 0..(*threads()).tid_bound() {
             let t = (*threads()).get(tid);
             if t.is_null() || t == current || !(*t).user_mode || (*t).tcb.state == ThreadState::Terminated {
                 continue;
@@ -1546,81 +1750,108 @@ extern "C" fn idle_thread_main() -> ! {
 mod tests {
     use super::*;
 
-    /// Thread factice pour les files : jamais déréférencé.
-    fn fake(n: usize) -> *mut Thread {
-        ptr::without_provenance_mut(n)
-    }
-
-    // ── ReadyQueue ───────────────────────────────────────────────────────────
-
-    #[test]
-    fn ready_queue_push_pop_fifo_order() {
-        let mut q = ReadyQueue::new();
-        assert!(q.is_empty());
-        q.push(fake(10));
-        q.push(fake(20));
-        q.push(fake(30));
-        assert_eq!(q.len(), 3);
-        assert_eq!(q.pop(), Some(fake(10)));
-        assert_eq!(q.pop(), Some(fake(20)));
-        assert_eq!(q.pop(), Some(fake(30)));
-        assert_eq!(q.pop(), None);
-    }
-
-    #[test]
-    fn ready_queue_wraps_around_and_refuses_overflow() {
-        let mut q = ReadyQueue::new();
-        for i in 0..MAX_THREADS {
-            assert!(q.push(fake(i)));
-        }
-        assert!(q.is_full());
-        assert!(!q.push(fake(99)));
-        assert!(!q.push_front(fake(99)));
-        for _ in 0..MAX_THREADS / 2 {
-            q.pop();
-        }
-        for i in 0..MAX_THREADS / 2 {
-            assert!(q.push(fake(100 + i)));
-        }
-        assert_eq!(q.len(), MAX_THREADS);
-        assert_eq!(q.pop(), Some(fake(MAX_THREADS / 2)));
-    }
-
-    #[test]
-    fn ready_queue_push_front_goes_first() {
-        let mut q = ReadyQueue::new();
-        q.push(fake(1));
-        q.push(fake(2));
-        q.push_front(fake(0));
-        assert_eq!([q.pop(), q.pop(), q.pop()], [Some(fake(0)), Some(fake(1)), Some(fake(2))]);
-    }
-
-    #[test]
-    fn ready_queue_remove_keeps_the_order_of_the_others() {
-        let mut q = ReadyQueue::new();
-        for _ in 0..MAX_THREADS - 2 {
-            q.push(fake(9));
-            q.pop();
-        }
-        for n in 1..=5 {
-            q.push(fake(n));
-        }
-        assert!(q.remove(fake(3)), "across the end of the ring");
-        assert!(q.remove(fake(1)));
-        assert!(q.remove(fake(5)));
-        assert!(!q.remove(fake(5)));
-        assert_eq!([q.pop(), q.pop(), q.pop()], [Some(fake(2)), Some(fake(4)), None]);
-    }
-
-    // ── ThreadTable ──────────────────────────────────────────────────────────
-
     fn thread(priority: u8) -> *mut Thread {
         Thread::create(priority, KContext::default(), false, 0, None)
     }
 
+    /// `n` threads du test, jamais libérés.
+    fn test_threads(n: usize) -> Vec<*mut Thread> {
+        (0..n).map(|_| thread(1)).collect()
+    }
+
+    // ── ReadyQueue ───────────────────────────────────────────────────────────
+
+    fn push(q: &mut ReadyQueue, t: *mut Thread) {
+        // SAFETY: thread du test, jamais libéré.
+        unsafe { q.push(t) }
+    }
+
+    #[test]
+    fn ready_queue_push_pop_fifo_order() {
+        let t = test_threads(3);
+        let mut q = ReadyQueue::new();
+        assert!(q.is_empty());
+        for &t in &t {
+            push(&mut q, t);
+        }
+        assert_eq!(q.len(), 3);
+        assert_eq!([q.pop(), q.pop(), q.pop(), q.pop()], [Some(t[0]), Some(t[1]), Some(t[2]), None]);
+    }
+
+    #[test]
+    fn a_ready_queue_holds_any_number_of_threads() {
+        // The ring it replaced held 64.
+        let t = test_threads(300);
+        let mut q = ReadyQueue::new();
+        for &t in &t {
+            push(&mut q, t);
+        }
+        assert_eq!(q.len(), 300);
+        assert!(q.iter().eq(t.iter().copied()), "in the order they came");
+        for &first in &t {
+            assert_eq!(q.pop(), Some(first));
+        }
+        assert!(q.is_empty());
+        push(&mut q, t[0]);
+        assert_eq!(q.pop(), Some(t[0]), "out of the queue, a thread can come back");
+    }
+
+    #[test]
+    #[should_panic(expected = "queued twice")]
+    fn a_thread_in_two_ready_queues_stops_the_system() {
+        let t = thread(1);
+        let (mut a, mut b) = (ReadyQueue::new(), ReadyQueue::new());
+        push(&mut a, t);
+        push(&mut b, t);
+    }
+
+    #[test]
+    fn ready_queue_push_front_goes_first() {
+        let t = test_threads(3);
+        let mut q = ReadyQueue::new();
+        push(&mut q, t[1]);
+        push(&mut q, t[2]);
+        // SAFETY: thread du test, dans aucune file.
+        unsafe { q.push_front(t[0]) };
+        assert_eq!([q.pop(), q.pop(), q.pop()], [Some(t[0]), Some(t[1]), Some(t[2])]);
+        // SAFETY: as above.
+        unsafe { q.push_front(t[0]) };
+        push(&mut q, t[1]);
+        assert_eq!([q.pop(), q.pop()], [Some(t[0]), Some(t[1])], "in an empty queue, the first and the last");
+    }
+
+    #[test]
+    fn ready_queue_remove_keeps_the_order_of_the_others() {
+        let t = test_threads(6);
+        let mut q = ReadyQueue::new();
+        for &t in &t[..5] {
+            push(&mut q, t);
+        }
+        // SAFETY: threads du test ; le dernier n'est dans aucune file.
+        unsafe {
+            assert!(q.remove(t[2]), "in the middle");
+            assert!(q.remove(t[0]), "the first");
+            assert!(q.remove(t[4]), "the last");
+            assert!(!q.remove(t[4]), "already gone");
+            assert!(!q.remove(t[5]), "never queued");
+        }
+        assert_eq!(q.len(), 2);
+        push(&mut q, t[5]);
+        assert_eq!([q.pop(), q.pop(), q.pop(), q.pop()], [Some(t[1]), Some(t[3]), Some(t[5]), None]);
+    }
+
+    // ── ThreadTable ──────────────────────────────────────────────────────────
+
+    /// Agrandit `table`, comme `register_locked`.
+    fn grow(table: &mut ThreadTable) {
+        let unused = table.grow(ThreadTable::storage(table.capacity()).unwrap());
+        drop(unused);
+    }
+
     #[test]
     fn an_unregistered_tid_goes_to_the_next_thread() {
-        let mut table = Box::new(ThreadTable::new());
+        let mut table = ThreadTable::new();
+        grow(&mut table);
         let threads = [thread(1), thread(1), thread(1)];
         for &t in &threads {
             // SAFETY: libérés en fin de test.
@@ -1629,7 +1860,7 @@ mod tests {
         assert_eq!(table.unregister(1), threads[1]);
         assert!(table.get(1).is_null());
         assert!(table.unregister(1).is_null(), "already gone");
-        assert!(table.unregister(MAX_THREADS).is_null());
+        assert!(table.unregister(table.capacity()).is_null(), "beyond the table");
         let next = thread(1);
         // SAFETY: libéré en fin de test.
         assert_eq!(unsafe { table.register(next) }, Some(1));
@@ -1640,26 +1871,67 @@ mod tests {
     }
 
     #[test]
-    fn register_gives_the_first_free_tid_and_fails_when_full() {
-        let mut table = Box::new(ThreadTable::new());
-        for tid in 0..MAX_THREADS {
-            let t = thread(1);
-            // SAFETY: jamais libéré.
-            assert_eq!(unsafe { table.register(t) }, Some(tid));
-            assert_eq!(table.get(tid), t);
+    fn register_gives_the_first_free_tid_and_the_table_grows_when_full() {
+        let mut table = ThreadTable::new();
+        let first = thread(1);
+        // SAFETY: refusé, donc libre ; libéré en fin de test.
+        assert_eq!(unsafe { table.register(first) }, None, "no room before the first growth");
+        // Several growths: the table held 64 threads at most.
+        let count = 3 * INITIAL_THREAD_SLOTS + 1;
+        let threads = test_threads(count);
+        for (tid, &t) in threads.iter().enumerate() {
+            // SAFETY: jamais libérés.
+            let registered = unsafe {
+                match table.register(t) {
+                    Some(tid) => tid,
+                    None => {
+                        grow(&mut table);
+                        table.register(t).expect("room after the growth")
+                    }
+                }
+            };
+            assert_eq!(registered, tid);
             // SAFETY: thread du test.
             assert_eq!(unsafe { (*t).tid }, tid);
         }
-        let extra = thread(1);
-        // SAFETY: refusé, donc libre ; libéré aussitôt.
-        unsafe {
-            assert!(table.register(extra).is_none());
-            drop(Box::from_raw(extra));
-        }
-        assert!(table.get(MAX_THREADS).is_null());
+        assert!(table.capacity() >= count);
+        assert!(threads.iter().enumerate().all(|(tid, &t)| table.get(tid) == t), "kept across the growths");
+        assert!(table.get(table.tid_bound()).is_null());
+        // SAFETY: jamais enregistré.
+        drop(unsafe { Box::from_raw(first) });
+    }
+
+    #[test]
+    fn a_growth_gives_back_the_storage_to_free_outside_the_lock() {
+        let mut table = ThreadTable::new();
+        grow(&mut table);
+        let t = thread(1);
+        // SAFETY: jamais libéré.
+        unsafe { table.register(t) }.unwrap();
+        let capacity = table.capacity();
+        let unused = table.grow(Vec::with_capacity(capacity));
+        assert_eq!((unused.capacity(), table.capacity()), (capacity, capacity), "no larger: given back unused");
+        let old = table.grow(ThreadTable::storage(capacity).unwrap());
+        assert_eq!(old.capacity(), capacity, "the old storage");
+        assert_eq!(table.capacity(), 2 * capacity);
+        assert_eq!(table.get(0), t);
+        assert!(ThreadTable::storage(usize::MAX / 4).is_none(), "no memory for it: no table, no panic");
     }
 
     // ── Scheduler ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn hundreds_of_ready_threads_of_one_priority_run_in_turn() {
+        let (mut s, boot) = scheduler();
+        let peers: Vec<_> = (0..200).map(|_| thread(NORMAL_PRIORITY)).collect();
+        for &t in &peers {
+            assert!(!ready(&mut s, t, false), "a peer waits for the end of the quantum");
+        }
+        for &t in &peers {
+            assert_eq!(s.dispatch(QUANTUM_TICKS), Some(t));
+        }
+        assert_eq!(s.dispatch(QUANTUM_TICKS), Some(boot), "round robin, behind its 200 peers");
+    }
 
     /// Ordonnanceur d'un processeur : le thread de démarrage (priorité
     /// normale) courant, et idle.
@@ -1914,7 +2186,7 @@ mod tests {
     #[test]
     fn a_scan_raises_ten_variable_priority_threads_below_fifteen_at_most() {
         let (mut s, _) = scheduler();
-        let lows: alloc::vec::Vec<_> = (0..STARVATION_BOOSTS + 2).map(|_| thread(3)).collect();
+        let lows: Vec<_> = (0..STARVATION_BOOSTS + 2).map(|_| thread(3)).collect();
         let others = [thread(LOW_REALTIME_PRIORITY - 1), thread(LOW_REALTIME_PRIORITY)];
         for &t in lows.iter().chain(&others) {
             ready(&mut s, t, false);

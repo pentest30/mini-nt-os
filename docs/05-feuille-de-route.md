@@ -133,13 +133,16 @@ M0 Assainir ─► M1 Ke ─► M2 Mm/Ob/Ps ─► M3 Frontière NT ─► M4 Io
 **Critères de sortie**
 - [ ] Une liste de 10 applications libres de l'ère XP ([la liste](compat/applications.md#la-liste-du-m7-premier-critère),
   arrêtée le 2026-11-17) s'installe et s'exécute.
-- [ ] Une session complète (ouverture, travail, arrêt) se déroule sans erreur fatale ni fuite de pool mesurable.
+- [x] Une session complète (ouverture, travail, arrêt) se déroule sans erreur fatale ni fuite de pool mesurable
+  (scénario `session-work`, le 2026-11-24 : [la mesure](compat/m6-logon.md#une-session-sans-fuite-de-pool-m7-le-2026-11-24)).
 
 ## M8 — Multimédia et jeux
 
 **But :** faire tourner le jeu de référence.
 
-- Pile Direct3D : wined3d puis Mesa en rendu logiciel (ADR-006). Optimisation du moteur DIB et de `StretchDIBits`.
+- Pile Direct3D : wined3d puis Mesa en rendu logiciel (ADR-006), par un ICD Mesa llvmpipe construit pour XP
+  (ADR-025 ; spike : [`compat/m8-direct3d.md`](compat/m8-direct3d.md)). Optimisation du moteur DIB et de
+  `StretchDIBits`.
 - Son : pilote HDA, et ADR à rédiger sur l'interface `winmm` et `dsound` (*kernel streaming* ou interface simplifiée).
 - DirectInput, timers haute résolution (`timeBeginPeriod(1)` réel).
 

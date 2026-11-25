@@ -333,6 +333,14 @@ pub mod xform {
 pub const R2_COPYPEN: u8 = 13;
 pub const OPAQUE: i32 = 2;
 pub const ALTERNATE: i32 = 1;
+/// WINDING: the other polygon fill mode (SetPolyFillMode).
+pub const WINDING: i32 = 2;
+/// R2_BLACK and R2_WHITE: the first and last mix modes (SetROP2); R2_NOT
+/// inverts the destination, R2_XORPEN mixes the pen in by XOR.
+pub const R2_BLACK: u8 = 1;
+pub const R2_NOT: u8 = 6;
+pub const R2_XORPEN: u8 = 7;
+pub const R2_WHITE: u8 = 16;
 pub const BLACKONWHITE: i32 = 1;
 pub const GM_COMPATIBLE: i32 = 1;
 pub const MM_TEXT: i32 = 1;
@@ -541,6 +549,23 @@ pub mod object_type {
 pub const GDI_DP_TO_LP: u32 = 0;
 pub const GDI_LP_TO_DP: u32 = 1;
 
+/// POLYFUNCTYPE: what NtGdiPolyPolyDraw draws (`ntgdityp.h`).
+pub mod poly_func {
+    /// Polygon, PolyPolygon: filled with the brush, outlined with the pen.
+    pub const POLY_POLYGON: u32 = 1;
+    /// Polyline, PolyPolyline.
+    pub const POLY_POLYLINE: u32 = 2;
+    /// PolyBezier: cubic Bézier curves, 1 + 3n points.
+    pub const POLY_BEZIER: u32 = 3;
+    /// PolylineTo: from the current position.
+    pub const POLY_LINE_TO: u32 = 4;
+    /// PolyBezierTo: from the current position, 3n points.
+    pub const POLY_BEZIER_TO: u32 = 5;
+    /// CreatePolygonRgn, CreatePolyPolygonRgn: the DC handle is the fill
+    /// mode, and the call returns a region.
+    pub const POLY_POLY_RGN: u32 = 6;
+}
+
 pub mod rop {
     /// The brush.
     pub const PATCOPY: u32 = 0x00F0_0021;
@@ -656,7 +681,7 @@ pub const NULLREGION: i32 = 1;
 pub const SIMPLEREGION: i32 = 2;
 pub const COMPLEXREGION: i32 = 3;
 
-/// GetStockObject's indices, those of the brushes.
+/// GetStockObject's indices.
 pub mod stock {
     pub const WHITE_BRUSH: usize = 0;
     pub const LTGRAY_BRUSH: usize = 1;
@@ -664,6 +689,9 @@ pub mod stock {
     pub const DKGRAY_BRUSH: usize = 3;
     pub const BLACK_BRUSH: usize = 4;
     pub const NULL_BRUSH: usize = 5;
+    pub const WHITE_PEN: usize = 6;
+    pub const BLACK_PEN: usize = 7;
+    pub const NULL_PEN: usize = 8;
     pub const OEM_FIXED_FONT: usize = 10;
     pub const ANSI_FIXED_FONT: usize = 11;
     pub const ANSI_VAR_FONT: usize = 12;

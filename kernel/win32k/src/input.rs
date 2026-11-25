@@ -298,6 +298,44 @@ pub fn set_foreground_window(window: &Arc<Window>) -> bool {
     true
 }
 
+/// TWOPARAM_ROUTINE_SWITCHTOTHISWINDOW (SwitchToThisWindow, ReactOS
+/// `simplecall.c`) : comme Alt+Tab (`alt_tab`, ce que fait un bouton de la
+/// barre des tâches d'`explorer`), `window` passe au premier plan
+/// ([`set_foreground_window`], co_IntSetForegroundWindowMouse) et, réduite,
+/// reçoit WM_SYSCOMMAND SC_RESTORE, posté. Sans `alt_tab`, avec un premier
+/// plan, elle devient la fenêtre active ([`set_active`], UserSetActiveWindow)
+/// ; ReactOS envoie aussi l'ancienne fenêtre active au fond de l'ordre Z,
+/// pas encore Mino (journalisé une fois).
+///
+/// # IRQL
+/// PASSIVE_LEVEL, dans un service système, sans rien tenir.
+pub fn switch_to_this_window(window: &Arc<Window>, alt_tab: bool) {
+    if !alt_tab && foreground().is_some() {
+        static REPORTED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+        if !REPORTED.swap(true, core::sync::atomic::Ordering::Relaxed) {
+            log::warn!("win32k: SwitchToThisWindow without Alt+Tab: the active window not sent to the bottom: not yet");
+        }
+        if let Ok(thread) = crate::convert_current_thread() {
+            set_active(&thread, Some(window));
+        }
+        return;
+    }
+    set_foreground_window(window);
+    if alt_tab && window.state().style & WS_MINIMIZE != 0 {
+        if let Some(thread) = crate::gui::thread_info_of(window.pti) {
+            let time = hal::timer::get_tick_count() as u32;
+            let restore = Msg32 {
+                hwnd: window.handle,
+                message: abi::user::WM_SYSCOMMAND,
+                w_param: abi::user::SC_RESTORE,
+                time,
+                ..Msg32::default()
+            };
+            crate::queue::post(&thread, restore);
+        }
+    }
+}
+
 /// La règle de SetForegroundWindow : une fenêtre visible qui n'est pas une
 /// fille, réduite ou non ; co_IntSetForegroundWindow active une fenêtre
 /// réduite. Écart avec ReactOS : une fenêtre cachée est refusée (ReactOS
@@ -697,6 +735,7 @@ pub fn activate_event(thread: &ThreadInfo, hwnd: u32, foreground_from: Option<u3
     }
     let _ = crate::window::send_message(&window, WM_NCACTIVATE, u32::from(foreground), LParam::Value(0));
     if foreground {
+        crate::shellhook::activated(&window);
         let flags = SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE;
         crate::winpos::set_window_pos(&window, HWND_TOP, 0, 0, 0, 0, flags);
     }
@@ -753,6 +792,9 @@ fn set_active_window(thread: &Arc<ThreadInfo>, window: &Arc<Window>, foreground_
     let _ = crate::window::send_message(window, WM_NCACTIVATE, u32::from(foreground), LParam::Value(0));
     let wparam = activate_wparam(WA_ACTIVE, window.state().style);
     let _ = crate::window::send_message(window, WM_ACTIVATE, wparam, LParam::Value(previous_active));
+    if window.state().style & WS_VISIBLE != 0 {
+        crate::shellhook::activated(window);
+    }
     // The focus goes to the window unless WM_ACTIVATE gave it to one of its
     // children (DefDlgProc: the control that had it); to nobody if it is
     // minimized.

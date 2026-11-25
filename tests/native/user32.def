@@ -46,6 +46,7 @@ EndPaint@8
 EnumChildWindows@12
 EnumThreadWindows@12
 EnumWindows@8
+ExitWindowsEx@8
 FillRect@12
 GetActiveWindow@0
 GetAsyncKeyState@4
@@ -229,3 +230,9 @@ SendMessageA@16
 GetWindowLongA@8
 RegisterClassW@4
 EnumDisplayMonitors@16
+RegisterShellHookWindow@4
+DeregisterShellHookWindow@4
+SetTaskmanWindow@4
+GetTaskmanWindow@0
+SwitchToThisWindow@8
+ShowWindowAsync@8

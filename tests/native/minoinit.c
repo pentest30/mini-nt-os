@@ -7,7 +7,14 @@
  * logon of Administrator:
  *
  * 1. samsrv made the accounts in setup mode (SampInitializeSAM): wait for
- *    the value Administrator of SAM\Domains\Account\Users\Names;
+ *    the value Administrator of SAM\Domains\Account\Users\Names; then the
+ *    rights of the accounts (syssetup's InstallSecurity, InstallPrivileges):
+ *    each line of the [Privilege Rights] of %SystemRoot%\inf\defltwk.inf
+ *    given to its SIDs and names by LsaAddAccountRights, in the LSA's
+ *    database (the SECURITY hive), where lsasrv takes the privileges of a
+ *    logon token from (LsapSetPrivileges) -- without them, Administrator's
+ *    token has no SeShutdownPrivilege; a right not given is logged, not
+ *    fatal, as in syssetup;
  * 2. the profiles: userenv's InitializeProfiles (ordinal 100), which
  *    creates the profiles directory, Default User and All Users, and writes
  *    ProfileList and the shell folders of HKU\.DEFAULT;
@@ -78,6 +85,12 @@ typedef struct {
 #define REG_SZ 1
 #define REG_DWORD 4
 #define SHUTDOWN_REBOOT 1
+#define GENERIC_READ 0x80000000
+#define FILE_SHARE_READ 1
+#define OPEN_EXISTING 3
+#define INVALID_HANDLE_VALUE ((HANDLE)(LONG)-1)
+#define POLICY_CREATE_ACCOUNT 0x10
+#define POLICY_LOOKUP_NAMES 0x800
 #define SE_SHUTDOWN_PRIVILEGE 19
 #define NT_SUCCESS(status) ((status) >= 0)
 
@@ -100,12 +113,34 @@ __declspec(dllimport) BOOL __stdcall CopyFileW(const WCHAR *from, const WCHAR *t
 __declspec(dllimport) DWORD __stdcall ExpandEnvironmentStringsW(const WCHAR *from, WCHAR *to, DWORD size);
 __declspec(dllimport) void __stdcall Sleep(DWORD milliseconds);
 __declspec(dllimport) void __stdcall ExitProcess(UINT code);
+__declspec(dllimport) HANDLE __stdcall CreateFileW(const WCHAR *name, DWORD access, DWORD share, void *security,
+                                                   DWORD disposition, DWORD flags, HANDLE template_file);
+__declspec(dllimport) BOOL __stdcall ReadFile(HANDLE file, void *buffer, DWORD size, DWORD *read, void *overlapped);
+__declspec(dllimport) BOOL __stdcall CloseHandle(HANDLE handle);
+__declspec(dllimport) void *__stdcall LocalFree(void *memory);
 
 typedef BOOL(__stdcall *InitializeProfilesFn)(void);
 typedef BOOL(__stdcall *GetDefaultUserProfileDirectoryWFn)(WCHAR *path, DWORD *size);
 typedef LONG(__stdcall *CoInitializeFn)(void *reserved);
 typedef LONG(__stdcall *DllRegisterServerFn)(void);
 typedef LONG(__stdcall *SHDeleteKeyWFn)(void *key, const WCHAR *subkey);
+
+/* LSA_TRANSLATED_SID2: what LsaLookupNames2 gives for a name. */
+typedef struct {
+    DWORD Use;
+    void *Sid;
+    LONG DomainIndex;
+    DWORD Flags;
+} LSA_TRANSLATED_SID2;
+
+typedef NTSTATUS(__stdcall *LsaOpenPolicyFn)(UNICODE_STRING *system, OBJECT_ATTRIBUTES *attributes, DWORD access,
+                                             HANDLE *policy);
+typedef NTSTATUS(__stdcall *LsaAddAccountRightsFn)(HANDLE policy, void *sid, UNICODE_STRING *rights, DWORD count);
+typedef NTSTATUS(__stdcall *LsaLookupNames2Fn)(HANDLE policy, DWORD flags, DWORD count, UNICODE_STRING *names,
+                                               void **domains, LSA_TRANSLATED_SID2 **sids);
+typedef NTSTATUS(__stdcall *LsaFreeMemoryFn)(void *memory);
+typedef NTSTATUS(__stdcall *LsaCloseFn)(HANDLE handle);
+typedef BOOL(__stdcall *ConvertStringSidToSidWFn)(const WCHAR *text, void **sid);
 
 /* HKEY_LOCAL_MACHINE, as shlwapi takes it (a predefined handle, not a key of
  * the kernel's registry: shlwapi resolves it itself). */
@@ -241,6 +276,239 @@ static void wait_for_the_accounts(void)
     stop("no account Administrator in the SAM");
 }
 
+/* The security defaults of a workstation, as ReactOS has them (ASCII). */
+static char security_inf[8192];
+
+/* A line of the INF file: its characters, its spaces trimmed. */
+typedef struct {
+    const char *text;
+    DWORD length;
+} LINE;
+
+/* The next line of `text` from `*at`; 0 at its end. */
+static BOOL next_line(const char *text, DWORD *at, LINE *line)
+{
+    DWORD start, end;
+    if (!text[*at])
+        return 0;
+    start = *at;
+    while (text[*at] && text[*at] != '\n')
+        ++*at;
+    end = *at;
+    if (text[*at])
+        ++*at;
+    while (start < end && (text[start] == ' ' || text[start] == '\t'))
+        ++start;
+    while (end > start && (text[end - 1] == ' ' || text[end - 1] == '\t' || text[end - 1] == '\r'))
+        --end;
+    line->text = text + start;
+    line->length = end - start;
+    return 1;
+}
+
+/* Whether `line` is the section header `header`, without case. */
+static BOOL is_section(const LINE *line, const char *header)
+{
+    DWORD i;
+    for (i = 0; i < line->length && header[i]; ++i) {
+        char a = line->text[i], b = header[i];
+        if (a >= 'a' && a <= 'z')
+            a = (char)(a - 32);
+        if (b >= 'a' && b <= 'z')
+            b = (char)(b - 32);
+        if (a != b)
+            return 0;
+    }
+    return i == line->length && !header[i];
+}
+
+/* The value of the key `key` (its `n` characters) in the [Strings] of
+ * `text`, its quotes taken off, into `value`; 0 without it. */
+static BOOL inf_string(const char *text, const WCHAR *key, DWORD n, WCHAR *value, DWORD size)
+{
+    DWORD at = 0;
+    LINE line;
+    BOOL in_strings = 0;
+    while (next_line(text, &at, &line)) {
+        DWORD i, k;
+        if (line.length && line.text[0] == '[') {
+            in_strings = is_section(&line, "[Strings]");
+            continue;
+        }
+        if (!in_strings || line.length <= n)
+            continue;
+        for (i = 0; i < n && (WCHAR)line.text[i] == key[i]; ++i)
+            ;
+        if (i < n)
+            continue;
+        while (i < line.length && line.text[i] == ' ')
+            ++i;
+        if (i >= line.length || line.text[i] != '=')
+            continue;
+        ++i;
+        while (i < line.length && (line.text[i] == ' ' || line.text[i] == '"'))
+            ++i;
+        for (k = 0; i < line.length && line.text[i] != '"' && k + 1 < size; ++i, ++k)
+            value[k] = (WCHAR)line.text[i];
+        value[k] = 0;
+        return 1;
+    }
+    return 0;
+}
+
+/* The LSA's functions of advapi32. */
+typedef struct {
+    LsaOpenPolicyFn open_policy;
+    LsaAddAccountRightsFn add_rights;
+    LsaLookupNames2Fn lookup_names;
+    LsaFreeMemoryFn free_memory;
+    LsaCloseFn close;
+    ConvertStringSidToSidWFn string_to_sid;
+} LSA;
+
+/* Gives `right` (an UNICODE_STRING) to the account of the INF field `field`
+ * (its `k` characters): a SID (`*S-1-5-32-544`), or an account name, given
+ * or taken from [Strings] (`%SceInfGuest%`), which LsaLookupNames2 makes a
+ * SID. 1 if given. */
+static BOOL give_right(const LSA *lsa, HANDLE policy, UNICODE_STRING *right, WCHAR *field, DWORD k)
+{
+    void *sid = 0;
+    LSA_TRANSLATED_SID2 *sids = 0;
+    NTSTATUS status;
+    if (field[0] == '*') {
+        if (!lsa->string_to_sid(field + 1, &sid)) {
+            DbgPrint("[minoinit] %s: not a SID (%lu)\n", ascii(field), GetLastError());
+            return 0;
+        }
+    } else {
+        WCHAR name[64];
+        UNICODE_STRING account;
+        void *domains = 0;
+        if (field[0] == '%' && k > 2 && field[k - 1] == '%') {
+            if (!inf_string(security_inf, field + 1, k - 2, name, 64)) {
+                DbgPrint("[minoinit] %s: not in [Strings]\n", ascii(field));
+                return 0;
+            }
+        } else {
+            DWORD c;
+            for (c = 0; c <= k && c < 64; ++c)
+                name[c] = field[c];
+            name[63] = 0;
+        }
+        account.Length = (unsigned short)(length(name) * 2);
+        account.MaximumLength = account.Length + 2;
+        account.Buffer = name;
+        status = lsa->lookup_names(policy, 0, 1, &account, &domains, &sids);
+        if (domains)
+            lsa->free_memory(domains);
+        if (!NT_SUCCESS(status) || !sids) {
+            DbgPrint("[minoinit] LsaLookupNames2 %s: %lx\n", ascii(name), (DWORD)status);
+            if (sids)
+                lsa->free_memory(sids);
+            return 0;
+        }
+    }
+    status = lsa->add_rights(policy, sid ? sid : sids[0].Sid, right, 1);
+    if (!NT_SUCCESS(status))
+        DbgPrint("[minoinit] LsaAddAccountRights %s: %lx\n", ascii(right->Buffer), (DWORD)status);
+    if (sids)
+        lsa->free_memory(sids);
+    if (sid)
+        LocalFree(sid);
+    return NT_SUCCESS(status);
+}
+
+/* 1, the end. The [Privilege Rights] of defltwk.inf given to the accounts,
+ * as syssetup's InstallPrivileges does it: each field of a line is a SID or
+ * an account name, which gets the right the line names. */
+static void give_the_rights(void)
+{
+    HMODULE advapi32 = LoadLibraryW(L"advapi32.dll");
+    LSA lsa = {0};
+    WCHAR path[260];
+    HANDLE file, policy = 0;
+    DWORD read = 0, at = 0, given = 0, failed = 0;
+    LINE line;
+    BOOL in_rights = 0;
+    OBJECT_ATTRIBUTES attributes = {0};
+    NTSTATUS status;
+
+    if (advapi32) {
+        lsa.open_policy = (LsaOpenPolicyFn)GetProcAddress(advapi32, "LsaOpenPolicy");
+        lsa.add_rights = (LsaAddAccountRightsFn)GetProcAddress(advapi32, "LsaAddAccountRights");
+        lsa.lookup_names = (LsaLookupNames2Fn)GetProcAddress(advapi32, "LsaLookupNames2");
+        lsa.free_memory = (LsaFreeMemoryFn)GetProcAddress(advapi32, "LsaFreeMemory");
+        lsa.close = (LsaCloseFn)GetProcAddress(advapi32, "LsaClose");
+        lsa.string_to_sid = (ConvertStringSidToSidWFn)GetProcAddress(advapi32, "ConvertStringSidToSidW");
+    }
+    if (!lsa.open_policy || !lsa.add_rights || !lsa.lookup_names || !lsa.free_memory || !lsa.close
+        || !lsa.string_to_sid)
+        stop("advapi32 has no LSA policy functions");
+    if (!ExpandEnvironmentStringsW(L"%SystemRoot%\\inf\\defltwk.inf", path, 260))
+        stop("no %SystemRoot%");
+    file = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, 0, OPEN_EXISTING, 0, 0);
+    if (file == INVALID_HANDLE_VALUE) {
+        DbgPrint("[minoinit] %s: error %lu\n", ascii(path), GetLastError());
+        stop("no defltwk.inf");
+    }
+    if (!ReadFile(file, security_inf, sizeof security_inf - 1, &read, 0) || read == sizeof security_inf - 1)
+        stop("defltwk.inf not read whole");
+    CloseHandle(file);
+    security_inf[read] = 0;
+
+    attributes.Length = sizeof attributes;
+    status = lsa.open_policy(0, &attributes, POLICY_CREATE_ACCOUNT | POLICY_LOOKUP_NAMES, &policy);
+    if (!NT_SUCCESS(status)) {
+        DbgPrint("[minoinit] LsaOpenPolicy: %lx\n", (DWORD)status);
+        stop("the LSA's policy does not open");
+    }
+    while (next_line(security_inf, &at, &line)) {
+        DWORD i = 0, name_length;
+        WCHAR right[64];
+        UNICODE_STRING right_string;
+        if (!line.length || line.text[0] == ';')
+            continue;
+        if (line.text[0] == '[') {
+            in_rights = is_section(&line, "[Privilege Rights]");
+            continue;
+        }
+        if (!in_rights)
+            continue;
+        /* The right's name, before `=`. */
+        while (i < line.length && line.text[i] != '=' && line.text[i] != ' ' && i + 1 < 64) {
+            right[i] = (WCHAR)line.text[i];
+            ++i;
+        }
+        right[i] = 0;
+        name_length = i;
+        while (i < line.length && line.text[i] != '=')
+            ++i;
+        right_string.Length = (unsigned short)(name_length * 2);
+        right_string.MaximumLength = right_string.Length + 2;
+        right_string.Buffer = right;
+        /* Its fields, separated by commas. */
+        while (++i < line.length) {
+            WCHAR field[128];
+            DWORD k = 0;
+            while (i < line.length && line.text[i] == ' ')
+                ++i;
+            while (i < line.length && line.text[i] != ',' && k + 1 < 128)
+                field[k++] = (WCHAR)line.text[i++];
+            while (k && field[k - 1] == ' ')
+                --k;
+            field[k] = 0;
+            if (!k)
+                continue;
+            if (give_right(&lsa, policy, &right_string, field, k))
+                ++given;
+            else
+                ++failed;
+        }
+    }
+    lsa.close(policy);
+    DbgPrint("[minoinit] rights of the accounts: %lu given, %lu not (defltwk.inf)\n", given, failed);
+}
+
 /* 2. The profiles; `profile` receives the directory of Default User. */
 static void make_the_profiles(WCHAR *profile, DWORD size)
 {
@@ -275,13 +543,16 @@ static void make_the_profiles(WCHAR *profile, DWORD size)
  * folders shell32's; Authenticode (WinVerifyTrust, CryptQueryObject) needs
  * the cryptographic providers (rsaenh), the trust providers and the SIPs
  * (wintrust, softpub, mscat32, msisip), which the pinned SOFTWARE hive does
- * not have. A DLL that does not load or fails is reported; it does
+ * not have; oleaut32's OleLoadPicture decodes every picture, BMP included,
+ * through WIC (windowscodecs: CLSID_WICImagingFactory, the decoders), as
+ * msi.dll loads the bitmaps of its dialogs. A DLL that does not load or fails is reported; it does
  * not stop the setup (as syssetup). */
 static void register_the_dlls(void)
 {
     static const WCHAR *const dlls[] = {
         L"browseui.dll", L"cryptnet.dll", L"mscat32.dll", L"msisip.dll", L"oleaut32.dll", L"rpcrt4.dll", L"rsabase.dll",
-        L"rsaenh.dll", L"shdocvw.dll", L"shell32.dll", L"softpub.dll", L"urlmon.dll", L"wininet.dll", L"wintrust.dll",
+        L"rsaenh.dll", L"shdocvw.dll", L"shell32.dll", L"softpub.dll", L"urlmon.dll", L"windowscodecs.dll",
+        L"wininet.dll", L"wintrust.dll",
     };
     HMODULE ole32 = LoadLibraryW(L"ole32.dll");
     CoInitializeFn co_initialize = ole32 ? (CoInitializeFn)GetProcAddress(ole32, "CoInitialize") : 0;
@@ -377,6 +648,7 @@ DWORD __stdcall GuiStartup(void)
         DbgPrint("[minoinit] environment: %s\n", ascii(environment));
     WCHAR profile[260];
     wait_for_the_accounts();
+    give_the_rights();
     make_the_profiles(profile, 260);
     register_the_dlls();
     consume_the_run_once();

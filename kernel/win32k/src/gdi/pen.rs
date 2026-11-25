@@ -7,14 +7,20 @@
 //! pixel sur deux le long du trait — une approximation des motifs de XP,
 //! qui suffisent aux axes des graphes ; PS_NULL ne dessine rien. Une
 //! largeur au-delà d'un pixel épaissit le trait perpendiculairement.
+//!
+//! Les stylos de stock (WHITE_PEN, BLACK_PEN, NULL_PEN : [`STOCK_PENS`])
+//! sont créés au démarrage avec les pinceaux, publics ; BLACK_PEN est celui
+//! d'un DC neuf. `gdi32` choisit un stylo dans les attributs du DC sans
+//! appeler le noyau : le DC le reprend quand il dessine
+//! (`super::dc::line_pen`, DC_vUpdateLineBrush).
 
 use alloc::sync::Arc;
 
-use abi::gdi::{objt, LO_PEN_TYPE};
+use abi::gdi::{objt, stock, LO_PEN_TYPE};
 use abi::ntstatus::{NtStatus, STATUS_INVALID_PARAMETER};
 
 use super::dib::ColorRef;
-use super::handles::{self, Object};
+use super::handles::{self, Object, OWNER_PUBLIC};
 
 /// PS_SOLID.
 pub const PS_SOLID: u32 = 0;
@@ -40,9 +46,34 @@ pub struct Pen {
     pub color: ColorRef,
 }
 
+/// Les stylos de stock (CreateStockObjects) : leur indice de GetStockObject,
+/// et eux.
+pub const STOCK_PENS: [(usize, Pen); 3] = [
+    (stock::WHITE_PEN, Pen { style: PS_SOLID, width: 1, color: ColorRef(0x00FF_FFFF) }),
+    (stock::BLACK_PEN, Pen::BLACK),
+    (stock::NULL_PEN, Pen { style: PS_NULL, width: 1, color: ColorRef(0) }),
+];
+
+/// Un stylo de stock, public ; rend son handle.
+///
+/// # Errors
+/// `STATUS_INSUFFICIENT_RESOURCES` sans place dans la table.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, au démarrage.
+pub fn create_stock(pen: Pen) -> Result<u32, NtStatus> {
+    let handle = handles::insert(Object::Pen(Arc::new(pen)), LO_PEN_TYPE, objt::PEN, OWNER_PUBLIC)?;
+    handles::make_stock(handle)
+}
+
 impl Pen {
     /// Le stylo implicite d'un DC : noir, d'un pixel.
     pub const BLACK: Self = Self { style: PS_SOLID, width: 1, color: ColorRef(0) };
+
+    /// Il ne dessine rien (PS_NULL).
+    pub const fn is_null(&self) -> bool {
+        self.style == PS_NULL
+    }
 
     /// `CreatePen` : un stylo au processus courant ; rend son handle GDI.
     /// Les styles que Mino ne tient pas encore (cosmétiques, INSIDEFRAME…)
