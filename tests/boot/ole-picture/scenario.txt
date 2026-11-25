@@ -1,0 +1,25 @@
+# A 24-bit BMP loaded as msi.dll loads the pictures of its dialogs
+# (tests/native/olepic1.c; load_picture in dll/win32/msi/dialog.c), in a
+# session, after minoinit's registrations. The welcome page of an MSI made
+# with WiX (7-Zip 9.20) showed no picture ("Failed to load bitmap
+# WixUI_Bmp_Dialog"): oleaut32 decodes a BMP through WIC (windowscodecs),
+# which syssetup.inf registers (OleControlDlls) and minoinit did not
+# (OleLoadPicture: REGDB_E_CLASSNOTREG).
+# 1. OleLoadPicture of the BMP, its handle, GetObject: 8 x 4;
+# 2. CreateCompatibleBitmap of the DC that holds it, StretchBlt, a pixel.
+features = test-smss, interactive
+requires = userland, native
+session = OLEPIC1.EXE
+app = 7zip
+boots = 2
+cpus = default
+timeout = 600
+
+expect = [minoinit] DllRegisterServer windowscodecs.dll: 0
+expect = [minoinit] done; rebooting
+expect = We are logged on
+expect = [olepic] step 1: CoInitialize 0; OleLoadPicture 0; get_Handle 0, a bitmap 1; GetObject 24: 8 x 4
+expect = [olepic] step 2: selected 1; CreateCompatibleBitmap 1; StretchBlt 1; the copy's pixel c8140a (the BMP's 1)
+expect = [olepic] done
+
+forbid = *** STOP:
