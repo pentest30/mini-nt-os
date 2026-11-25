@@ -40,7 +40,7 @@ scénarios.
    format (« No suitable pixel formats found », un WARN) et **Direct3DCreate9 rend NULL**. Ce n'est pas un manque de
    Mino : ReactOS lui-même a besoin d'un pilote OpenGL installable (ICD) pour Direct3D.
 
-## La suite : un ICD Mesa (décision à prendre)
+## La suite : un ICD Mesa (ADR-025)
 
 L'`opengl32` de ReactOS (`dll/opengl/opengl32/icdload.c`) charge un ICD de deux façons :
 
@@ -50,9 +50,9 @@ L'`opengl32` de ReactOS (`dll/opengl/opengl32/icdload.c`) charge un ICD de deux 
 - par le pilote d'affichage : ExtEscape(QUERYESCSUPPORT, puis OPENGL_GETINFO), NtGdiExtEscape côté noyau (pas fait).
 
 Un ICD Mesa en rendu logiciel (Gallium llvmpipe, licence MIT), i386, donnerait des formats non génériques et
-WGL_ARB_pixel_format : wined3d les retiendrait. C'est un binaire hors de ReactOS épinglé : **une ADR qui complète
-l'ADR-006** doit en décider (d'où il vient — construit depuis les sources de Mesa ou une distribution binaire
-vérifiée —, sa version épinglée, sa licence, sa place sur le disque, les clés de `mino.inf`). Les autres pistes
+WGL_ARB_pixel_format : wined3d les retiendrait. C'est un binaire hors de ReactOS épinglé : l'ADR-025 (acceptée,
+elle complète l'ADR-006) en décide — construit pour XP par `xtask` depuis des sources épinglées de Mesa, annoncé par
+le pilote d'affichage (NtGdiExtEscape) et décrit dans `mino.inf`. Les autres pistes
 écartées : remplacer l'`opengl32` de ReactOS (sort de la frontière de l'ADR-002) ; modifier wined3d pour garder les
 formats génériques (binaire épinglé modifié, et GDI est la voie la plus lente) ; DXVK (écarté par l'ADR-006).
 
@@ -95,6 +95,57 @@ chargeur d'XP par LoadLibrary — sans imports de Vista et **sans TLS implicite*
 sources épinglées : MinGW, dont `__thread` passe par TlsAlloc, ou MSVC avec `/Zc:threadSafeInit-` et sans
 `__declspec(thread)`). Allouer la TLS implicite au chargement dynamique serait changer le `ntdll` épinglé, hors de la
 frontière de l'ADR-002.
+
+## L'ICD construit pour XP : `cargo xtask icd-build` (étape 1 du spike « ICD XP »)
+
+`xtask/src/icd.rs` construit `third_party/mesa-icd/mesaicd.dll` depuis des sources épinglées (taille et SHA-256) :
+Mesa 20.3.5 (la dernière version qui a les variables de condition d'XP ; la 21.0 prend celles des systèmes
+suivants), LLVM 11.1.0 (bibliothèques X86 et `llvm-config` seulement : ses outils appellent des fonctions plus
+récentes qu'XP) et zlib 1.2.11 (le wrap de Mesa, lié en statique, pris du cache de paquets de Meson, sans réseau).
+Les archives `.tar.xz` passent par `xz -dc` (dans un fichier : un tube depuis le `xz` de MSYS2 se bloque) et un
+lecteur tar de `xtask` (`xtask/src/tar.rs` : un lien devient la copie de sa cible, ce qui marche sous Windows sans
+privilège ; le `tar` de Windows ne lit pas le xz).
+
+- **La chaîne** : un GCC MinGW-w64 i686 dont `__thread` est émulé (`__emutls_get_address`, TlsAlloc). `xtask` le
+  vérifie avant de construire : le GCC 16 de MSYS2, configuré `--enable-tls`, compile une TLS native (`%fs:44`,
+  `__tls_index`), que le chargeur d'XP n'alloue pas à une DLL chargée par LoadLibrary ; il est refusé. Vérifié
+  avec le GCC 14.3.0 de winlibs (i686, posix, dwarf, msvcrt). C'est la précision que l'ADR-025 laissait à la
+  construction (« la chaîne MinGW-w64 i686 ») ; `--toolchain DIR` désigne son répertoire `bin`.
+- **Les corrections de Mesa** (`icd::PATCHES`, chacune trouvée exactement le nombre de fois attendu, sinon la
+  construction s'arrête) : en-têtes d'XP (`_WIN32_WINNT` et `WINVER` à 0x0501, au lieu de 0x0A00) ; pas de
+  `dlopen` ni de `dladdr` sous Windows (une libdl sans `<dlfcn.h>` faisait compiler `dladdr`) ; pas de `dumpbin`
+  exigé ; les types récents de `gldrv.h` compilés quel que soit `WINVER` (DrvSetCallbackProcs ne copie que les
+  rappels que donne `opengl32`).
+- **Les fonctions récentes de LLVM** (`xtask/icd-src/xpcompat.c`) : GetFinalPathNameByHandleW,
+  GetLogicalProcessorInformationEx, Get/SetThreadGroupAffinity, SetFileInformationByHandle, K32EnumProcessModules
+  et K32GetProcessMemoryInfo (`psapi` sous XP), SHGetKnownFolderPath. Chacune est définie sous son nom et sous son
+  slot d'import, appelle la vraie fonction quand le système l'a, et sinon échoue comme pour une demande non prise en
+  charge.
+- **LLVM vu de Mesa** : un sous-projet Meson (`subprojects/llvm`, écrit par `xtask` d'après `llvm-config`, comme
+  `docs/meson.rst` de Mesa le décrit pour Windows) et pas `llvm-config` lui-même, dont Meson coupe la sortie aux
+  espaces (le chemin du dépôt peut en avoir un) ; pour la même raison, `Remarks.dll` et `LTO.dll` de LLVM, inutiles
+  à Mesa, ne sont pas construites (leur `.def` passe à l'éditeur de liens sans guillemets).
+- **L'édition de liens** : tout en statique (ni `libgcc`, ni `libstdc++`, ni `libwinpthread` à côté), versions
+  de sous-système et d'OS 5.1.
+- **Les vérifications** (`icd::check`), avant le tampon : version de sous-système au plus 5.1 ; chaque import
+  trouvé dans les exports de la DLL du même nom du `system32` épinglé ; pas de modèle de TLS au-delà des marqueurs
+  du CRT de MinGW (8 octets au plus) ni de lecture de `fs:[2Ch]` dans le code. La DLL de 50 Mio passe :
+  sous-système 5.1, 275 imports trouvés, un modèle de TLS de 4 octets, 0 lecture de `fs:[2Ch]` (construite en
+  11 minutes une fois LLVM construit).
+- **Essayée sous Mino** (le 2026-11-24, la DLL que `icd-build` a construite et vérifiée ; crochets d'essai non
+  commités : `C:\APPS` d'un disque du banc, clés d'`openglcfg.cpl`) : `opengl32` la charge par LoadLibrary, sans
+  import de la sonde, et **le triangle s'affiche**.
+
+À faire avant d'en dépendre dans un scénario :
+- **Le noyau lit une image en un seul bloc** : `io::File::image_contents` alloue la DLL (une cinquantaine de Mio) d'un tenant
+  dans le tas du noyau, ce qui échoue avec les 256 Mio du banc (STOP, « memory allocation of 52755544 bytes
+  failed », depuis NtCreateSection) ; l'essai a pris 1 Gio. Tâche de diagnostic : lire une image par pages (ou
+  par vues) plutôt que d'un bloc.
+- Le disque RAM de démarrage ne dépasse pas 64 Mio : l'ICD ira sur un disque système plus grand (comme `app =`).
+- Les avis de licence (Mesa, LLVM, zlib) sont copiés dans `third_party/mesa-icd/licences/` ; ils iront sur le
+  disque avec la DLL.
+- Un hôte Linux demanderait une construction croisée de LLVM (`llvm-config` et `tblgen` de l'hôte) : pas encore,
+  `icd-build` s'y arrête en le disant.
 
 ## Vu en chemin
 

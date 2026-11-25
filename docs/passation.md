@@ -2846,6 +2846,12 @@ aussi (étape 8). `NtOpenKey`, `NtQueryValueKey`, `NtOpenDirectoryObject`, `NtOp
 
 ## Ensuite (hors jalon)
 
+- M8 préparé en parallèle du M7 : le spike Direct3D 9 (PR 188, [`compat/m8-direct3d.md`](compat/m8-direct3d.md))
+  va jusqu'au triangle avec un ICD Mesa chargé au démarrage. L'ADR-025 (acceptée le 2026-11-24) dit d'où vient l'ICD :
+  reste le spike « ICD XP ». Étape 1 faite : `cargo xtask icd-build` construit et vérifie `mesaicd.dll`
+  (GCC i686 à TLS émulée, hôte Windows ; essayée sous Mino par LoadLibrary, le triangle s'affiche). Restent
+  NtGdiExtEscape et `mino.inf` (étape 2), puis le scénario `d3d9-spike` jusqu'au triangle (étape 3), qui attend
+  qu'une image de 50 Mio se charge sans un bloc d'un tenant dans le tas du noyau (`io::File::image_contents`).
 - Router #DB, #BR, #NP, #SS, #AC du mode utilisateur vers KiDispatchException (aujourd'hui seuls #DE, #BP, #UD,
   #GP, #PF et `int 2Ch`).
 - KiDispatchException : si la pile utilisateur ne reçoit pas le contexte, le processus se termine avec le code de

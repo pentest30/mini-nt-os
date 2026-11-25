@@ -356,7 +356,7 @@ const KNOWN_DLLS: [&str; 21] = [
 
 /// The file `name` of the fetched `system32`; `None` until `fetch-userland`
 /// ran, or without it.
-fn system32_file(ws: &Workspace, name: &str) -> Option<PathBuf> {
+pub(crate) fn system32_file(ws: &Workspace, name: &str) -> Option<PathBuf> {
     let dir = dir(ws);
     let complete = fs::read_to_string(dir.join(STAMP)).is_ok_and(|s| s.trim() == SHA256);
     let file = dir.join(TREE).join("system32").join(name);
