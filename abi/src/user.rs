@@ -797,6 +797,10 @@ pub const TYPE_SETWINDOWPOS: u8 = 4;
 /// NtUserCallOneParam (the parameter is the number of windows; the result
 /// the HDWP).
 pub const ONEPARAM_ROUTINE_BEGINDEFERWNDPOS: u32 = 0x1E;
+/// ONEPARAM_ROUTINE_WINDOWFROMDC: the window of a DC of the cache
+/// (IntWindowFromDC), what WindowFromDC asks; opengl32 tells a window's DC
+/// from a memory DC by it.
+pub const ONEPARAM_ROUTINE_WINDOWFROMDC: u32 = 0x1F;
 
 /// NtUserQueryWindow's indexes (QUERY_WINDOW_*, ReactOS `ntuser.h`).
 pub mod query_window {
