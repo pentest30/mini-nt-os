@@ -38,6 +38,16 @@
   régression `bitmap-24`, `bitmap`, `icons`, `cursor`, `notepad-saveas` (AMD et Intel), `folder-view` et
   `app-peazip` (AMD).
   **Pas encore** : CreateBitmap de 16 bits ; en 32 bits, d'autres masques que ceux de BI_RGB.
+- **Les images des boîtes de msiexec** (`claude/msi-picture`, sur `main` ; trouvé le 2026-11-23 en cherchant
+  pourquoi la page d'accueil du MSI de 7-Zip restait vide, qui était le DC du parent, PR 177 : ce MSI n'a pas
+  d'image, et « Failed to load bitmap "WixUI_Bmp_Dialog" » y reste).
+  `msi.dll` charge ses images par OleLoadPicture, et l'`oleaut32` de ReactOS 0.4.16 décode tout, un BMP aussi,
+  par WIC (`OLEPictureImpl_LoadWICDecoder`, CLSID_WICImagingFactory et CLSID_WICBmpDecoder) : `windowscodecs.dll`
+  doit être enregistré. syssetup.inf l'enregistre (OleControlDlls), `minoinit` non : REGDB_E_CLASSNOTREG.
+  `minoinit` l'enregistre maintenant, à sa place dans l'ordre de syssetup.inf. Scénario `ole-picture`
+  (`tests/native/olepic1.c`, en session après `minoinit`, avec les bibliothèques d'import d'`ole32` et
+  d'`oleaut32`) : un BMP de 24 bits chargé et copié comme le fait `load_picture` ; sans l'enregistrement,
+  OleLoadPicture rend 80040154 (vérifié).
 - **Les textes de la page d'accueil de msiexec** (`claude/parent-clip-dc`, sur `main` ; demandé le 2026-11-23 :
   l'installation du MSI de 7-Zip va au bout, mais sa première page ne montre que ses boutons). `msi.dll` crée le
   titre et la description en Static transparents, puis le Static de l'image (SS_BITMAP, sans image : le MSI n'en a
