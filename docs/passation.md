@@ -17,6 +17,22 @@
   `many-threads`, `ke-events`, `ke-starvation`, `fpu`, `smoke` (AMD, Intel), `bugcheck` (AMD, son seul processeur).
   **Suite** : remesurer OpenOffice (l'image VirtualBox avec la PR 181, ou `app-openoffice`) ; le noyau ne journalise
   ni la fin des threads ni leur nombre vivant.
+- **Les textes de la page d'accueil de msiexec** (`claude/parent-clip-dc`, sur `main` ; demandé le 2026-11-23 :
+  l'installation du MSI de 7-Zip va au bout, mais sa première page ne montre que ses boutons). `msi.dll` crée le
+  titre et la description en Static transparents, puis le Static de l'image (SS_BITMAP, sans image : le MSI n'en a
+  pas), et `dialog_set_tab_order` met l'image au-dessus des textes dans l'ordre Z. La classe Static a
+  `CS_PARENTDC` : UserGetDCEx y ajoute `DCX_CLIPSIBLINGS` pour les sœurs du **parent** (la boîte, de premier
+  niveau), et DceUpdateVisRgn prend la région visible du parent ; `win32k::dce::visible` coupait la fenêtre
+  elle-même par ses sœurs au-dessus d'elle : le DC des textes perdait toute la zone de l'image, et ils ne
+  dessinaient rien. Le DC du parent est fait (`dce::visible_of`, `dce::parent_clip_flags`) ; une fenêtre cachée
+  n'en voit rien, comme Wine (ReactOS lui donnerait la région du parent). Test hôte
+  `the_parent_dc_sees_what_the_parent_sees` ; scénario `msi-dialog-text` (`tests/native/msidlg1.c` : la page
+  comme `msi.dll` la bâtit, les pixels des textes relus à l'écran), qui échoue sans le correctif (vérifié). La
+  page de progression de l'installeur NSIS de Notepad++ (scénario `app-npp-interactive`) gagne aussi son en-tête
+  (« Installing », son sous-titre, son image) et sa ligne de marque, qui manquaient. Les 39 scénarios qui vérifient
+  des pixels : 36 runs passent ; `desktop-launch`, `display-desktop` (AMD et Intel) et `app-npp-interactive`
+  (diagnostic, qui n'est pas fait pour passer) échouent de la même façon sans le correctif (vérifié le
+  2026-11-23 : la liste des processus du gestionnaire des tâches vide ; `explorer` qui n'énumère pas son bureau).
 - **L'interface de msiexec ne s'ouvrait pas** (`claude/null-instance-class`, sur `main` ; demandé le 2026-11-23 :
   le MSI de 7-Zip ouvert depuis l'explorateur dans VirtualBox ne montrait rien). `msiexec` (interface complète,
   niveau 5) échouait à chaque boîte (« Failed to create dialog "PrepareDlg" », `dll/win32/msi/dialog.c`) puis
