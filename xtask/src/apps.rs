@@ -64,6 +64,28 @@ pub struct Route {
     pub steps: &'static [&'static str],
 }
 
+/// AbiWord's route, through its windows: a line typed in the untitled
+/// document (the title gets its `*`), all of it put in bold (Ctrl+A,
+/// Ctrl+B), Ctrl+S opens the Save File As dialog (a document without
+/// name) — the name typed in its field, the type list jumped to its
+/// `r` entry (Rich Text Format), the file made in My Documents, AbiWord's
+/// default folder. Opened again on that file, its text goes to the
+/// clipboard (Ctrl+A, Ctrl+C) for the probe to read. The keys are in
+/// `tests/boot/app-abiword/scenario.txt`.
+const ABIWORD_ROUTE_STEPS: &[&str] = &[
+    "start",
+    "window Untitled1 => editor up",
+    "show 3 => typed",
+    "window Save File As => save dialog",
+    "show 3 => dialog shown",
+    "file C:\\Documents and Settings\\Administrator\\My Documents\\ROUTE.RTF => rtf written",
+    "close",
+    "start \"C:\\Documents and Settings\\Administrator\\My Documents\\ROUTE.RTF\"",
+    "window ROUTE.RTF => reopened",
+    "clipboard => copied",
+    "close",
+];
+
 /// Notepad++'s route, through its windows: open `ROUTE.TXT`, type a line
 /// (the title gets its `*`), replace a word (Ctrl+H, Replace All), save
 /// (Ctrl+S, the `*` goes), close, open it again and copy its text (Ctrl+A,
@@ -352,7 +374,13 @@ pub const APPS: [App; 10] = [
         install_seconds: 300,
         program_seconds: 5,
         memory_mb: 256,
-        route: None,
+        route: Some(Route {
+            command: r#""C:\Program Files\AbiSuite2\AbiWord\bin\AbiWord.exe""#,
+            seconds: 120,
+            files: Vec::new,
+            output: r"C:\Documents and Settings\Administrator\My Documents\ROUTE.RTF",
+            steps: ABIWORD_ROUTE_STEPS,
+        }),
     },
     App {
         id: "peazip",
@@ -609,7 +637,7 @@ mod tests {
         assert!(!text.contains("route-step="));
         assert!(APPS
             .iter()
-            .filter(|app| !["gimp", "7zip", "notepadpp", "keepass", "peazip"].contains(&app.id))
+            .filter(|app| !["gimp", "7zip", "notepadpp", "keepass", "peazip", "abiword"].contains(&app.id))
             .all(|app| app.route.is_none()));
     }
 

@@ -10,25 +10,39 @@ boots = 2
 app = abiword
 cpus = default
 timeout = 900
-# What works today, a floor: NSIS makes its plug-ins directory (a
-# temporary file deleted, FileDispositionInformation, then a directory of
-# its name) and installs; the program starts. The font metrics it asks
-# (GetCharWidth32W, GetOutlineTextMetricsW) are answered: it passes
-# libAbiWord.dll's missing services. ProcessDebugPort now reports no debugger;
-# the exception reporter prints the original fault in libAbiWord.dll
-# (0x102b119f, reading 0x3c) without a session. This floor does not certify
-# a usable editor: its path (bold, .rtf) is still to do.
+# What works today, a floor: it installs, and in the user's session its
+# window opens and closes with 0. Its route then goes through its windows
+# (route-step in xtask/src/apps.rs): a line typed (the title gets its
+# `*`), all of it put in bold (Ctrl+A, Ctrl+B), Ctrl+S opens the Save
+# File As dialog, the name typed and the type list jumped to its `r` entry
+# (Rich Text Format), the file written in My Documents (AbiWord's default
+# folder), opened again on that file, and its text copied to the clipboard
+# for the probe to read. It does not close on WM_CLOSE in 15 s (like
+# KeePass's window): the bench terminates it.
 expect = [appbench] installer started
 expect = [appbench] installer ended: exit code 0
 expect = [appbench] installed: C:\Program Files\AbiSuite2\AbiWord\bin\AbiWord.exe
 expect = [appbench] program started
-# In the user's session, with SystemNumaProcessorMap answered, its window
-# opens and it closes with 0 (which of the two removed the fault is not
-# measured).
 expect = [appbench] program window after
 expect = - AbiWord"
 expect = [appbench] program closed: exit code 0
+expect = [appbench] route step: editor up
+expect = [appbench] route step: typed
+expect = [appbench] route step: save dialog
+expect = [appbench] route step: dialog shown
+expect = [appbench] route step: rtf written
+expect = [appbench] route step: reopened
+expect = [appbench] route step: copied
 expect = [appbench] AbiWord 2.4.1: report done
+
+# The route's keys: a line typed in the untitled document, all of it put in
+# bold (Ctrl+A, Ctrl+B), Ctrl+S opens the Save As dialog (a document
+# without name); there, the file name (Alt+N) then the type list (Alt+T)
+# walked to Rich Text Format, Enter saves.
+keys = [appbench] route step: editor up => "the quick brown fox jumps" ctrl-a ctrl-b ctrl-s
+keys = [appbench] route step: dialog shown => "ROUTE" alt-t pause:150 r ret ret
+keys = [appbench] route step: reopened => ctrl-a ctrl-c
+
 forbid = Can't initialize plug-ins directory
 forbid = [appbench] installer still running after
 forbid = NtGdiGetCharWidthW (0x10a2) is not implemented

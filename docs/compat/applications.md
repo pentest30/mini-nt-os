@@ -26,7 +26,7 @@ pour que chaque application teste autre chose. Elles sont rangées de la plus si
 | 3 | KeePass 1.18 (2010) | GPL | Inno Setup | MFC, cryptographie, dialogues | créer une base et une entrée, enregistrer, rouvrir avec le mot de passe (fait au clavier, le 2026-11-22) |
 | 4 | WinMerge 2.12.4 (2009) | GPL | Inno Setup | MFC, vues côte à côte | comparer deux fichiers, fusionner une différence, enregistrer |
 | 5 | SumatraPDF 2.5.2 (2014) | GPL | le sien | rendu de pages, défilement | ouvrir un PDF fourni, page suivante, zoom |
-| 6 | AbiWord 2.4.1 (2005) | GPL | NSIS | traitement de texte, polices, RTF | taper, mettre en gras, enregistrer en `.rtf`, rouvrir |
+| 6 | AbiWord 2.4.1 (2005) | GPL | NSIS | traitement de texte, polices, RTF | taper, mettre en gras, enregistrer en `.rtf`, rouvrir (fait au clavier, le 2026-11-27) |
 | 7 | PeaZip 3.9.1 (2011) | LGPL | Inno Setup | Lazarus et Free Pascal (LCL) | ouvrir une archive, l'extraire (fait le 2026-11-23 : l'archive listée dans son titre, l'extraction par `-ext2folder`) |
 | 8 | Dev-C++ 4.9.9.2 (2005) | GPL | NSIS | Delphi (VCL), processus `gcc` lancés | ouvrir un projet, le compiler, lancer le programme |
 | 9 | GIMP 2.6.12 (2011) | GPL | Inno Setup | GTK2, nombreuses DLL, fontconfig | ouvrir une image, appliquer un filtre, exporter en PNG (fait en Script-Fu, le 2026-11-22) |
@@ -1004,6 +1004,20 @@ peinte par bandes de Polygon, un menu montré par-dessus puis détruit : l'écra
 **Pas encore** : ExtCreateRegion (VCL se replie sur CreateRectRgn et CombineRgn), les chemins (BeginPath, EndPath,
 PathToRegion, SelectClipPath), les ellipses, SetDIBitsToDevice, GetTransform, le DC propre d'une fenêtre ou de sa
 classe.
+
+### Le parcours d'AbiWord, le 2026-11-27
+
+Le parcours de la liste (« taper, mettre en gras, enregistrer en `.rtf`, rouvrir ») passe par les fenêtres
+d'AbiWord, au clavier de QEMU, comme ceux de Notepad++ et KeePass (`steps` d'`apps::Route`, le banc
+`run_window_route`). Une ligne est tapée dans le document sans nom (le titre prend son `*`), tout passe en gras
+(Ctrl+A, Ctrl+B), et Ctrl+S ouvre la boîte « Save File As » (un document sans nom) : la boête standard, où le nom
+est tapé dans le champ (il a le focus), la liste des types sautée à son entrée `r` — *Rich Text Format* — par
+Alt+T puis `r`, et Entrée écrit le fichier. Ses crans comptés depuis le haut étaient .abw, .awt, .doc puis HTML
+(qui ouvre sa boîte d'options d'export) : sauter par la lettre évite de compter, et marche du premier coup. Le
+fichier va dans *My Documents* (`C:\Documents and Settings\Administrator\My Documents`), le dossier par défaut
+de la boîte — pas `C:\APPS`, le dossier de travail du banc. Rouvert par sa ligne de commande, son texte revient
+au presse-papiers (Ctrl+A, Ctrl+C) : « the quick brown fox jumps », la ligne tapée, relue du fichier. AbiWord ne
+se ferme pas sur WM_CLOSE en 15 s (comme la fenêtre de KeePass) : le banc le termine.
 
 ### La suite
 
