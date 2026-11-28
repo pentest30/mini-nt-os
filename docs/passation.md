@@ -1,5 +1,20 @@
 # Notes de passation
 
+- **Le parcours d'AbiWord : le sixième du M7** (`claude/abiword-route`, sur main, M7,
+  [`compat/applications.md`](compat/applications.md#le-parcours-dabiword-le-2026-11-27) ; demandé le 2026-11-27 :
+  « entame le jalon M7 » — il restait les parcours d'AbiWord, WinMerge, SumatraPDF, Dev-C++ et OpenOffice). Par la
+  fenêtre, au clavier de QEMU (`steps` d'`apps::Route`, `run_window_route` du banc, comme Notepad++ et KeePass) :
+  une ligne tapée (le titre prend son `*`), tout en gras (Ctrl+A, Ctrl+B), Ctrl+S ouvre « Save File As », le nom
+  tapé dans le champ qui a le focus, la liste des types sautée à son entrée `r` (*Rich Text Format*) par Alt+T `r`
+  — ses crans comptaient .abw, .awt, .doc, HTML : le saut par la lettre évite de compter —, Entrée écrit le fichier
+  dans *My Documents* (le dossier par défaut de la boîte, pas `C:\APPS`), rouvert par sa ligne de commande, son
+  texte revient au presse-papiers : « the quick brown fox jumps », la ligne tapée, relue du `.rtf`. AbiWord ne se
+  ferme pas sur WM_CLOSE en 15 s (comme KeePass) : le banc le termine. Scénario `app-abiword` (plancher relevé au
+  parcours entier). Six parcours sur dix ; restent WinMerge, SumatraPDF, Dev-C++, OpenOffice. **Suite** : le
+  parcours de WinMerge (comparer deux fichiers, fusionner — il a une ligne de commande pour les deux fichiers), ou
+  celui de SumatraPDF (ouvrir un PDF fourni, page suivante, zoom).
+
+
 - **Les sections d'image paginées, leur fichier tenu** (`claude/image-read`, sur `main` ; M8, avant l'étape 3 du
   spike « ICD XP » ; [ADR-024](03-decisions.md#adr-024--sections-de-fichiers--les-pages-lues-à-la-faute-partagées-par-le-segment-du-fichier--le-fichier-dune-image-tenu)
   précisée, encore proposée). NtCreateSection(`SEC_IMAGE`) lisait l'image d'un seul bloc dans le tas du noyau
